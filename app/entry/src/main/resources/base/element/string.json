@@ -1,0 +1,40 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "module description"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "description"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "label"
+    },
+    {
+      "name": "location_reason",
+      "value": "拍照后需要获取当前位置，随照片一起发给姐姐。"
+    },
+    {
+      "name": "datasync_reason",
+      "value": "需要通过华为跨设备通道接收手表的呼叫并回复"
+    },
+    {
+      "name": "bluetooth_reason",
+      "value": "需要通过蓝牙找到已配对的手表"
+    },
+    {
+      "name": "calendar_reason",
+      "value": "读取你今天的日程（只看标题和时间），让姐姐知道你今天忙什么"
+    },
+    {
+      "name": "widget_display_name",
+      "value": "咱家"
+    },
+    {
+      "name": "widget_desc",
+      "value": "姐姐状态、咱家天数和最新一句话"
+    }
+  ]
+}

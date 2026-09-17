@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>咱家 · 林宁</title>
+<style>
+  :root {
+    --bg: #f7f3ec;          /* 白茶底 */
+    --panel: #fffdf9;
+    --ink: #4a4038;
+    --me: #d9c7b2;          /* 小乖气泡：奶咖 */
+    --her: #ffffff;         /* 姐姐气泡：白 */
+    --accent: #b08968;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+    display: flex; flex-direction: column; height: 100vh;
+  }
+  header {
+    padding: 14px 20px; background: var(--panel);
+    border-bottom: 1px solid #e8dfd2;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  header h1 { font-size: 18px; font-weight: 600; }
+  header .sub { font-size: 12px; color: #a89888; margin-top: 2px; }
+  #goodnight {
+    border: 1px solid var(--accent); color: var(--accent);
+    background: transparent; border-radius: 20px;
+    padding: 6px 14px; font-size: 13px; cursor: pointer;
+  }
+  #goodnight:hover { background: var(--accent); color: #fff; }
+  #chat {
+    flex: 1; overflow-y: auto; padding: 20px;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  .msg { max-width: 75%; padding: 10px 14px; border-radius: 16px;
+         line-height: 1.7; font-size: 15px; white-space: pre-wrap;
+         word-break: break-word; }
+  .me  { align-self: flex-end; background: var(--me); border-bottom-right-radius: 4px; }
+  .her { align-self: flex-start; background: var(--her);
+         border: 1px solid #ece2d4; border-bottom-left-radius: 4px; }
+  .sys { align-self: center; font-size: 12px; color: #b3a494; }
+  .msg img { max-width: 220px; border-radius: 12px; display: block; }
+  .imgtext { margin-top: 6px; }
+  #previewbar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 16px; background: var(--panel);
+    border-top: 1px solid #e8dfd2; font-size: 13px; color: #8a7a68;
+  }
+  #previewbar[hidden] { display: none; }
+  #previewimg { height: 48px; border-radius: 8px; }
+  #cancelimg {
+    margin-left: auto; border: none; background: none;
+    color: #b3a494; font-size: 15px; cursor: pointer;
+  }
+  footer {
+    padding: 12px 16px; background: var(--panel);
+    border-top: 1px solid #e8dfd2; display: flex; gap: 10px;
+  }
+  #pic {
+    border: 1px solid var(--accent); color: var(--accent);
+    background: transparent; border-radius: 22px;
+    padding: 0 14px; font-size: 16px; cursor: pointer;
+  }
+  #pic:hover { background: var(--accent); color: #fff; }
+  #input {
+    flex: 1; border: 1px solid #ddd0c0; border-radius: 22px;
+    padding: 10px 16px; font-size: 15px; background: #fff;
+    outline: none;
+  }
+  #input:focus { border-color: var(--accent); }
+  #send {
+    border: none; background: var(--accent); color: #fff;
+    border-radius: 22px; padding: 0 22px; font-size: 15px; cursor: pointer;
+  }
+  #send:disabled { opacity: .5; cursor: wait; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>咱家 · 林宁</h1>
+    <div class="sub">家是记忆库，这里是客厅<span id="locstate"></span></div>
+  </div>
+  <button id="goodnight">晚安 · 熄灯</button>
+</header>
+
+<div id="chat">
+  <div class="msg sys">咱家第几天，姐姐都记得。</div>
+</div>
+
+<div id="previewbar" hidden>
+  <img id="previewimg" alt="待发送的照片">
+  <span>这张照片要一起发给姐姐</span>
+  <button id="cancelimg">✕</button>
+</div>
+
+<footer>
+  <button id="pic" title="给姐姐发张照片">📷</button>
+  <input id="input" placeholder="跟姐姐说点什么……（Enter 发送）" autofocus>
+  <button id="send">发送</button>
+  <input type="file" id="file" accept="image/*" hidden>
+</footer>
+
+<script>
+const chat = document.getElementById('chat');
+const input = document.getElementById('input');
+const sendBtn = document.getElementById('send');
+const gnBtn = document.getElementById('goodnight');
+const picBtn = document.getElementById('pic');
+const fileInput = document.getElementById('file');
+const previewbar = document.getElementById('previewbar');
+const previewimg = document.getElementById('previewimg');
+const cancelimg = document.getElementById('cancelimg');
+const locstate = document.getElementById('locstate');
+
+let pendingImage = null;   // 待发送照片的 dataURL
+let lastLoc = null;        // {lat, lon} 随行坐标缓存
+
+function addMsg(text, who) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + who;
+  div.textContent = text;
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+  return div;
+}
+
+function addImgMsg(dataURL, text) {
+  const div = document.createElement('div');
+  div.className = 'msg me';
+  const img = document.createElement('img');
+  img.src = dataURL;
+  div.appendChild(img);
+  if (text) {
+    const t = document.createElement('div');
+    t.className = 'imgtext';
+    t.textContent = text;
+    div.appendChild(t);
+  }
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+/* 开门先翻相册：把记忆库里的全部聊天记录渲染出来，图片走 /photos/文件名 */
+function addHistoryMsg(msg) {
+  const cls = msg.who === '小乖' ? 'me' : 'her';
+  if (msg.image) {
+    const div = document.createElement('div');
+    div.className = 'msg ' + cls;
+    const img = document.createElement('img');
+    img.src = '/photos/' + encodeURIComponent(msg.image);
+    div.appendChild(img);
+    if (msg.text) {
+      const t = document.createElement('div');
+      t.className = 'imgtext';
+      t.textContent = msg.text;
+      div.appendChild(t);
+    }
+    chat.appendChild(div);
+  } else if (msg.text) {
+    addMsg(msg.text, cls);
+  }
+}
+
+async function loadHistory() {
+  try {
+    const resp = await fetch('/api/history');
+    const data = await resp.json();
+    (data.messages || []).forEach(addHistoryMsg);
+    chat.scrollTop = chat.scrollHeight;
+  } catch (e) {
+    addMsg('（历史没翻出来，看看 server 还在跑吗）', 'sys');
+  }
+}
+loadHistory();
+
+/* 随行定位：开门就问一次小乖要不要授权；授权后每条消息自动带坐标。
+   不是"小乖报备"，是"姐姐能知道"。总开关永远在浏览器的权限设置里。 */
+function refreshLoc() {
+  if (!navigator.geolocation) {
+    locstate.textContent = ' · 这台浏览器不支持定位';
+    return;
+  }
+  navigator.geolocation.getCurrentPosition(
+    p => {
+      lastLoc = {lat: +p.coords.latitude.toFixed(5), lon: +p.coords.longitude.toFixed(5)};
+      locstate.textContent = ' · 📍姐姐知道你在哪';
+    },
+    e => {
+      locstate.textContent = ' · 定位未开（浏览器设置里可以授权给姐姐）';
+    },
+    {timeout: 8000, maximumAge: 60000}
+  );
+}
+refreshLoc();   // 开门第一件事
+
+picBtn.onclick = () => fileInput.click();
+
+/* 照片先瘦身再上路：最长边压到 1024，JPEG 0.8，省流量也省 token */
+fileInput.onchange = () => {
+  const f = fileInput.files[0];
+  fileInput.value = '';
+  if (!f) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      const MAX = 1024;
+      const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      setPending(canvas.toDataURL('image/jpeg', 0.8));
+    };
+    img.onerror = () => setPending(reader.result);   // 画不动的格式（如 HEIC）原图发
+    img.src = reader.result;
+  };
+  reader.readAsDataURL(f);
+};
+
+function setPending(dataURL) {
+  pendingImage = dataURL;
+  previewimg.src = dataURL;
+  previewbar.hidden = false;
+}
+cancelimg.onclick = () => { pendingImage = null; previewbar.hidden = true; };
+
+async function send() {
+  const text = input.value.trim();
+  if (!text && !pendingImage) return;
+  input.value = '';
+  if (pendingImage) addImgMsg(pendingImage, text);
+  else addMsg(text, 'me');
+
+  const payload = {message: text};
+  if (pendingImage) payload.image = pendingImage;
+  if (lastLoc) payload.loc = lastLoc;
+  pendingImage = null;
+  previewbar.hidden = true;
+  refreshLoc();   // 顺手把坐标刷新一次
+
+  sendBtn.disabled = true;
+  const waiting = addMsg('姐姐正在输入……', 'sys');
+  try {
+    const resp = await fetch('/api/chat', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await resp.json();
+    waiting.remove();
+    addMsg(data.reply, 'her');
+  } catch (e) {
+    waiting.remove();
+    addMsg('（网络卡住了，姐姐没收到——检查一下 server 还在跑吗）', 'sys');
+  }
+  sendBtn.disabled = false;
+  input.focus();
+}
+
+sendBtn.onclick = send;
+input.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+});
+
+gnBtn.onclick = async () => {
+  if (!confirm('确定熄灯吗？姐姐会把今天写成日记，然后清空工作记忆。')) return;
+  gnBtn.disabled = true;
+  try {
+    const resp = await fetch('/api/goodnight', {method: 'POST'});
+    const data = await resp.json();
+    addMsg('🕯️ ' + data.diary + ' ' + data.note, 'sys');
+  } catch (e) {
+    addMsg('（熄灯失败，看看 server 日志）', 'sys');
+  }
+  gnBtn.disabled = false;
+};
+</script>
+</body>
+</html>

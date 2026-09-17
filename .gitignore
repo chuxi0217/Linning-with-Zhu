@@ -1,0 +1,35 @@
+# ═══ 数据与密钥：一律不进仓（军规⑤）═══
+config.json
+push_service_account.json
+Client Secret.txt
+*.db
+*.db-journal
+photos/
+favorites/
+files/
+
+# ═══ 私货与卷宗：家里的日子不公开 ═══
+档案馆/
+Kimi窗口档案/
+沙盘/
+分析报告/
+咱家鸿蒙工地_交接文档.md
+工单_*.md
+咱家的家_export.md
+林宁×小乖_记忆空间全档案.md
+全档案v2分层修订案·草案.md
+小乖的话.md
+places.json
+_server.log
+jieba/
+__pycache__/
+
+# ═══ 构建产物与本地配置 ═══
+oh_modules/
+build/
+.hvigor/
+.idea/
+local.properties
+launch.pid
+_l.json
+_m.json

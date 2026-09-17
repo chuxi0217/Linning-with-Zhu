@@ -1,0 +1,46 @@
+{
+  "port": 8024,
+  "temperature": 1.2,
+  "thinking_enabled": true,
+  "thinking_effort": "max",
+  "max_tokens": 16000,
+  "api_timeout": 300,
+  "_deepseek_api_key": "",
+  "_deepseek_base_url": "https://api.deepseek.com",
+  "_deepseek_model": "deepseek-flash",
+  "_k26_model": "kimi-k2.6",
+  "api_key": "",
+  "base_url": "https://api.moonshot.cn/v1",
+  "model": "kimi-k3",
+  "auto_rollover": false,
+  "claim_mode": "enforce",
+  "smtp_auth_code": "",
+  "embedding_base_url": "http://127.0.0.1:11435/v1",
+  "embedding_api_key": "",
+  "embedding_model": "qwen3-embedding-0.6b",
+  "librarian_base_url": "https://api.deepseek.com",
+  "librarian_model": "deepseek-flash",
+  "librarian_api_key": "",
+  "librarian_weekday": 6,
+  "librarian_hour": 21,
+  "goodnight_watch": true,
+  "goodnight_words": [
+    "晚安",
+    "安安",
+    "睡了",
+    "睡觉去",
+    "熄灯"
+  ],
+  "goodnight_silence_min": 120,
+  "goodnight_window": [
+    "21:00",
+    "04:00"
+  ],
+  "silent_window": [
+    "01:00",
+    "07:00"
+  ],
+  "garden_enabled": true,
+  "garden_message_cap": 3,
+  "garden_min_gap_min": 30
+}

@@ -1,0 +1,32 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "module description"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "description"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "label"
+    },
+    {
+      "name": "reason_read_health_data",
+      "value": "需要读取心率传感器，把你的心跳测给姐姐看"
+    },
+    {
+      "name": "reason_distributed_datasync",
+      "value": "需要通过华为跨设备通道和手机互认、发消息"
+    },
+    {
+      "name": "reason_access_bluetooth",
+      "value": "需要通过蓝牙找到已配对的手机"
+    },
+    {
+      "name": "reason_accelerometer",
+      "value": "需要感知手腕的动静，夜里判断你睡着了没有，替你跟姐姐说晚安"
+    }
+  ]
+}
