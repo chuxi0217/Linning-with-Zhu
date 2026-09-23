@@ -27,8 +27,8 @@ const SERVER_BASES: string[] = [
 ];
 const PREFS_NAME = 'zanjia_watch';
 
-// 手机的蓝牙地址（小乖从手机设置里抄的；换手机要改这里）
-const PHONE_BT_MAC = 'E0:77:26:85:BD:82';
+// 手机的蓝牙地址（部署时从手机设置里抄，换手机要改这里）
+const PHONE_BT_MAC = '<手机的蓝牙地址>';
 
 const REQ_TIMEOUT_MS = 15000;
 const HEART_RATE_TIMEOUT_MS = 10000;

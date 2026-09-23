@@ -64,37 +64,6 @@
         }
       },
       {
-        "name": "ohos.permission.DISTRIBUTED_DATASYNC",
-        "reason": "$string:datasync_reason",
-        "usedScene": {
-          "abilities": [
-            "EntryAbility"
-          ],
-          "when": "inuse"
-        }
-      },
-      {
-        "name": "ohos.permission.ACCESS_BLUETOOTH",
-        "reason": "$string:bluetooth_reason",
-        "usedScene": {
-          "abilities": [
-            "EntryAbility"
-          ],
-          "when": "inuse"
-        }
-      },
-      {
-        "name": "ohos.permission.READ_CALENDAR",
-        // CAL-01（9-13）：读今天的日程上报——只取标题+开始时间
-        "reason": "$string:calendar_reason",
-        "usedScene": {
-          "abilities": [
-            "EntryAbility"
-          ],
-          "when": "inuse"
-        }
-      },
-      {
         "name": "ohos.permission.GET_NETWORK_INFO"
       }
     ],

@@ -2,6 +2,8 @@
 config.json
 push_service_account.json
 Client Secret.txt
+网络门锁凭证.txt
+garden_token.txt
 *.db
 *.db-journal
 photos/

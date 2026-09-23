@@ -15,9 +15,9 @@
   "auto_rollover": false,
   "claim_mode": "enforce",
   "smtp_auth_code": "",
-  "embedding_base_url": "http://127.0.0.1:11435/v1",
+  "embedding_base_url": "http://127.0.0.1:11436/v1",
   "embedding_api_key": "",
-  "embedding_model": "qwen3-embedding-0.6b",
+  "embedding_model": "harrier-oss-v1-0.6b",
   "librarian_base_url": "https://api.deepseek.com",
   "librarian_model": "deepseek-flash",
   "librarian_api_key": "",
@@ -29,9 +29,13 @@
     "安安",
     "睡了",
     "睡觉去",
-    "熄灯"
+    "熄灯",
+    "上床",
+    "去睡",
+    "躺床"
   ],
   "goodnight_silence_min": 120,
+  "goodnight_silence_floor_min": 90,
   "goodnight_window": [
     "21:00",
     "04:00"
@@ -42,5 +46,12 @@
   ],
   "garden_enabled": true,
   "garden_message_cap": 3,
-  "garden_min_gap_min": 30
+  "garden_min_gap_min": 30,
+  "time_cortex": true,
+  "time_cortex_arc": true,
+  "longing_enabled": false,
+  "longing_t1_h": 3,
+  "longing_a": 0.25,
+  "longing_cap": 1.0,
+  "grudge_half_life_h": 0
 }

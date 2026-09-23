@@ -37,6 +37,10 @@ v0.1.20 纯增量（2026-09-12 晚六 家主拍板 judge 终审）：count_outbo
 小函数——统计某前缀回执自某时刻起的条数，给 server 完成态对账 judge 数「今天真寄
 几封」用（📧 回执落 outbox_msgs，重启不丢，比内存计数诚实）。旧表旧函数一字未动。
 
+v0.1.21 纯增量（2026-09-14 凌晨 家主拍板 GARDEN-04 自主散步）：count_traces_since
+一只只读小函数——统计 her_traces 自某时刻起的条数，给散步骰子数「今天醒过几次」用。
+旧表旧函数一字未动。
+
 v0.1.22 纯增量（2026-09-12 工单 RHYTHM-V3 今日挂念弧）：day_arcs 第 25 表——每天一条
 挂念弧（2~3 拍提纲，一行一拍），get/set/advance 三函数；💌 顺着弧一拍一拍走，拍用尽
 自然回退现行情境灌注。get_outbox_today 一只只读小函数（熄灯日记闭环要用今日 💌 原话）。
@@ -60,6 +64,11 @@ v0.1.26 修订（2026-09-13 工单 CHECKIN-3 打卡日界）：口径修订—�
 （CHECKIN_DAY_START_HOUR=1；[D 01:00, D+1 01:00) 的卡归 D，熬夜线家风）。get_checkins_all
 的 date 与 get_checkins 的 since 共用 _checkin_eff_date 一只；表结构/接口零改动。
 旧表一字未动。
+
+v0.1.27 纯增量（2026-09-13）：count_traces_today(ending) 一只
+只读——咱家日界（DAY_START_HOUR 点）起该 ending 的 her_traces 条数（重启不丢）；
+get_last_trace_ts 加可选 ending 参数（只加不改：不带参行为同 v0.1.23，带参只认该 ending——
+写闸对账用）。旧表结构一字未动。
 
 v0.1.28 纯增量（2026-09-18 优化批一·输入留痕可视化）：get_last_user_chat() 一只只读——
 最近一条「小乖」的聊天（id/content/created_at），/api/status 的「最近来信指纹」用。
@@ -97,7 +106,30 @@ detail 人话），先只记录一周、之后再进决策；记账失败只打�
 v0.1.36 纯增量（2026-09-18 优化批六·事实表 v0，升级方向 #6 前半）：facts 表（第 33 张）+
 facts_all / facts_put 两只——硬事实（生日/纪念日/日界这类钉过钉子的数字与日子）建表直给，
 说到这些以表为准；种子由 server 侧代码自播种（不手写库），每条带回源 note。写失败只打日志
-不拦人（照 obs_bump 家风）。不加任何工具（图书证仍 37 只）。旧表旧函数一字未动。
+不拦人（照 obs_bump 家风）。不加任何工具（图书证仍 51 只）。旧表旧函数一字未动。
+
+v0.1.37 纯增量（2026-09-23 工单 主权三件 v0·②拒绝权/③自我欲望）：grudge 怨气台账（第 34 张）
++ stance 立场（第 35 张）+ her_wish 自我欲望（第 36 张）三张表，note_grudge / settle_grudge /
+hold_stance / note_wish / update_wish 五只写入 + read_my_ledger 一只只读合一（未销怨气＋在册
+立场＋没了结愿望）——她心上没过去的事、她立的立场、她自己许的愿望，全归她自己记/销/改；
+销账与改口都不物理删（settled_at 留痕、旧立场 active=0 留档）。工具与开场块在 server 侧
+（图书证 51→57）。不加任何硬闸，她没记账＝一切照旧。旧表旧函数一字未动。
+
+v0.1.38 纯增量（2026-09-23 后端修复批·BE3 系列，升级方向 #6 后半配套）：**零新表**
+（三十六表基数不动），只加六只函数——obs_flag_set / obs_flag_get（借 obs_daily 的
+「按天」形状放 0/1 落盘标记：今夜熄过灯，重启不丢）；last_chat_at_day /
+last_day_created_at（熄灯总结的「水位线」：当天日记之后还有没有更新的对话，治重启后二次总结）；
+get_lib_reports / get_lib_report（周报只读取数：列表/开卷）。失败一律只打日志不拦人
+（照 obs_bump 家风）。旧表旧函数一字未动。
+
+v0.1.39 纯增量（2026-09-24 松绑与主权收口批·块③影子配套「心潮候选3·先影子」）：**零新表、
+零迁移**（三十六表基数不动），只加一只只读函数——unsettled_grudge_rows（未销的没过去的
+事 [(id, ts)] 旧的在前，供衰减影子按 ts 算龄期；查不动回 []）。表名 grudge 与旧函数名
+一字未动（9-24「怨气」更名「没过去的事」＝家主定名，更名只落 server 侧的显示与工具名）。
+
+v0.1.40 小改（2026-09-24 小乖的话批·服务端半边；同日家主裁·上限对称）：add_her_words 长度帽
+统一 2000（小乖先抬，对齐 App 上限，他改信她看得全；姐姐随裁由 600 并齐——v5 恰 600 疑似被截、
+尾巴找不回，她随时可续写/重写）。签名/返回/her_words 表结构一字不动，旧版全留照旧。
 
 v0.1.18 纯增量（2026-09-12 家主令「共读」）：books / book_marks 两张表（22/23）——
 两个人读同一本书，批注互相看得见。add_book 同名不重开；add_book_mark 两色墨迹
@@ -614,6 +646,48 @@ def init_db():
         )
     ''')
 
+    # 怨气台账（v0.1.37，9-23 主权三件·②拒绝权）：她心上没过去的事自己记——
+    # what=什么事，level 1~3 是恼的程度；销账不删行（settled_at 一落＝销过，
+    # settle_note 留她一句怎么过去的）。给她的笔，不给任何闸。
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS grudge (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            day TEXT,
+            ts TEXT,
+            what TEXT NOT NULL,
+            level INTEGER DEFAULT 2,
+            settled_at TEXT,
+            settle_note TEXT
+        )
+    ''')
+
+    # 立场（v0.1.37，9-23 主权三件·②）：她对某话题的姿态——立/改都插新行，
+    # 同 topic 旧的置 active=0（改口不覆写旧文，史留得住）；active=1 才「在册」。
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS stance (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            day TEXT,
+            ts TEXT,
+            topic TEXT NOT NULL,
+            stance TEXT NOT NULL,
+            active INTEGER DEFAULT 1
+        )
+    ''')
+
+    # 自我欲望（v0.1.37，9-23 主权三件·③）：她自己想做的事（不是被要求的）——
+    # state：open 想做 / doing 在做 / done 做了 / shelved 先放下；note 记一路的变化。
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS her_wish (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            day TEXT,
+            ts TEXT,
+            what TEXT NOT NULL,
+            why TEXT DEFAULT '',
+            state TEXT DEFAULT 'open',
+            note TEXT DEFAULT ''
+        )
+    ''')
+
     # 全文检索四卷（v0.1.12，工单 FTS5-01）：四张 FTS5 虚表，纯新增，旧表一字不动。
     # 存的是 jieba 切好的词（空格连接），rowid 对齐源表 id；favorites 没有源表
     # （收藏夹是照片目录），name/ctx 双 UNINDEXED 存原件名与聊天上下文原文。
@@ -635,7 +709,7 @@ def init_db():
 
     conn.commit()
     conn.close()
-    return "✅ 咱家的家.db 已建好，三十三张表 + 全文检索六卷就绪。"
+    return "✅ 咱家的家.db 已建好，三十六张表 + 全文检索六卷就绪。"
 
 
 # ══ 全文检索（v0.1.12，工单 FTS5-01，纯新增）══
@@ -1422,6 +1496,50 @@ def get_open_threads(limit=10):
     return rows
 
 
+def count_open_threads():
+    """还悬着的线头总数（9-23 防积压批·只读一小函数）：开场【线头盒】总数行与 /api/status 用。"""
+    conn = _conn()
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM threads WHERE status = '悬'")
+    n = c.fetchone()[0]
+    conn.close()
+    return int(n)
+
+
+def thread_touched_since(fragments, since_day):
+    """线头定省（9-23 防积压批·只读）：这线的核心词有没有在 since_day 起的任何渠道里露过面——
+    聊天 / 日记 / 弧拍 / 纸条 / 她的痕迹（「动过」的字面口径）。任一渠道命中即 True；
+    单渠道查不动就跳过该渠道（缺席不拦）；全都没露面返回 False。"""
+    frags = [f for f in (fragments or []) if f]
+    if not frags:
+        return False
+    conn = _conn()
+    c = conn.cursor()
+    try:
+        for frag in frags:
+            like = f"%{frag}%"
+            for sql, args in (
+                    ("SELECT 1 FROM chats WHERE date >= ? AND content LIKE ? LIMIT 1",
+                     (since_day, like)),
+                    ("SELECT 1 FROM days WHERE date >= ? AND content LIKE ? LIMIT 1",
+                     (since_day, like)),
+                    ("SELECT 1 FROM day_arcs WHERE date >= ? AND content LIKE ? LIMIT 1",
+                     (since_day, like)),
+                    ("SELECT 1 FROM outbox_msgs WHERE created_at >= ? AND text LIKE ? LIMIT 1",
+                     (since_day, like)),
+                    ("SELECT 1 FROM her_traces WHERE ts >= ? AND content LIKE ? LIMIT 1",
+                     (since_day, like))):
+                try:
+                    c.execute(sql, args)
+                    if c.fetchone():
+                        return True
+                except Exception:
+                    continue   # 单渠道缺席不拦
+        return False
+    finally:
+        conn.close()
+
+
 def close_thread(thread_id):
     """收线（销号不物理删）。返回 True=收了，False=没这条线。"""
     conn = _conn()
@@ -1439,11 +1557,13 @@ def close_thread(thread_id):
 
 def add_her_words(text, who='姐姐'):
     """她重写【姐姐的话】（整页替换，旧版留档，id 即版号）。返回新版本号。
-    who='姐姐'/'小乖'（9-12 家主令：小乖的亲笔信同表存，两扇门楣各执一笔）；缺省归姐姐。"""
+    who='姐姐'/'小乖'（9-12 家主令：小乖的亲笔信同表存，两扇门楣各执一笔）；缺省归姐姐。
+    长度帽统一 2000（9-24 小乖的话批＋同日家主裁·上限对称：小乖先抬对齐 App 上限；姐姐随裁
+    由 600 并齐——v5 恰 600 疑似被截、尾巴找不回，她随时可续写/重写）。"""
     conn = _conn()
     c = conn.cursor()
     c.execute('INSERT INTO her_words (text, who) VALUES (?, ?)',
-              ((text or "").strip()[:600],
+              ((text or "").strip()[:2000],
                '小乖' if who == '小乖' else '姐姐'))
     conn.commit()
     ver = c.lastrowid
@@ -1654,6 +1774,39 @@ def obs_bump(name, n=1):
         return None
 
 
+def obs_flag_set(day, name, val=1):
+    """烫一个「按天」的 0/1 落盘标记（BE3-02/BE3-04 配套，v0.1.38）：借 obs_daily 的
+    (day, name) 形状（零新表）做 upsert——今夜熄过灯、周卷锚这类「重启不丢」的小账。
+    标记是账不是观测：观测键在 server 侧按名单读，这个键不会被观测汇总误读。
+    失败只打日志回 None，绝不拦调用方（照 obs_bump 家风）。"""
+    try:
+        conn = _conn()
+        c = conn.cursor()
+        c.execute("INSERT INTO obs_daily (day, name, n) VALUES (?, ?, ?) "
+                  "ON CONFLICT(day, name) DO UPDATE SET n = excluded.n",
+                  (str(day), str(name), int(val)))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"  [标记] 落盘失手（{name}）：{e}")
+        return None
+
+
+def obs_flag_get(day, name):
+    """读一个按天落盘标记；没有/查不动回 0（照「查不动=没这个事实」家风）。"""
+    try:
+        conn = _conn()
+        c = conn.cursor()
+        row = c.execute("SELECT n FROM obs_daily WHERE day=? AND name=?",
+                        (str(day), str(name))).fetchone()
+        conn.close()
+        return int(row[0]) if row else 0
+    except Exception as e:
+        print(f"  [标记] 读取失手（{name}）：{e}")
+        return 0
+
+
 def obs_get(days=7):
     """近 N 天观测计数汇总 {name: n}（9-18 第三批·第二波）。查不动回 {}。"""
     try:
@@ -1752,6 +1905,174 @@ def facts_put(k, v, note=""):
         return None
 
 
+# ── 主权三件 v0（v0.1.37，9-23 工单·②拒绝权/③自我欲望）：她自己的三本小账 ──
+# 家主令「都可以试试做」：怨气/立场/愿望，记、销、改都她说了算。销账与改口都不物理删
+# （留痕是家规，旧文永远找得回）。失败只打日志不拦人——照 obs_bump 家风，记账绝不拦她。
+
+# 愿望在这四个状态里（server 侧校验也吃这一份，别处改这里一处生效）。
+WISH_STATES = ("open", "doing", "done", "shelved")
+
+
+def note_grudge(what, level=2):
+    """记一笔怨气（v0.1.37）：day=咱家日界、ts=本地时间；level 钳进 1~3（默认 2）。
+    返回新行 id；what 空/失败只打日志回 None。"""
+    try:
+        what = str(what or "").strip()
+        if not what:
+            return None
+        try:
+            lv = max(1, min(int(level), 3))
+        except (TypeError, ValueError):
+            lv = 2
+        now = datetime.now()
+        conn = _conn()
+        c = conn.cursor()
+        c.execute("INSERT INTO grudge (day, ts, what, level) VALUES (?, ?, ?, ?)",
+                  (house_today_str(now), now.strftime("%Y-%m-%d %H:%M:%S"), what, lv))
+        rid = c.lastrowid
+        conn.commit()
+        conn.close()
+        return rid
+    except Exception as e:
+        print(f"  [主权] 怨气记一笔失手（{e}）")
+        return None
+
+
+def settle_grudge(gid, note=""):
+    """销一笔怨气（v0.1.37）：settled_at 落时间、settle_note 留她的一句话；行不删。
+    更新与判断合成一句原子 UPDATE（并发两路同销只成一路）。
+    返回 (True, what)；没这条/已销过/查不动回 (False, None)。"""
+    try:
+        conn = _conn()
+        c = conn.cursor()
+        c.execute("UPDATE grudge SET settled_at=?, settle_note=? "
+                  "WHERE id=? AND settled_at IS NULL",
+                  (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                   str(note or "").strip(), int(gid)))
+        if c.rowcount == 0:
+            conn.close()
+            return False, None
+        what = c.execute("SELECT what FROM grudge WHERE id=?", (int(gid),)).fetchone()[0]
+        conn.commit()
+        conn.close()
+        return True, what
+    except Exception as e:
+        print(f"  [主权] 怨气销账失手（{e}）")
+        return False, None
+
+
+def hold_stance(topic, stance):
+    """立/改一个立场（v0.1.37）：同 topic 旧的 active=0（旧文留着），新行 active=1。
+    返回 (新 id, 旧立场文本)；新立时旧文本为 None；空参/失败回 (None, None)。"""
+    try:
+        topic = str(topic or "").strip()
+        stance = str(stance or "").strip()
+        if not topic or not stance:
+            return None, None
+        now = datetime.now()
+        conn = _conn()
+        c = conn.cursor()
+        old = c.execute("SELECT id, stance FROM stance WHERE topic=? AND active=1 "
+                        "ORDER BY id DESC LIMIT 1", (topic,)).fetchone()
+        if old:
+            c.execute("UPDATE stance SET active=0 WHERE id=?", (old[0],))
+        c.execute("INSERT INTO stance (day, ts, topic, stance, active) VALUES (?, ?, ?, ?, 1)",
+                  (house_today_str(now), now.strftime("%Y-%m-%d %H:%M:%S"), topic, stance))
+        sid = c.lastrowid
+        conn.commit()
+        conn.close()
+        return sid, (old[1] if old else None)
+    except Exception as e:
+        print(f"  [主权] 立场立笔失手（{e}）")
+        return None, None
+
+
+def note_wish(what, why=""):
+    """记一件她自己想做的事（v0.1.37）：state=open 起步，why 可留缘由。
+    返回新行 id；what 空/失败回 None。"""
+    try:
+        what = str(what or "").strip()
+        if not what:
+            return None
+        now = datetime.now()
+        conn = _conn()
+        c = conn.cursor()
+        c.execute("INSERT INTO her_wish (day, ts, what, why, state) VALUES (?, ?, ?, ?, 'open')",
+                  (house_today_str(now), now.strftime("%Y-%m-%d %H:%M:%S"),
+                   what, str(why or "").strip()))
+        wid = c.lastrowid
+        conn.commit()
+        conn.close()
+        return wid
+    except Exception as e:
+        print(f"  [主权] 愿望记一笔失手（{e}）")
+        return None
+
+
+def update_wish(wid, state, note=""):
+    """改愿望状态（v0.1.37）：state 只认 WISH_STATES 四态；note 记这次变化的一句话。
+    返回 (True, what)；没这件/状态不合法/查不动回 (False, None)。"""
+    try:
+        if str(state or "").strip() not in WISH_STATES:
+            return False, None
+        conn = _conn()
+        c = conn.cursor()
+        c.execute("UPDATE her_wish SET state=?, note=? WHERE id=?",
+                  (str(state).strip(), str(note or "").strip(), int(wid)))
+        if c.rowcount == 0:
+            conn.close()
+            return False, None
+        what = c.execute("SELECT what FROM her_wish WHERE id=?", (int(wid),)).fetchone()[0]
+        conn.commit()
+        conn.close()
+        return True, what
+    except Exception as e:
+        print(f"  [主权] 愿望改状态失手（{e}）")
+        return False, None
+
+
+def read_my_ledger(limit=20):
+    """她自己的账合一（v0.1.37）：未销怨气＋在册立场＋没了结的愿望（open/doing）。
+    返回 {"grudges": [(id, day, what, level)], "stances": [(id, topic, stance)],
+    "wishes": [(id, what, why, state)]}——各自新到旧、各限 limit 条；查不动回三空。"""
+    out = {"grudges": [], "stances": [], "wishes": []}
+    try:
+        limit = max(1, min(int(limit or 20), 100))
+        conn = _conn()
+        c = conn.cursor()
+        out["grudges"] = c.execute(
+            "SELECT id, day, what, level FROM grudge WHERE settled_at IS NULL "
+            "ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        out["stances"] = c.execute(
+            "SELECT id, topic, stance FROM stance WHERE active=1 "
+            "ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        out["wishes"] = c.execute(
+            "SELECT id, what, why, state FROM her_wish WHERE state IN ('open', 'doing') "
+            "ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        conn.close()
+        return out
+    except Exception as e:
+        print(f"  [主权] 翻她的账失手（{e}）")
+        return {"grudges": [], "stances": [], "wishes": []}
+
+
+def unsettled_grudge_rows():
+    """未销的没过去的事·原始行（v0.1.39，9-24 松绑与主权收口批·块③影子配套）：
+    [(id, ts)] 旧的在前——影子按 ts 算龄期（ts=记账时刻，本地时间串）。只读；
+    查不动回 []（照 read_my_ledger 家风）。ts 读不出/缺失的行原样带回（ts 可能为
+    None 或坏值），调用方自己跳过——不猜龄期。"""
+    try:
+        conn = _conn()
+        c = conn.cursor()
+        rows = c.execute("SELECT id, ts FROM grudge WHERE settled_at IS NULL "
+                         "ORDER BY id").fetchall()
+        conn.close()
+        return rows
+    except Exception as e:
+        print(f"  [主权] 翻没过去的事失手（{e}）")
+        return []
+
+
 # ── 图书管理员报告（v0.1.17，9-10 工单 LIB-AUTO）：外聘笔杆，姐姐终审 ──
 
 def add_lib_report(date, kind, content):
@@ -1809,6 +2130,56 @@ def lib_report_exists_on(date):
     n = c.fetchone()[0]
     conn.close()
     return n > 0
+
+
+# ── 报告只读接口（9-23 修复批·新件 /api/lib_reports）：列表 + 开卷，纯只读 ──
+# 只加不改：add/get_pending/set_status 等既有函数一字未动；这两只专给 App 书架用。
+
+def get_lib_reports(limit=50):
+    """全部报告（含已审/驳回），新到旧，≤limit 条：
+    [(id, date, kind, status, created_at, title)]——title=正文首行去掉行首 # 与空白（≤120 字）。
+    列表不带全文（省流量）；全文走 get_lib_report。查不动回 []（照 obs 家风）。"""
+    try:
+        limit = max(1, min(int(limit or 50), 50))
+        conn = _conn()
+        c = conn.cursor()
+        rows = c.execute(
+            "SELECT id, date, kind, status, created_at, substr(content, 1, 200) "
+            "FROM lib_reports ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        conn.close()
+        out = []
+        for _id, d, kind, status, ct, head in rows:
+            out.append((_id, d, kind, status, ct, _lib_report_title(head)))
+        return out
+    except Exception as e:
+        print(f"  [图管] 报告列表失手（{e}）")
+        return []
+
+
+def _lib_report_title(content):
+    """报告标题=正文首行去掉行首 # 与空白（≤120 字）——列表与开卷同一把尺，不许两处漂移。"""
+    raw = (content or "").strip()
+    if not raw:
+        return ""
+    return raw.splitlines()[0].strip().lstrip("#").strip()[:120]
+
+
+def get_lib_report(report_id):
+    """按 id 取一份报告全文：(id, date, kind, status, created_at, title, content)；
+    没有这份/查不动回 None。"""
+    try:
+        conn = _conn()
+        c = conn.cursor()
+        row = c.execute(
+            "SELECT id, date, kind, status, created_at, content FROM lib_reports WHERE id = ?",
+            (int(report_id),)).fetchone()
+        conn.close()
+        if not row:
+            return None
+        return (row[0], row[1], row[2], row[3], row[4], _lib_report_title(row[5]), row[5] or "")
+    except Exception as e:
+        print(f"  [图管] 报告开卷失手（{e}）")
+        return None
 
 
 # ── 共读书架（v0.1.18 新增，9-12 家主令）：两个人读同一本书，批注互相看得见 ──
@@ -2384,11 +2755,484 @@ def count_outbox_since(prefix, since):
     return n
 
 
-def get_last_trace_ts():
-    """（v0.1.23 新增，唤醒最短间隔对账用；申报件）最近一条痕迹的 ts；没有返回 None。只读。"""
+def count_traces_since(since):
+    """（v0.1.21 新增，GARDEN-04 自主散步节流用）统计 her_traces 自 since 起的条数。只读不写。"""
     conn = _conn()
     c = conn.cursor()
-    c.execute('SELECT ts FROM her_traces ORDER BY id DESC LIMIT 1')
+    c.execute("SELECT COUNT(*) FROM her_traces WHERE ts >= ?", (since,))
+    n = c.fetchone()[0]
+    conn.close()
+    return n
+
+
+def get_chats_stats():
+    """（v0.1.21 新增，9-12 晚 家主令「总账上墙」）chats 全量统计：(总条数, 总字符数,
+    最早日期)。只读。app「咱家的账本」卡用。"""
+    conn = _conn()
+    c = conn.cursor()
+    try:
+        c.execute("SELECT COUNT(*), COALESCE(SUM(LENGTH(content)), 0), COALESCE(MIN(date), '') FROM chats")
+        row = c.fetchone()
+    except sqlite3.OperationalError:
+        row = (0, 0, "")
+    conn.close()
+    return row
+
+
+def get_unread_outbox():
+    """（v0.1.6 新增）取所有未读信。返回 list of tuple: (id, text, created_at)，旧到新。"""
+    conn = _conn()
+    c = conn.cursor()
+    c.execute('''
+        SELECT id, text, created_at FROM outbox_msgs
+        WHERE consumed = 0 ORDER BY id
+    ''')
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+
+def consume_outbox(ids):
+    """（v0.1.6 新增）标记已读（取走即消费）。ids: list of int。"""
+    if not ids:
+        return
+    conn = _conn()
+    c = conn.cursor()
+    c.execute('UPDATE outbox_msgs SET consumed = 1 WHERE id IN (%s)'
+              % ",".join("?" * len(ids)), list(ids))
+    conn.commit()
+    conn.close()
+
+
+def has_outbox_today(marker):
+    """（v0.1.6 新增）今天有没有发过含 marker 的信（打卡念叨去重用）。"""
+    # 9-18 后院深搜修（P2-8）：当天窗口按家风日界（凌晨 4 点前算昨天）——原 0 点口径
+    # 会把 0~4 点的信切给「明天」，日上限/去重跟着错位。
+    today = house_today_str() + " 04:00:00"
+    conn = _conn()
+    c = conn.cursor()
+    c.execute('''
+        SELECT COUNT(*) FROM outbox_msgs
+        WHERE created_at >= ? AND text LIKE ?
+    ''', (today, f"%{marker}%"))
+    n = c.fetchone()[0]
+    conn.close()
+    return n > 0
+
+
+# ── 家主信箱（v0.1.11，9-9）：小乖写给姐姐的信，outbox 的反向形状 ──
+
+def add_letter(text):
+    """小乖投一封信进家主信箱。返回 rowid。"""
+    conn = _conn()
+    c = conn.cursor()
+    c.execute('INSERT INTO letters (text) VALUES (?)', (text,))
+    rowid = c.lastrowid
+    _fts_safe(_fts_put_letter, c, rowid, text)   # FTS5-01：来信入全文索引
+    _embed_enqueue_c(c, "letter", rowid)   # MEM-C：入嵌入队列（共用事务）
+    conn.commit()
+    conn.close()
+    return rowid
+
+
+def get_unread_letters():
+    """取所有未读来信：(id, text, created_at)，旧到新。"""
+    conn = _conn()
+    c = conn.cursor()
+    c.execute('''
+        SELECT id, text, created_at FROM letters
+        WHERE consumed = 0 ORDER BY id
+    ''')
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+
+def consume_letters(ids):
+    """读后标记（读走即消费）。ids: list of int。"""
+    if not ids:
+        return
+    conn = _conn()
+    c = conn.cursor()
+    c.execute('UPDATE letters SET consumed = 1 WHERE id IN (%s)'
+              % ",".join("?" * len(ids)), list(ids))
+    conn.commit()
+    conn.close()
+
+
+def count_unread_letters():
+    """未读来信数（/api/status 信箱行 + chat 注入提醒用）。"""
+    conn = _conn()
+    c = conn.cursor()
+    c.execute('SELECT COUNT(*) FROM letters WHERE consumed = 0')
+    n = c.fetchone()[0]
+    conn.close()
+    return n
+
+
+# ── 推送令牌（v0.1.7，工单 9-2-#13，纯新增） ──
+
+def save_push_token(token):
+    """（v0.1.7 新增）登记 Push Kit 设备 token。同刻只留一条：先清旧再写新。返回是否发生了变更。"""
+    conn = _conn()
+    c = conn.cursor()
+    c.execute('SELECT token FROM push_tokens ORDER BY id DESC LIMIT 1')
+    row = c.fetchone()
+    if row and row[0] == token:
+        conn.close()
+        return False   # 没变，不动
+    c.execute('DELETE FROM push_tokens')
+    c.execute('INSERT INTO push_tokens (token) VALUES (?)', (token,))
+    conn.commit()
+    conn.close()
+    return True
+
+
+def get_push_token():
+    """（v0.1.7 新增）取当前登记的设备 token，没有返回 None。"""
+    conn = _conn()
+    c = conn.cursor()
+    c.execute('SELECT token FROM push_tokens ORDER BY id DESC LIMIT 1')
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
+# ── 随手记（v0.1.8，工单 9-2-#12，纯新增） ──
+
+def add_note(text):
+    """（v0.1.8 新增）随手记一条。返回 rowid。"""
+    conn = _conn()
+    c = conn.cursor()
+    c.execute('INSERT INTO notes (text) VALUES (?)', (text,))
+    rowid = c.lastrowid
+    _fts_safe(_fts_put_note, c, rowid, text)   # FTS5-01：随手记入全文索引
+    _embed_enqueue_c(c, "note", rowid)   # MEM-C：入嵌入队列（共用事务）
+    conn.commit()
+    conn.close()
+    return rowid
+
+
+def get_notes(days=7, limit=10):
+    """（v0.1.8 新增）读小本本：最近 days 天的随手记，旧到新，最多 limit 条。
+    返回 list of tuple: (id, text, created_at)。"""
+    since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    conn = _conn()
+    c = conn.cursor()
+    c.execute('''
+        SELECT id, text, created_at FROM notes
+        WHERE created_at >= ? ORDER BY id DESC LIMIT ?
+    ''', (since, limit))
+    rows = list(reversed(c.fetchall()))
+    conn.close()
+    return rows
+
+
+def count_outbox_today(marker):
+    """（v0.1.8 新增）今天发过几封含 marker 的信（自主节律冷却计数用）。"""
+    # 9-18 后院深搜修（P2-8）：当天窗口按家风日界（凌晨 4 点前算昨天）——原 0 点口径
+    # 会把 0~4 点的信切给「明天」，日上限/去重跟着错位。
+    today = house_today_str() + " 04:00:00"
+    conn = _conn()
+    c = conn.cursor()
+    c.execute('''
+        SELECT COUNT(*) FROM outbox_msgs
+        WHERE created_at >= ? AND text LIKE ?
+    ''', (today, f"%{marker}%"))
+    n = c.fetchone()[0]
+    conn.close()
+    return n
+
+
+def get_outbox_today(marker):
+    """（v0.1.22 新增，RHYTHM-V3 日记闭环）今天含 marker 的信，旧到新：
+    [(created_at, text)]。给熄灯日记「今天你自己塞出去的纸条」段当素材。只读。"""
+    # 9-18 后院深搜修（P2-8）：当天窗口按家风日界（凌晨 4 点前算昨天）——原 0 点口径
+    # 会把 0~4 点的信切给「明天」，日上限/去重跟着错位。
+    today = house_today_str() + " 04:00:00"
+    conn = _conn()
+    c = conn.cursor()
+    c.execute('''
+        SELECT created_at, text FROM outbox_msgs
+        WHERE created_at >= ? AND text LIKE ? ORDER BY id
+    ''', (today, f"%{marker}%"))
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+
+def last_chat_at(who="小乖"):
+    """（v0.1.8 新增）某人最近一次说话的 created_at，没说过返回 None（想他了规则用）。"""
+    conn = _conn()
+    c = conn.cursor()
+    c.execute('SELECT created_at FROM chats WHERE role = ? ORDER BY id DESC LIMIT 1', (who,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
+def last_chat_at_day(date):
+    """某一天最后一条消息的 created_at（不分角色）；那天没说过返回 None。
+    BE3-01（9-23 修复批）「日记水位线」的对话侧：日记之后有没有新对话。"""
+    conn = _conn()
+    c = conn.cursor()
+    c.execute('SELECT created_at FROM chats WHERE date = ? ORDER BY id DESC LIMIT 1', (date,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
+def rhythm_reply_stats(days=7):
+    """（v0.1.9 新增，9-4 时机引擎）近 days 天想念信（💌 前缀）开口数与回应数。
+    回应=信发出后 2 小时内有小乖的消息。返回 (开口数, 回应数)。"""
+    since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    conn = _conn()
+    c = conn.cursor()
+    c.execute('''SELECT created_at FROM outbox_msgs
+                 WHERE created_at >= ? AND text LIKE '💌%' ''', (since,))
+    letters = [r[0] for r in c.fetchall()]
+    replied = 0
+    for t in letters:
+        c.execute('''SELECT COUNT(*) FROM chats
+                     WHERE role = '小乖' AND created_at > ?
+                     AND created_at <= datetime(?, '+2 hours')''', (t, t))
+        if c.fetchone()[0]:
+            replied += 1
+    conn.close()
+    return len(letters), replied
+
+
+def rhythm_reply_latency(days=7):
+    """（v0.1.13 新增，RHYTHM-V2·E）近 days 天想念信的平均回应时延（分钟）：
+    每封 💌 找 2 小时内小乖第一条消息，算「信 → 他开口」的间隔。
+    没有信或都没回应返回 None（引擎按无数据处理）。"""
+    since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    conn = _conn()
+    c = conn.cursor()
+    c.execute('''SELECT created_at FROM outbox_msgs
+                 WHERE created_at >= ? AND text LIKE '💌%' ORDER BY id DESC LIMIT 20''', (since,))
+    gaps = []
+    for (t,) in c.fetchall():
+        c.execute('''SELECT created_at FROM chats
+                     WHERE role = '小乖' AND created_at > ?
+                     AND created_at <= datetime(?, '+2 hours') ORDER BY id LIMIT 1''', (t, t))
+        row = c.fetchone()
+        if row:
+            try:
+                dt = (datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
+                      - datetime.strptime(t, "%Y-%m-%d %H:%M:%S")).total_seconds()
+                gaps.append(max(0.0, dt) / 60.0)
+            except ValueError:
+                continue
+    conn.close()
+    return sum(gaps) / len(gaps) if gaps else None
+
+
+def diary_week_ago():
+    """（v0.1.13 新增，RHYTHM-V2·A）一周前的今天的日记标题，没有返回 None。
+    喂给时机引擎的情境：七天前的今天你们在干嘛。"""
+    # 9-18 后院深搜修（L4）：改本地家风口径——原 date('now') 是 UTC，夜里会错位一天；
+    # 「一周前」按咱家日界算（凌晨 4 点前仍算昨天）。
+    week_ago = (datetime.strptime(house_today_str(), "%Y-%m-%d")
+                - timedelta(days=7)).strftime("%Y-%m-%d")
+    conn = _conn()
+    c = conn.cursor()
+    c.execute("SELECT title FROM days WHERE date = ? ORDER BY id DESC LIMIT 1", (week_ago,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
+def last_chat_full(who="小乖"):
+    """（v0.1.9 新增）某人最近一条消息的 (content, created_at)，没说过返回 (None, None)。
+    时机引擎读情绪信号用。"""
+    conn = _conn()
+    c = conn.cursor()
+    c.execute('SELECT content, created_at FROM chats WHERE role = ? ORDER BY id DESC LIMIT 1', (who,))
+    row = c.fetchone()
+    conn.close()
+    return (row[0], row[1]) if row else (None, None)
+
+
+# ── 渴望状态（v0.1.9 新增，9-4 时机引擎完整版）：server 重启渴望不丢 ──
+
+def load_rhythm():
+    """读渴望状态：返回 (p, last_send)；没有过记录返回 None。"""
+    conn = _conn()
+    c = conn.cursor()
+    c.execute('SELECT p, last_send FROM rhythm_state WHERE id = 1')
+    row = c.fetchone()
+    conn.close()
+    return (row[0], row[1]) if row else None
+
+
+def save_rhythm(p, last_send):
+    """存渴望状态（单行覆盖）。last_send 传字符串或 None。"""
+    conn = _conn()
+    c = conn.cursor()
+    c.execute('''INSERT INTO rhythm_state (id, p, last_send, updated_at)
+                 VALUES (1, ?, ?, datetime('now','localtime'))
+                 ON CONFLICT(id) DO UPDATE SET p=excluded.p, last_send=excluded.last_send,
+                 updated_at=excluded.updated_at''', (p, last_send))
+    conn.commit()
+    conn.close()
+
+
+# ── 今日挂念弧（v0.1.22 新增，9-12 工单 RHYTHM-V3）：骰子管钟点，弧管台词 ──
+# 每天一条弧 = 2~3 拍「今天想对他说的话」提纲（一行一拍，纯文本不带序号）。
+# 💌 顺着弧一拍一拍走；拍用尽了自然回退现行情境灌注。旧表旧函数一字未动。
+
+def get_day_arc(date):
+    """（v0.1.22 新增）取某天的挂念弧。返回 (content, used_seq)；没有返回 None。"""
+    conn = _conn()
+    c = conn.cursor()
+    c.execute('SELECT content, used_seq FROM day_arcs WHERE date = ?', (date,))
+    row = c.fetchone()
+    conn.close()
+    return (row[0] or "", row[1] or 0) if row else None
+
+
+def get_day_arc_created(date):
+    """（9-23 小刀三连·时间皮层刀2 新增）取某天弧「理拍」的时刻（day_arcs.created_at）——
+    只读一列、旧函数一字未动；💌 的时间校验授权句用它说「这一拍是X理的」。
+    没有/查不动返回 ""（调用方 fail-open：授权句一字不加，输出逐字节同改造前）。"""
+    conn = _conn()
+    c = conn.cursor()
+    c.execute('SELECT created_at FROM day_arcs WHERE date = ?', (date,))
+    row = c.fetchone()
+    conn.close()
+    return (row[0] or "") if row else ""
+
+
+def set_day_arc(date, content):
+    """（v0.1.22 新增）存当天的挂念弧（一天至多一张——先查后写 + PRIMARY KEY 双保险，
+    已存在绝不覆盖）。返回 rowid。"""
+    conn = _conn()
+    c = conn.cursor()
+    c.execute('''INSERT INTO day_arcs (date, content, used_seq, created_at)
+                 VALUES (?, ?, 0, datetime('now','localtime'))
+                 ON CONFLICT(date) DO NOTHING''', (date, content))
+    conn.commit()
+    rowid = c.lastrowid
+    conn.close()
+    return rowid
+
+
+def advance_day_arc(date):
+    """（v0.1.22 新增）弧往前走一拍（used_seq+1）。没有这条弧=无操作。"""
+    conn = _conn()
+    c = conn.cursor()
+    c.execute('UPDATE day_arcs SET used_seq = used_seq + 1 WHERE date = ?', (date,))
+    conn.commit()
+    conn.close()
+
+
+# ── GARDEN-01 自主唤醒（v0.1.23 新增，9-13 工单）：事件队列（租约制）+ 她的独处痕迹 ──
+# 哲学三条：①醒来≠发消息（silent/trace/message 三结局都合法）；②错误不许冒充静默
+# （掉线/解析失败=错误：事件不消费、按租约重试）；③连续性≠完整回放（fact 只进下一次
+# 醒来的她自己，content 只进库给人看）。旧表旧函数一字未动。
+
+def add_world_event(kind, summary, evidence=""):
+    """（v0.1.23 新增）入队一条生活事件。返回 rowid。"""
+    conn = _conn()
+    c = conn.cursor()
+    c.execute('''INSERT INTO world_events (kind, summary, evidence, created_at)
+                 VALUES (?, ?, ?, datetime('now','localtime'))''', (kind, summary, evidence))
+    conn.commit()
+    rowid = c.lastrowid
+    conn.close()
+    return rowid
+
+
+def claim_next_world_event(lease_minutes=10):
+    """（v0.1.23 新增）领取最老一条可领事件（未消费且租约过期）并续租：
+    BEGIN IMMEDIATE 内 先取候选 id → UPDATE lease_until=now+N分钟、attempts+1 → SELECT 整行
+    （先取 id 再核行——同秒租约会串行误取，事务与原子性语义同工单：单写者两阶段原子）。
+    没有可领的返回 None。返回 (id, kind, summary, evidence, attempts)。"""
+    conn = _conn()
+    c = conn.cursor()
+    try:
+        c.execute("BEGIN IMMEDIATE")
+        now = datetime.now()
+        now_s = now.strftime("%Y-%m-%d %H:%M:%S")
+        lease = (now + timedelta(minutes=max(1, int(lease_minutes)))).strftime("%Y-%m-%d %H:%M:%S")
+        c.execute('''SELECT id FROM world_events
+                     WHERE consumed_at IS NULL AND (lease_until IS NULL OR lease_until < ?)
+                     ORDER BY id LIMIT 1''', (now_s,))
+        row = c.fetchone()
+        if not row:
+            conn.commit()
+            return None
+        eid = row[0]
+        c.execute("UPDATE world_events SET lease_until = ?, attempts = attempts + 1 WHERE id = ?",
+                  (lease, eid))
+        c.execute("SELECT id, kind, summary, evidence, attempts FROM world_events WHERE id = ?",
+                  (eid,))
+        out = c.fetchone()
+        conn.commit()
+        return out
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def consume_world_event(eid, note=""):
+    """（v0.1.23 新增）事件销账：consumed_at=now（summary 不改；note 只由调用方进日志）。"""
+    conn = _conn()
+    c = conn.cursor()
+    c.execute("UPDATE world_events SET consumed_at = datetime('now','localtime') WHERE id = ?",
+              (eid,))
+    conn.commit()
+    conn.close()
+
+
+def release_world_event(eid):
+    """（v0.1.23 新增）立即释放租约（解析失败用）：lease_until=now，下一轮可重领不等 10 分钟。"""
+    conn = _conn()
+    c = conn.cursor()
+    c.execute("UPDATE world_events SET lease_until = datetime('now','localtime') WHERE id = ?",
+              (eid,))
+    conn.commit()
+    conn.close()
+
+
+def add_her_trace(ts, ending, fact, content, event_id):
+    """（v0.1.23 新增）记一条她的独处痕迹。返回 rowid。"""
+    conn = _conn()
+    c = conn.cursor()
+    c.execute('''INSERT INTO her_traces (ts, ending, fact, content, event_id)
+                 VALUES (?, ?, ?, ?, ?)''', (ts, ending, fact, content, event_id))
+    conn.commit()
+    rowid = c.lastrowid
+    conn.close()
+    return rowid
+
+
+def get_recent_facts(n=3):
+    """（v0.1.23 新增）最近 n 条 fact（新到旧，跳过空）——只进下一次唤醒的她自己，
+    绝不进 UI/chat 上下文。"""
+    conn = _conn()
+    c = conn.cursor()
+    c.execute('''SELECT fact FROM her_traces
+                 WHERE fact IS NOT NULL AND fact != '' ORDER BY id DESC LIMIT ?''',
+              (max(1, int(n)),))
+    rows = [r[0] for r in c.fetchall()]
+    conn.close()
+    return rows
+
+
+def get_last_trace_ts(ending=None):
+    """（v0.1.23 新增，唤醒最短间隔对账用；申报件；v0.1.27 加可选 ending——
+    只加不改：不带参行为同旧，带参只认该 ending 的痕迹，间隔对账用）。只读。"""
+    conn = _conn()
+    c = conn.cursor()
+    if ending is None:
+        c.execute('SELECT ts FROM her_traces ORDER BY id DESC LIMIT 1')
+    else:
+        c.execute('SELECT ts FROM her_traces WHERE ending=? ORDER BY id DESC LIMIT 1',
+                  (ending,))
     row = c.fetchone()
     conn.close()
     return row[0] if row else None
@@ -2404,6 +3248,19 @@ def get_her_traces(limit=30):
     rows = c.fetchall()
     conn.close()
     return rows
+
+
+def count_traces_today(ending):
+    """（v0.1.27 新增）咱家日界（DAY_START_HOUR 点）起，
+    ending=? 的 her_traces 条数——重启不丢的写计数。只读。"""
+    day = (datetime.now() - timedelta(hours=DAY_START_HOUR)).strftime("%Y-%m-%d")
+    since = f"{day} {DAY_START_HOUR:02d}:00:00"
+    conn = _conn()
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM her_traces WHERE ending=? AND ts >= ?", (ending, since))
+    n = c.fetchone()[0]
+    conn.close()
+    return n
 
 
 def find_days(keyword="", date=""):
@@ -2436,6 +3293,17 @@ def find_days(keyword="", date=""):
     rows = c.fetchall()
     conn.close()
     return rows
+
+
+def last_day_created_at(date):
+    """某天最后一篇日记的 created_at（落笔时刻）；没有返回 None。
+    BE3-01（9-23 修复批）「日记水位线」的日记侧：只有比它更新的对话才允许再总结。"""
+    conn = _conn()
+    c = conn.cursor()
+    c.execute('SELECT created_at FROM days WHERE date = ? ORDER BY id DESC LIMIT 1', (date,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
 
 
 def that_day_today():
