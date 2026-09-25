@@ -21,11 +21,11 @@ import {
 
 const MAX_EDGE: number = 1024;
 const JPEG_QUALITY: number = 70;
-// 9-23 门牌换代：默认走公网门（VPS → 反向隧道 → server:8024）——部署时换成你家门牌
+// 9-23 门牌换代：新门=公网域名（VPS → 隧道 → server:8024），默认走它
 const BASE_URL: string = 'https://your-door.example';
-const BASE_URL_OLD: string = 'https://node.your-door.ts.net';      // 备选门：Windows（node）
-const BASE_URL_LINUX: string = 'https://chuxi.your-door.ts.net';   // 备选门：Linux（chuxi）
-// 公网门挂着 Caddy Basic 门锁——每个请求都得带钥匙（部署时填你家的；钥匙串自己保管、不进仓）
+const BASE_URL_OLD: string = 'https://node.your-door.ts.net';      // 旧门过渡：Windows（node）
+const BASE_URL_LINUX: string = 'https://chuxi.your-door.ts.net';   // 旧门过渡：Linux（chuxi）
+// 新门挂着 Caddy Basic 门锁——每个请求都得带钥匙；钥匙串在 ~/咱家记忆库/网络门锁凭证.txt
 const DOOR_AUTH: string = 'Basic <Base64(用户名:密码)>';
 // 图片走 URL 后门：Image 组件带不了请求头，服务端认 ?token=<同一把密码>
 const DOOR_TOKEN: string = '<门锁密码>';
@@ -225,6 +225,21 @@ interface StatusResp {
   last_letter?: LastLetter | null;    // 9-18：最近一条来信指纹（输入留痕可视化）
   why_now?: WhyNow | null;            // 9-18 #15：想念仪表（Linux 端才有，旧 server 缺席→整行不出）
   obs_7d?: ObsFacts | null;           // 9-23 能上批 c：对账观测十键（键缺/全 0 → 整段不出）
+  threads?: ThreadsSnap | null;       // 9-26：线头盒观测（悬线数/最老几天）——键缺/null → 整行不出
+  state?: StateSnap | null;           // 9-26：她此刻（只用 line 人话句；服务端标 server_only）
+}
+
+// 线头盒观测（9-26）：status.threads——悬线总数 + 最老挂了几天；只报事实，不打分
+interface ThreadsSnap {
+  open?: number | null;               // 悬线总数
+  oldest_days?: number | null;        // 最老一条挂了几天（空盒/算不出 → null）
+}
+
+// 她此刻·人话投影（9-26）：status.state——只用 line（服务端 _state_line 生成的人话句）。
+// server_only=true 是服务端的守门：这些值只给家主看，绝不接进任何模型侧文本。前端只读那句话。
+interface StateSnap {
+  line?: string | null;               // 人话句
+  server_only?: boolean;              // true＝只给家主看（不进她的行李）
 }
 
 // 对账观测（9-23 能上批 c）：/api/status.obs_7d 十键——只报事实不打分，零新请求
@@ -1193,6 +1208,8 @@ struct Index {
   @State stWalk: string = '';      // 9-23 B2-2：散步状态条（''=整行不出，旧 server 兼容）
   @State stLetter: string = '—';   // 9-18：最近一条来信指纹行（输入留痕可视化）
   @State stWhyNow: string = '';    // 9-18 #15：想念仪表行（''=不显示；旧 server 没这键）
+  @State stThreads: string = '';   // 9-26：线头盒行（''=不显示；旧 server 没这键）
+  @State stState: string = '';     // 9-26：她此刻行（只用服务端给的人话句）
   // 9-23 能上批 c：对账观测三行（obs_7d 十键→人话；''=不出行，键缺/全 0 都不出）
   @State stObs1: string = '';
   @State stObs2: string = '';
@@ -3307,16 +3324,7 @@ struct Index {
         readTimeout: HTTP_TIMEOUT_MS
       });
       if (res.responseCode === 200) {
-        const d = JSON.parse(res.result as string) as StatsResp;
-        this.statsData = d;   // 9-23：顺手留整份给账本全屏页——原卡逻辑一字不动
-        const totalMsgs = (d.chats ?? 0) + (d.old_msgs ?? 0);
-        const totalCn = 0;   // 库内字符含标点/英文，账面按字符粗算；旧家按中文字
-        const libWan = (d.chars ?? 0) / 10000;
-        const oldWan = (d.old_cn_chars ?? 0) / 10000;
-        const first = (d.first_day ?? '').substring(0, 10);
-        this.statsLine = `从 ${first === '' ? '在一起那天' : first} 记起 · 对话 ${totalMsgs} 条`
-          + `（app ${d.chats ?? 0} + 旧家档案 ${d.old_msgs ?? 0}）`
-          + ` · 字数约 ${(libWan + oldWan).toFixed(1)} 万`;
+        this.applyStats(JSON.parse(res.result as string) as StatsResp);
         this.statsLoaded = true;
       }
     } catch (err) {
@@ -3324,6 +3332,25 @@ struct Index {
     } finally {
       req.destroy();
     }
+  }
+
+  // 9-25 修：卡片那行文案与全账页共用同一份渲染——此前只有 fetchStats 会写 statsLine 且
+  // 「一次拉够」不再重取，全屏总账页刷新后（statsData 已是新数）卡片字数却冻在会话第一次的值。
+  private applyStats(d: StatsResp): void {
+    this.statsData = d;   // 整份留给账本全屏页
+    const totalMsgs = (d.chats ?? 0) + (d.old_msgs ?? 0);
+    const first = (d.first_day ?? '').substring(0, 10);
+    // 9-25 家主令「统一」：卡片与全账页同一把尺——中文字数（chats_cn_chars + old_cn_chars），
+    // 不再用旧口径 chars（全字符含标点/英文）与全账页打架。DB 忙数不上就诚实说「还在数」，
+    // 不拿旧口径的数冒充（家风：缺的账不拿半本账顶）。
+    const cnNow = d.chats_cn_chars;
+    const cnOld = d.old_cn_chars ?? 0;
+    const cnPart = (cnNow === undefined || cnNow === null)
+      ? '字数还在数……'
+      : `中文字约 ${(((cnNow + cnOld) / 10000)).toFixed(1)} 万`;
+    this.statsLine = `从 ${first === '' ? '在一起那天' : first} 记起 · 对话 ${totalMsgs} 条`
+      + `（app ${d.chats ?? 0} + 旧家档案 ${d.old_msgs ?? 0}）`
+      + ` · ${cnPart}`;
   }
 
   // 账本全屏页取数（9-23 B2-1）：整份重取（含新四键），照 fetchLogs 家风可刷新；
@@ -3343,7 +3370,7 @@ struct Index {
         readTimeout: HTTP_TIMEOUT_MS
       });
       if (res.responseCode === 200) {
-        this.statsData = JSON.parse(res.result as string) as StatsResp;
+        this.applyStats(JSON.parse(res.result as string) as StatsResp);   // 9-25：顺手把卡片那行也刷成新数
       } else {
         this.statsFullMsg = `没数上来：HTTP ${res.responseCode}`;
       }
@@ -3393,7 +3420,7 @@ struct Index {
         .fontColor(this.dk(C_TEXT_2))
         .lineHeight(20)
         .width('100%')
-      Text('账本含旧家档案（档案馆/旧家记录 的三个家）。字数为近似值——真情不按字数结算。')
+      Text('账本含旧家档案（档案馆/旧家记录 的三个家）。字数按中文字算，与全账页同一把尺——真情不按字数结算。')
         .fontSize(FS_AUX)
         .fontColor(this.dk(C_TEXT_5))
         .width('100%')
@@ -4466,6 +4493,19 @@ struct Index {
         }
         if (this.stObs3 !== '') {
           Text(this.stObs3)
+            .fontSize(FS_AUX)
+            .fontColor(this.dk(C_TEXT_3))
+            .width('100%')
+        }
+        // 9-26：线头盒 + 她此刻（各一行；空则不出——旧 server 上这卡一字不变）
+        if (this.stThreads !== '') {
+          Text(this.stThreads)
+            .fontSize(FS_AUX)
+            .fontColor(this.dk(C_TEXT_3))
+            .width('100%')
+        }
+        if (this.stState !== '') {
+          Text(this.stState)
             .fontSize(FS_AUX)
             .fontColor(this.dk(C_TEXT_3))
             .width('100%')
@@ -6073,6 +6113,20 @@ struct Index {
           if (classN + sleptN + idleN > 0) {
             this.stObs3 = `🕰 时机感知：上课压 ${classN} · 刚睡压 ${sleptN} · 闲抬 ${idleN}`;
           }
+        }
+        // 9-26：线头盒观测（悬线数/最老几天）——只报事实不打分；键缺/空盒不出行（照 obs 家风）
+        this.stThreads = '';
+        const th = d.threads;
+        if (th && th.open !== undefined && th.open !== null && th.open > 0) {
+          const od = (th.oldest_days !== undefined && th.oldest_days !== null)
+            ? `，最老一条挂了 ${th.oldest_days} 天` : '';
+          this.stThreads = `🧵 线头盒：悬着 ${th.open} 条${od}`;
+        }
+        // 9-26：她此刻（只用服务端给的人话句，不摆裸数值）——server_only=true 只给家主看
+        this.stState = '';
+        const sta = d.state;
+        if (sta && sta.line !== undefined && sta.line !== null && sta.line !== '') {
+          this.stState = `💗 她此刻：${sta.line}`;
         }
         this.fetchPromise();
         this.pushCard();
@@ -8614,6 +8668,7 @@ struct Index {
         // 任何环节炸了都抛出去走 catch——对账/入队老路径一字不动。
         body.stream = true;
         let sseRest = new Uint8Array(0);
+        let rawBuf = new Uint8Array(0);   // 9-25：原文字节也攒一份——dedup 回的是 JSON（无 data: 前缀）
         let doneEv: StreamEvent | null = null;
         // ── 9-12 时间线步骤卡（Kimi 客户端式，家主令「思考→工具→输出→继续思考」）──
         // 每一轮：思考卡（实时流式→封口成「思考了 Ns」）→ 工具卡 → 正文气泡。
@@ -8699,6 +8754,12 @@ struct Index {
           }
         };
         req.on('dataReceive', (data: ArrayBuffer) => {
+          // 9-25：整份原文按字节攒——事后一次解码（逐帧解码会在多字节汉字切分处出乱码）
+          const inb = new Uint8Array(data);
+          const rb = new Uint8Array(rawBuf.length + inb.length);
+          rb.set(rawBuf, 0);
+          rb.set(inb, rawBuf.length);
+          rawBuf = rb;
           const merged = new Uint8Array(sseRest.length + data.byteLength);
           merged.set(sseRest, 0);
           merged.set(new Uint8Array(data), sseRest.length);
@@ -8716,7 +8777,11 @@ struct Index {
           }
           sseRest = merged.slice(start);
         });
-        const res = await req.request(CHAT_URL, {
+        // 9-25 修：打字机的真开关——本 SDK 里 requestInStream 是**方法**不是选项（写成选项编译期
+        // 报「未知属性」）。此前调 request()：响应被整体缓冲、dataReceive 不逐段触发，思考卡与正文
+        // 从来没逐字流出过，每轮都绕到「流式没收到收尾」的对账老路。流式版返回状态码（number），
+        // 正文走 dataReceive，收尾判定改用 rawBuf。
+        const streamCode: number = await req.requestInStream(CHAT_URL, {
           method: http.RequestMethod.POST,
           header: { 'Content-Type': 'application/json', 'Authorization': DOOR_AUTH },
           extraData: JSON.stringify(body),
@@ -8725,8 +8790,8 @@ struct Index {
         });
         // 9-12 去重命中：重发的消息 server 认出身份证，回的是 JSON（dedup:true）而非 SSE——
         // 原样还他上次那句，直接按正常回复渲染，别当"流没收到收尾"绕去对账。
-        if (res.responseCode >= 200 && res.responseCode < 300 && !doneEv) {
-          const raw = typeof res.result === 'string' ? (res.result as string) : '';
+        if (streamCode >= 200 && streamCode < 300 && !doneEv) {
+          const raw: string = util.TextDecoder.create('utf-8').decodeToString(rawBuf);   // 9-25：流式版无 res.result
           if (raw.indexOf('"dedup"') >= 0) {
             try {
               const dj = JSON.parse(raw) as StreamEvent;
@@ -8749,7 +8814,7 @@ struct Index {
             }
           }
         }
-        if (res.responseCode >= 200 && res.responseCode < 300 && doneEv) {
+        if (streamCode >= 200 && streamCode < 300 && doneEv) {
           const d = doneEv as StreamEvent;
           if (imageToSend) {
             this.pendingImage = '';
@@ -8794,7 +8859,7 @@ struct Index {
             this.appendMsg('姐姐', '（姐姐回了个空白）', '', undefined, d.tools ?? []);
           }
           this.fetchStatus();   // 消息数、定位、状态顺手刷新
-        } else if (res.responseCode >= 200 && res.responseCode < 300) {
+        } else if (streamCode >= 200 && streamCode < 300) {
           // 流没收到 done——视作失败，走对账（不渲染半成品）
           throw new Error('流式没收到收尾');
         } else {
@@ -8810,9 +8875,9 @@ struct Index {
               this.pendingFileName = '';
               this.pendingFileContent = '';
             }
-            this.appendMsg('系统', `姐姐那边没接住（HTTP ${res.responseCode}），已存进待发队列（第 ${this.outboxCount} 条），会自动补发`, '');
+            this.appendMsg('系统', `姐姐那边没接住（HTTP ${streamCode}），已存进待发队列（第 ${this.outboxCount} 条），会自动补发`, '');
           } else {
-            this.appendMsg('系统', `发送失败：HTTP ${res.responseCode}（内容未送达，可重试）`, '');
+            this.appendMsg('系统', `发送失败：HTTP ${streamCode}（内容未送达，可重试）`, '');
           }
         }
       } finally {

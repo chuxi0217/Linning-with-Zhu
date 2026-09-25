@@ -10,9 +10,9 @@ const DOMAIN = 0x0000;
 const TAG = 'ourFamily';
 
 // 9-1-#8 刀3 地址收编：设置页换门牌存 preferences，这里每次上报前重读
-const DEFAULT_SERVER = 'https://your-door.example';   // 部署时换成你家门牌；备选示例：https://node.your-door.ts.net
-// 公网门 Caddy Basic 门锁：上报请求要带钥匙（与 Index.ets 的 DOOR_AUTH 同源，
-// 改锁两处同改；钥匙串自己保管、不进仓）
+const DEFAULT_SERVER = 'https://your-door.example';   // 9-23 换新门；旧值备查：https://node.your-door.ts.net
+// 新门 Caddy Basic 门锁：上报请求要带钥匙（与 Index.ets 的 DOOR_AUTH 同源，
+// 同指 ~/咱家记忆库/网络门锁凭证.txt——改锁两处同改；本批范围所限先各存一份）
 const DOOR_AUTH = 'Basic <Base64(用户名:密码)>';
 let SERVER_BASE = DEFAULT_SERVER;
 const HTTP_TIMEOUT_MS = 15000;   // 9-23 手表清退：原 HEART_TIMEOUT_MS 改名——只余 push token 上报在用
