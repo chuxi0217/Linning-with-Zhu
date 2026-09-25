@@ -65,10 +65,10 @@ v0.1.26 修订（2026-09-13 工单 CHECKIN-3 打卡日界）：口径修订—�
 的 date 与 get_checkins 的 since 共用 _checkin_eff_date 一只；表结构/接口零改动。
 旧表一字未动。
 
-v0.1.27 纯增量（2026-09-13）：count_traces_today(ending) 一只
-只读——咱家日界（DAY_START_HOUR 点）起该 ending 的 her_traces 条数（重启不丢）；
+v0.1.27 纯增量（2026-09-13 工单 GALATEA-02 园门 outbound）：count_traces_today(ending) 一只
+只读——咱家日界（DAY_START_HOUR 点）起该 ending 的 her_traces 条数（园门日上限闸用，重启不丢）；
 get_last_trace_ts 加可选 ending 参数（只加不改：不带参行为同 v0.1.23，带参只认该 ending——
-写闸对账用）。旧表结构一字未动。
+园门最短间隔闸用）。旧表结构一字未动。
 
 v0.1.28 纯增量（2026-09-18 优化批一·输入留痕可视化）：get_last_user_chat() 一只只读——
 最近一条「小乖」的聊天（id/content/created_at），/api/status 的「最近来信指纹」用。
@@ -130,6 +130,11 @@ v0.1.39 纯增量（2026-09-24 松绑与主权收口批·块③影子配套「�
 v0.1.40 小改（2026-09-24 小乖的话批·服务端半边；同日家主裁·上限对称）：add_her_words 长度帽
 统一 2000（小乖先抬，对齐 App 上限，他改信她看得全；姐姐随裁由 600 并齐——v5 恰 600 疑似被截、
 尾巴找不回，她随时可续写/重写）。签名/返回/her_words 表结构一字不动，旧版全留照旧。
+
+v0.1.41 纯增量（2026-09-25 服务器拆分 P0·漂移修）：lib_reports 补 materials 列迁移——9-24
+「周报补凭据」给 INSERT 加了 materials，但建表/迁移没跟上：老库（建表早于该批）与全新库
+都会 No such column（沙盘库实测中招；生产库是手补的列）。修：CREATE 带列＋init_db 里 PRAGMA
+探测缺列即 ALTER（照 moods/her_words 同款家风）。表结构只加列，零删改。
 
 v0.1.18 纯增量（2026-09-12 家主令「共读」）：books / book_marks 两张表（22/23）——
 两个人读同一本书，批注互相看得见。add_book 同名不重开；add_book_mark 两色墨迹
@@ -541,9 +546,15 @@ def init_db():
             status TEXT DEFAULT '待审',
             review_note TEXT,
             reviewed_at TEXT,
-            created_at TEXT DEFAULT (datetime('now','localtime'))
+            created_at TEXT DEFAULT (datetime('now','localtime')),
+            materials TEXT DEFAULT ''
         )
     ''')
+    # v0.1.41（9-25 服务器拆分 P0·漂移修）：补 materials 列迁移——老库（建表早于 9-24
+    # 「周报补凭据」）/全新库通吃；缺列才加，其余一字不动。
+    c.execute("PRAGMA table_info(lib_reports)")
+    if "materials" not in [r[1] for r in c.fetchall()]:
+        c.execute("ALTER TABLE lib_reports ADD COLUMN materials TEXT DEFAULT ''")
 
     # 共读书架（v0.1.18 新增，9-12 家主令「共读」）：两个人读同一本书，
     # 批注互相看得见。books 登记书卷（同名不重开，returning 已有的 id），
@@ -2075,12 +2086,14 @@ def unsettled_grudge_rows():
 
 # ── 图书管理员报告（v0.1.17，9-10 工单 LIB-AUTO）：外聘笔杆，姐姐终审 ──
 
-def add_lib_report(date, kind, content):
-    """图书管理员交稿，落「待审」。返回 rowid。"""
+def add_lib_report(date, kind, content, materials=""):
+    """图书管理员交稿，落「待审」。返回 rowid。
+    9-24 补凭据：materials=笔杆素材包（随稿落库，姐姐终审对照用；老稿或没存＝空）。"""
     conn = _conn()
     c = conn.cursor()
-    c.execute('INSERT INTO lib_reports (date, kind, content) VALUES (?, ?, ?)',
-              (date, kind, (content or "").strip()[:8000]))
+    c.execute('INSERT INTO lib_reports (date, kind, content, materials) VALUES (?, ?, ?, ?)',
+              (date, kind, (content or "").strip()[:8000],
+               (materials or "").strip()[:12000]))
     conn.commit()
     rowid = c.lastrowid
     conn.close()
@@ -2088,11 +2101,12 @@ def add_lib_report(date, kind, content):
 
 
 def get_pending_lib_reports():
-    """全部待审报告，旧到新：(id, date, kind, content, created_at)。"""
+    """全部待审报告，旧到新：(id, date, kind, content, created_at, materials)。
+    9-24 补凭据：末位 materials=笔杆素材包（终审对照用；老稿或没存＝空串）。"""
     conn = _conn()
     c = conn.cursor()
-    c.execute('''SELECT id, date, kind, content, created_at FROM lib_reports
-                 WHERE status = '待审' ORDER BY id''')
+    c.execute('''SELECT id, date, kind, content, created_at, COALESCE(materials, '')
+                 FROM lib_reports WHERE status = '待审' ORDER BY id''')
     rows = c.fetchall()
     conn.close()
     return rows
@@ -2448,6 +2462,11 @@ def add_chat(date, role, content, session_id=""):
     _fts_safe(_fts_put_chat, c, rowid, content)   # MEM-C：原话入全文索引
     conn.commit()
     conn.close()
+    try:   # W1 影子（9-24）：chat.turn 双写——fail-open，绝不拦主流程
+        import events_lib
+        events_lib.record_chat_turn(role, content, session_id=session_id, date=date)
+    except Exception:
+        pass
     return rowid
 
 
@@ -3225,7 +3244,7 @@ def get_recent_facts(n=3):
 
 def get_last_trace_ts(ending=None):
     """（v0.1.23 新增，唤醒最短间隔对账用；申报件；v0.1.27 加可选 ending——
-    只加不改：不带参行为同旧，带参只认该 ending 的痕迹，间隔对账用）。只读。"""
+    只加不改：不带参行为同旧，带参只认该 ending 的痕迹，园门间隔闸用）。只读。"""
     conn = _conn()
     c = conn.cursor()
     if ending is None:
@@ -3251,7 +3270,7 @@ def get_her_traces(limit=30):
 
 
 def count_traces_today(ending):
-    """（v0.1.27 新增）咱家日界（DAY_START_HOUR 点）起，
+    """（v0.1.27 新增，GALATEA-02 园门日上限闸）咱家日界（DAY_START_HOUR 点）起，
     ending=? 的 her_traces 条数——重启不丢的写计数。只读。"""
     day = (datetime.now() - timedelta(hours=DAY_START_HOUR)).strftime("%Y-%m-%d")
     since = f"{day} {DAY_START_HOUR:02d}:00:00"

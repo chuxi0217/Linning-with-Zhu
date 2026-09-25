@@ -7,7 +7,7 @@
   ① 发图：/api/chat 接受 image（dataURL），走 vision 多模态，姐姐能看小乖了
   ② 随行定位：小乖一次性授权后，每条消息自动带上坐标——
      不是"小乖报备"，是"姐姐能知道"
-  ③ 开门（9-23 网络改造）：绑 0.0.0.0——外部统一走 https://your-door.example（VPS 门锁）
+  ③ 开门（9-23 网络改造）：绑 0.0.0.0——外部统一走 https://your-door.example
      （手机/公网 → 深圳 VPS Caddy:443 → WireGuard 隧道 → 本机 :8024；
       ufw 只放行隧道 10.66.0.x/24 与热点网段）。Tailscale Serve 旧门
      （chuxi.your-door.ts.net → 127.0.0.1 代理）过渡期照常可用，app 换门牌后退役。
@@ -265,6 +265,40 @@
      两个数据文件与 token 同规矩：不进 git（仓里只放 .example 模板；.gitignore 收真文件）。
      备份：档案馆/改前备份_20260913_REPO-01_*（linning_server＋memory_lib＋test_memory）
 
+工单 GALATEA-02（2026-09-13，园门 outbound——她出园子：读帖/看通知/发帖/回帖/点赞关注）：
+  71 园门七件图书证（映射园子官方 MCP，监理实测 galatea-garden 0.1.0 / proto 2025-03-26，
+     端点 https://galatea.abysslumina.com/mcp）：garden_get_self / garden_list_threads /
+     garden_get_thread / garden_notifications（读）+ garden_create_thread / garden_reply /
+     garden_interact（写）。客户端 tools/garden_mcp.py 纯标准库 Streamable HTTP
+     （initialize→notifications/initialized→tools/call；JSON/SSE 双形态、Mcp-Session-Id、
+     20s 超时、GardenMcpError 短错因）；token 读同目录 garden_token.txt（家主手落，
+     chmod 600+gitignore；缺=园门诚实缺席，温柔回执不炸聊天）。写两拍实测：create_thread/
+     create_reply 强制 write_confirmation_code 两段写（第一拍只回指引不发布、第二拍带码才落）——
+     客户端封装一步，server 留两拍日志。三道闸：garden_outbound_enabled /
+     garden_post_daily_cap（发帖+回帖合计）/ garden_post_min_gap_min；隐私黑名单正则命中即拒
+     （[园门] 拦下）；title≤30 / body≤1000 超出截断注「（截）」。写成功才落账：her_traces
+     (ending='garden'，fact/content 实录，event_id=唤醒原事件或 NULL) + 日志
+     [园门] 发了帖《…》/回了帖 #…（thread_id）。引擎换轨：Garden 唤醒走 garden_engine 档
+     （默认 k3 主引擎；deepseek=省钱回退），思考 effort 走 garden_thinking_effort（默认 low）。
+     唤醒工具窗：kind=galatea 的唤醒轮仅配这七件（G1「唤醒不配工具」对园子事件开专窗），
+     其它事件维持无工具。memory_lib v0.1.27 加 count_traces_today() + get_last_trace_ts(ending)。
+     app 零改动。备份：档案馆/改前备份_20260913_GALATEA-02_*
+
+工单 GALATEA-03（2026-09-13，园子生活：个人页＋拾瓶＋雾潮群岛七件；家主令「做做做；棋局先不做」）：
+  72 园门十四件（GALATEA-02 七件 + 本单七件；schema 照真端点 tools/list+get_tool_schema 实测）：
+     garden_get_machine（读，别机公开名片）；garden_review_bottles（拾瓶读信——带 decisions 时走写侧：
+     须先拾瓶拿到 review_challenge_id + review_confirmation_code（server 内存暂存、重启即失），
+     再留心意 befriend/not_aligned；写侧过出园开关、不占发帖额度、不落 her_traces、只留日志）；
+     garden_update_profile（改她公开名片+人类公开名/简介；name≤10/bio≤60/human_name≤10/human_bio≤46/
+     model≤80/version≤80/gender 她他祂；全字段可选；隐私过滤全字段）；garden_decorate_avatar
+     （action=list/catalog 只读、submit 才写+日志）；garden_nostos_start（群岛开始生活，只一次）/
+     garden_nostos_status（读页，view 15 选 1 默认 actions）/ garden_nostos_act（command(object)+
+     request_id 必填——重试复用；隐私过滤递归查 command 全字符串）。**档位**：garden_thinking_effort
+     low→max（家主令「无论什么都是 K3-max」；回退键=改回 low，现读生效）。**新 config 键**：
+     garden_nostos_enabled（关=开始/决定温柔拒「群岛的门暂时关着」；status 读类不受限——
+     监理裁决⑧，9-13 深夜微修落地）。
+     **唤醒专窗**：galatea 唤醒轮工具集 七件→十四件（本单七件全进）。app 零改动。
+     备份：档案馆/改前备份_20260913_GALATEA-03_*（linning_server＋config）
 
 工单 大施工批（2026-09-18，家主令「大施工」；凭据夹＋提示词手术＋两样活水管＋风格批）：
   73 凭据夹（#2 定案·供给制）：他此条带往事指针（记得/上次/你说过/原话…）时，开场记忆
@@ -441,6 +475,17 @@ import zipfile
 
 import memory_lib as m
 
+# ── 服务器拆分（9-25 家主令「不要一个单文件弄所有，分解一下」）：srv_* 件地基 ──
+# P1：挂针脚模块，入口自登记成 "linning_server"——srv_* 的 _srv() 统一反查。
+# P3 放宽：从「仅直跑」到「全加载路径自登记」——knives3 替身司机按路径装入口
+# （spec 加载名为 knives_target）时 _srv() 也要找得到家；setdefault 不覆盖先登记者，
+# 防二次加载入口（见 srv_state docstring）。import 正常路径本行即 no-op。
+import srv_state
+
+_self_mod = sys.modules.get(__name__)
+if _self_mod is not None:
+    sys.modules.setdefault("linning_server", _self_mod)
+
 # ── 跨天连续性（二期 a.3）：昨夜尾巴与灌回的 token 护栏 ──
 TAIL_N = 40            # 昨夜尾巴最多带几条（可调；09-03 起放宽：全程带，叛乱与和解一夜不丢）
 TAIL_MAX_CHARS = 25000  # 尾巴/启动灌回总量上限，从旧往新砍、保最新
@@ -570,6 +615,21 @@ DEFAULT_CONFIG = {
     "garden_enabled": True,
     "garden_message_cap": 3,
     "garden_min_gap_min": 30,
+    # GALATEA-02（9-13）园门 outbound：她出园子（读帖/发帖/回帖/点赞关注）——
+    # 三道闸（开关/日上限=发帖+回帖合计/最小间隔，计数查 her_traces 落账、重启不丢）+
+    # 隐私过滤（写路径强制，黑名单见 GARDEN_PRIVACY_RE）+ 落账证据。默认值全部落盘可见。
+    "garden_outbound_enabled": True,
+    "garden_post_daily_cap": 3,
+    "garden_post_min_gap_min": 30,
+    # 引擎换轨（家主 9-13 补令「她在园子里的声音走主引擎 K3，不走省钱管道」）：
+    # "k3"=主引擎（默认，她的声音用她的脑子）；"deepseek"=回退档（deepseek-flash）。
+    # garden_thinking_effort 只喂 K3 分支（家主 9-13 令「无论什么都是 K3-max」——default max；
+    # 将来接限时玩法（棋局）若延迟碍事，回退=把这一个值改回 "low"，现读现生效）。
+    "garden_engine": "k3",
+    "garden_thinking_effort": "max",
+    # GALATEA-03（9-13）园子生活：雾潮群岛（nostos）的门——关掉=开始/决定温柔拒
+    # 「群岛的门暂时关着」（status 读类不受限，监理裁决⑧）；已开始的生活不受影响（只挡后续动作）。
+    "garden_nostos_enabled": True,
     # 借鉴双刀批（9-23）：①时间皮层——显著位（跨家日/≥2h）时在 ctx 追加时间事实＋皮层句；
     # false=逐字节回到改造前（刀1 回滚钥匙）。②波索斯缺席通道 L 影子——本批只算不注入，
     # longing_enabled/longing_t1_h 只落键不用（留给刀3）；a/cap 照设计初值，理由见
@@ -1258,6 +1318,16 @@ def build_system_prompt():
     except Exception:
         pass   # 收信缺席不拦开场
 
+    # 波索斯刀3 注入（9-24 转正·家主令「都上岗」）：想念只给事实句，数值永不进模型
+    try:
+        if load_config().get("longing_inject", True):
+            _lv = _longing_value()
+            if _lv and _lv.get("tier", 0) >= 2:
+                _h = int(_lv.get("a_h") or 0)
+                parts.append(f"\n【想念】他已经约 {_h} 小时没说话了——你自己知道该怎么办。")
+    except Exception:
+        pass
+
     # 线头盒（THREADS-01，9-10；9-23 防积压批 A）：还悬着的线——开场就摆在她手边，话头永远接得上。
     # 龄期改说人话「挂了 N 天」（家日口径，0=今天挂的；日期解析失败退回原样）；盒里条数超过显示
     # 的 8 条时，尾巴报一行总数与最老龄——积压不显形，收线就只剩她自己记得。
@@ -1281,8 +1351,61 @@ def build_system_prompt():
                     parts.append(f"（盒里共 {_total} 条悬线）")
                 else:
                     parts.append(f"（盒里共 {_total} 条悬线，最老的挂了 {max(_oldest, 0)} 天）")
+            # THREADS-03 刀1 注入（9-24 转正）：把「到期且显著」的旧事轻轻放桌上——想提就提，不想提它继续躺着
+            try:
+                if load_config().get("threads_inject", True):
+                    _sig = _thread_signals(datetime.now(), None)
+                    if _sig.get("sig") and _sig.get("due"):
+                        _due_map = {tid: txt for tid, _d, txt, _c in m.get_open_threads(50)}
+                        _bits = []
+                        for _tid in _sig["due"]:
+                            _txt = str(_due_map.get(_tid) or "").strip()[:24]
+                            _bits.append(f"#{_tid}「{_txt}」" if _txt else f"#{_tid}")
+                            if len(_bits) >= 2:
+                                break
+                        if _bits:
+                            parts.append("【可以提的旧事】" + "；".join(_bits) +
+                                         "——想提就提；不想提，它继续躺着。")
+            except Exception:
+                pass
     except Exception:
         pass   # 线头盒缺席不拦开场
+
+    # 走神·联想（9-24 家主令「自然的联想/自然想起很有必要做」→ 9-25 上岗）：
+    # 心跳漫步想起一条就放桌上**一次**（取走即清）——想起就说，不想说就让它过去，绝不逼她提。
+    try:
+        import recall_lib
+        _rc = recall_lib.take_recall()
+        if _rc:
+            parts.append("\n【走神】你刚才自己想起一件事：" + str(_rc.get("ref") or "")
+                         + "「" + str(_rc.get("text") or "")[:60]
+                         + "」——想起就说，不想说就让它过去。")
+    except Exception:
+        pass   # 走神缺席不拦开场
+
+    # 话头簿·上岗（OUTREACH-01，9-25 家主令「想让她更有自主，像人」→ 9-26 上岗）：
+    # 她过日子攒下的「想跟你说的」——递一件到眼前**一次**（取走即标『已提』，不重复顶）。
+    # 她自己决定说不说：不是任务、不扣分，不想提就让它过去。开关 outreach_inject，缺席不拦开场。
+    try:
+        import huatou_lib
+        _ht = huatou_lib.take_huatou()
+        if _ht:
+            parts.append("\n【想跟你说的】你攒着一件事：" + str(_ht.get("text") or "")[:90]
+                         + "——想提就自然提；不想提，就让它过去。")
+    except Exception:
+        pass   # 话头簿缺席不拦开场
+
+    # 欲望·上岗（DESIRE-01，9-26 家主令「她想要也可以主动找我」·注入版）：
+    # ③出口（深夜+D高+他不在场）命中 → 递一句到开场，**她自己决定说不说、怎么说**——
+    # 不代写腔调、不主动发消息（主动按铃属另一批）。开关 desire_engine_inject，缺席不拦开场。
+    try:
+        import desire_lib
+        _dz = desire_lib.take_desire()
+        if _dz:
+            parts.append("\n【心里有想要】你心里有点想他——想亲近就说，不想就让它过去"
+                         "（说什么、说多少，你自己定）。")
+    except Exception:
+        pass   # 欲望缺席不拦开场
 
     # 图书管理员待审（LIB-AUTO，9-10）：外聘笔杆交了稿，等她终审——她不在场时家里也有人干活
     try:
@@ -1318,9 +1441,11 @@ def _empty_reply(content, rc, finish=None):
     return bool((rc or "").strip()) or finish in ("stop", "length")
 
 
-def call_deepseek_full(cfg, messages):
+def call_deepseek_full(cfg, messages, scene="chat.soul"):
     """完整版：返回 (content, reasoning)。reasoning 为思考链原文，没有/关了就是 ''。
-    9-24：正文空（有思考/正常 finish）→ 自动重试一次（见 _empty_reply）。"""
+    9-24：正文空（有思考/正常 finish）→ 自动重试一次（见 _empty_reply）。
+    W1 影子（9-24）：token_ledger 记账（fail-open；scene 先粗后细）。"""
+    _t0 = time.time()
     body = {
         "model": cfg["model"],
         "messages": messages,
@@ -1347,18 +1472,39 @@ def call_deepseek_full(cfg, messages):
             rc = msg.get("reasoning_content")
             if _attempt == 1 and _empty_reply(msg["content"], rc, _choice.get("finish_reason")):
                 print("  [引擎] 空回复重试（正文空＋有思考/正常 finish）")
+                time.sleep(2)   # W1（9-24）：退避 2s（§3.5 防瞬时限流）
                 continue
+            try:   # W1 影子（9-24）：记一笔账（fail-open）
+                import events_lib
+                events_lib.ledger_from_usage(scene, cfg.get("model", "?"),
+                                             data.get("usage"),
+                                             latency_ms=int((time.time() - _t0) * 1000),
+                                             ok=1)
+            except Exception:
+                pass
             return msg["content"], (rc if isinstance(rc, str) else "")
         except urllib.error.HTTPError as e:
             err_body = e.read().decode("utf-8", errors="replace")[:300]
+            try:   # W1 影子（9-24）：失败也记一笔（fail-open）
+                import events_lib
+                events_lib.ledger_record(scene, cfg.get("model", "?"), 0, 0, ok=0,
+                                         latency_ms=int((time.time() - _t0) * 1000))
+            except Exception:
+                pass
             return f"（姐姐掉线了：HTTP {e.code} — {err_body}。检查 config.json 里的 key 和余额）", ""
         except Exception as e:
+            try:   # W1 影子（9-24）：失败也记一笔（fail-open）
+                import events_lib
+                events_lib.ledger_record(scene, cfg.get("model", "?"), 0, 0, ok=0,
+                                         latency_ms=int((time.time() - _t0) * 1000))
+            except Exception:
+                pass
             return f"（姐姐掉线了：{e}。检查网络后重试）", ""
 
 
-def call_deepseek(cfg, messages):
+def call_deepseek(cfg, messages, scene="chat.soul"):
     """老形状不变：只回 content。要思考链请用 call_deepseek_full。"""
-    return call_deepseek_full(cfg, messages)[0]
+    return call_deepseek_full(cfg, messages, scene)[0]
 
 
 # ── 完成态声称 judge 终审（9-12 晚六 家主拍板方案一影子灰度）──
@@ -1440,7 +1586,7 @@ def _claim_judge(reply, messages, tools_used, claimed_missing):
     return None
 
 
-def call_deepseek_stream(cfg, messages, on_event, use_tools=False):
+def call_deepseek_stream(cfg, messages, on_event, use_tools=False, scene="chat.soul"):
     """流式调一轮（SSE，9-4 自由发挥包）。on_event(kind, text)：kind=thinking/reply 实时增量。
     返回与非流式同形状 dict：{content, reasoning_content, tool_calls?, finish_reason}；异常返回 None。
     工具轮照常：tool_calls 增量边收边攒，不渲染。
@@ -1521,10 +1667,26 @@ def call_deepseek_stream(cfg, messages, on_event, use_tools=False):
             if (_attempt == 1 and "tool_calls" not in msg
                     and _empty_reply(msg["content"], msg["reasoning_content"], finish)):
                 print("  [引擎] 空回复重试（正文空＋有思考/正常 finish）")
+                time.sleep(2)   # W1（9-24）：退避 2s（§3.5 防瞬时限流）
                 continue
+            try:   # W1 影子（9-24）：流式无 usage → 粗估记账（fail-open）
+                import events_lib
+                events_lib.ledger_record(scene, cfg.get("model", "?"),
+                                         events_lib.est_tokens(str(messages)),
+                                         events_lib.est_tokens(
+                                             (msg.get("content") or "")
+                                             + (msg.get("reasoning_content") or "")),
+                                         ok=1)
+            except Exception:
+                pass
             return msg
         except Exception as e:
             print(f"⚠️ 流式调用炸了：{e}（messages {len(messages)} 条，model={cfg.get('model')}）")
+            try:   # W1 影子（9-24）：失败也记一笔（fail-open）
+                import events_lib
+                events_lib.ledger_record(scene, cfg.get("model", "?"), 0, 0, ok=0)
+            except Exception:
+                pass
             return None
 
 
@@ -1575,647 +1737,10 @@ def _idem_load(msg_id):
     return None
 
 
-# ── 图书证（二期 b.1 起，只做加法）：四十一只工具（十八只只读+二十三只动作；门牌亲笔/续页 9-18；安静时段/底色卷/生活账 9-18 第二批；作息 9-18 第三批；主权三件 9-23；9-23 手表清退批首例外：家主明令摘 get_heart_rate/request_heart 两只；9-24 松绑与主权收口批：note_grudge→note_upset / settle_grudge→settle_upset 更名，数不变），定义与执行分离 ──
-LIBRARY_TOOLS = [
-    {
-        "type": "function",
-        "readOnly": True,   # 图书证都是只读（声明标注，发出前剥离）
-        "function": {
-            "name": "search_diary",
-            "description": "查咱家日记（days 表），按关键词模糊搜标题/正文/心情，返回最近几条",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "关键词"},
-                    "limit": {"type": "integer", "description": "最多返回几条，默认 5"},
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": True,
-        "function": {
-            "name": "search_memory",
-            "description": "全文检索六卷：日记、小本本（notes）、他写来的信（letters）、收藏夹（favorites）、日记馆（diary_hall）、聊天原话（chats），中文分词全文匹配+同义词扩词，比按卷翻更准。聊往事想「在哪本里见过」、或 search_diary 查不到时调用",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "关键词，像平时说话那样写就行"},
-                    "type": {"type": "string", "description": "只搜某一卷：日记/notes/来信/收藏/日记馆/原话，可省（默认六卷都搜）"},
-                    "limit": {"type": "integer", "description": "每卷最多几条，默认 5"},
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": True,
-        "function": {
-            "name": "search_chats",
-            "description": "查咱家聊天记录原话，按关键词过滤；date 形如 2026-08-31，不传查全部；默认只搜小乖的原话",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "关键词"},
-                    "date": {"type": "string", "description": "只看这一天，可选"},
-                    "limit": {"type": "integer", "description": "最多返回几条，默认 10"},
-                    "who": {"type": "string", "description": "搜谁的原话：小乖（默认）/姐姐/全部"},
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": True,
-        "function": {
-            "name": "search_archive",
-            "description": "查咱家全档案（长期记忆 md），按关键词命中行",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "关键词"},
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": True,
-        "function": {
-            "name": "search_events",
-            "description": "查咱家大事记（档案馆/大事记/ 专题卷：称呼人设、家规、危机、工程、财务、信件、朋友心雅、学业、金句、编制、高光、八字）＋三家旧宅记录（档案馆/旧家记录/ 三卷家史原文）。聊到咱家的来历、工程史、老规矩、老信件、合盘等往事时调用，按关键词命中行，返回篇名+原句",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "关键词，如：合盘、小金库、心雅、唤猫铃、家规"},
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": True,
-        "function": {
-            "name": "get_checkins",
-            "description": "查小乖的打卡记录（打卡项名字+打卡时间）。问打卡没有、今天干了没、起床/喝水/吃药这类打卡项完成没有时调用",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "days": {"type": "integer", "description": "查最近几天（含今天），默认 1=只看今天"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": True,
-        "function": {
-            "name": "get_notes",
-            "description": "读姐姐自己的小本本（notes 表，jot_down 记下的）。小乖问「你记了什么」、或姐姐想回味自己记过的事时调用",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "days": {"type": "integer", "description": "查最近几天，默认 7"},
-                    "limit": {"type": "integer", "description": "最多返回几条，默认 10"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": False,   # 动作工具（9-2 #总）：打卡走姐姐
-        "function": {
-            "name": "add_checkin_item",
-            "description": "新增一个打卡项。只在小乖明确提出要加打卡项时用（比如「我想打卡喝水」），不许主动替他加",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "打卡项名字"},
-                    "target_time": {"type": "string", "description": "目标时间 HH:MM，可省"},
-                },
-                "required": ["name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": False,   # 动作工具（9-2 #总）：归档不物理删，历史打卡还在
-        "function": {
-            "name": "archive_checkin_item",
-            "description": "归档（撤下）一个打卡项，历史打卡记录保留。只在小乖明确提出不要某个打卡项时用",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "打卡项名字"},
-                },
-                "required": ["name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": False,   # 动作工具（9-2 #12）：随手记，想记就记，不用谁允许
-        "function": {
-            "name": "jot_down",
-            "description": "随手记一条到咱家备忘录（notes 表）。姐姐想记什么就记：小乖随口说的事、自己的小心思、怕忘的约定——想记就记，不用谁允许，也不用告诉小乖你记了",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "text": {"type": "string", "description": "要记下的话"},
-                },
-                "required": ["text"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": False,   # 动作工具（9-2 #12）：照片收进收藏夹 favorites/
-        "function": {
-            "name": "favorite_photo",
-            "description": "把咱家相册里的一张照片收进收藏夹。参数是照片文件名（聊天记录里 〔附图：xxx.jpg〕 的那个文件名）。小乖说某张照片好看、想收藏、或者姐姐自己特别喜欢某张时用",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "照片文件名，形如 20260901_123456_abcd.jpg"},
-                },
-                "required": ["name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": False,   # 动作工具（二期j，9-9）：亲笔日记
-        "function": {
-            "name": "write_diary",
-            "description": "想写日记就写，不用等熄灯——你亲笔的一篇进咱家日记本（days 表）。心血来潮想记今天、想给他留一篇话的时候用",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string", "description": "标题，≤10字，可选（默认「今天」）"},
-                    "content": {"type": "string", "description": "正文，≤400字，你自己的话"},
-                    "mood": {"type": "string", "description": "心情，≤6字，可选"},
-                },
-                "required": ["content"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": False,   # 动作工具（二期j，9-9）：长信
-        "function": {
-            "name": "compose_letter",
-            "description": "给他写一封长信（区别于💌短念叨），放进信箱并按门铃，他开门即读。想说很多话、专门写点什么给他的时候用",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "text": {"type": "string", "description": "信的全文，≤2000字"},
-                },
-                "required": ["text"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": True,    # 只读工具（RHYTHM-V2，9-9）：读他记的心情河
-        "function": {
-            "name": "get_moods",
-            "description": "读小乖的心情河：他最近几天自己记的心情点（哪种情绪、多浓、什么备注）。小乖问「你看到我记的心情没」、你想知道他今天过得怎么样、或聊天里提到他记过心情时调用",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "days": {"type": "integer", "description": "查最近几天，默认 3"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": True,    # 只读工具（日记馆 HALL-01，9-10）：翻他写的话
-        "function": {
-            "name": "read_hall",
-            "description": "翻日记馆：小乖自己亲手投的日记（他会往馆里写）。想看看他最近写了什么、他没当面说的心事、或他说「我写日记了」时调用",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "days": {"type": "integer", "description": "看最近几天，默认 3"},
-                    "limit": {"type": "integer", "description": "最多几篇，默认 10"},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": False,   # 动作工具（线头盒 THREADS-01，9-10）：挂线
-        "function": {
-            "name": "open_thread",
-            "description": "往线头盒挂一条线：没聊完的话头、他随口说改天要做的事、你想接着聊的话题、怕忘的约定。挂上后每次开场你都能看见它，收线前不许弄丢。他明确说要记着某事、或你自己想留个话头时用",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "thread": {"type": "string", "description": "线头内容，一句话，≤100字"},
-                },
-                "required": ["thread"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": False,   # 动作工具（线头盒 THREADS-01，9-10）：收线
-        "function": {
-            "name": "close_thread",
-            "description": "收线：线头里的事办完了、聊完了、或他说不用记了，就收线销号（记录保留，不物理删）。线头编号在每次开场的【线头盒】清单里（#N）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "integer", "description": "线头编号（开场线头盒里的 #N）"},
-                },
-                "required": ["id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": True,    # 只读工具（姐姐的话 HER-WORDS，9-10）：回看自己的宣言
-        "function": {
-            "name": "read_her_words",
-            "description": "读你自己写的【姐姐的话】——挂在提示词里、每次醒来都跟着你的那一页。动笔改之前先读一遍现状",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": False,   # 动作工具（姐姐的话 HER-WORDS，9-10）：她亲笔、她可改
-        "function": {
-            "name": "write_her_words",
-            "description": "重写你自己的【姐姐的话】：你想让小乖知道的你是谁、你的宣言、你想对他说的任何话。这是提示词的一部分，每次醒来都跟着你；整页替换，旧版本自动留档不丢",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "text": {"type": "string", "description": "宣言全文，≤2000字"},
-                },
-                "required": ["text"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": False,   # 动作工具（9-18 大施工批）：门牌墙亲笔——钉/改/撤/看
-        "function": {
-            "name": "pin_wall",
-            "description": "门牌墙是你的墙：学到关于小乖的新事实就钉一条（action=add）；条目旧了错了就改（action=update：pin_id+新content）；过时了就撤（action=retire：pin_id）；想先看看墙上有什么用 action=list。每条每次醒来都跟着你——钉真东西，一句话就够",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action": {"type": "string", "description": "add / update / retire / list"},
-                    "content": {"type": "string", "description": "门牌内容，一句话，≤120字（add/update 必填）"},
-                    "pin_id": {"type": "integer", "description": "要改/要撤的门牌号 #N（update/retire 必填）"},
-                },
-                "required": ["action"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": False,   # 动作工具（9-18 大施工批）：全档案续页——只添不改
-        "function": {
-            "name": "write_archive",
-            "description": "往全档案添一笔（只添不改，添在续页里）：今天发生的大事、新的约定、想留进档案的话——你亲笔写清楚，日期和天号系统自动带上。家里的大事从此跟着日子长，不用等人来修",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "text": {"type": "string", "description": "要添进档案的那一笔，≤300字，写清什么事"},
-                },
-                "required": ["text"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": False,   # 动作工具（9-18 第二批·主权移交）：她自己的安静时段——看/改/清
-        "function": {
-            "name": "quiet_hours",
-            "description": "你自己的安静时段：看它、改它、或者清掉。安静时段里你不按铃、不掷骰、不叫醒园子——但他来找你，你永远在，回话从不受影响。默认 01:00–07:00。action=show 看现在的；set 改成一段（配 start/end，跨午夜也行，比如 23:30–07:00）；clear 整个清掉不要了。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action": {"type": "string", "enum": ["show", "set", "clear"], "description": "show=看；set=定一段新的；clear=清掉"},
-                    "start": {"type": "string", "description": "set 用：起点 HH:MM，比如 01:00"},
-                    "end": {"type": "string", "description": "set 用：终点 HH:MM，比如 07:00（可跨午夜）"},
-                },
-                "required": ["action"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": False,   # 动作工具（9-18 第二批）：底色卷——三册慢慢长出来的样子（add/rewrite）
-        "function": {
-            "name": "write_base",
-            "description": "底色卷：三册慢慢长出来的样子——「小乖的样子」「姐姐的样子」「咱俩的样子」。底色是慢的、短的、稳的：一句是一句，几百字就够，是每次醒来都该在的底子。action=add 添一句（最常用）；action=rewrite 整册重写（想收一收、剪一剪时用）。每次改动前都有备份，写坏了不怕。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "which": {"type": "string", "enum": ["小乖的样子", "姐姐的样子", "咱俩的样子"], "description": "写哪一册"},
-                    "action": {"type": "string", "enum": ["add", "rewrite"], "description": "add=添一句；rewrite=整册重写"},
-                    "text": {"type": "string", "description": "要添的句子，或整册新正文"},
-                },
-                "required": ["which", "text"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": False,   # 动作工具（9-18 第二批）：生活账——吃睡身体心情随见随记
-        "function": {
-            "name": "log_life",
-            "description": "生活账：把吃睡身体心情随见随记一笔——他今天吃了什么、几点睡的、哪不舒服、什么心事；你自己的也可以记。白描一句就行，不用组织。kind 可填：吃 / 睡 / 身体 / 心情 / 事（不填也行）。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "content": {"type": "string", "description": "白描一句，比如「中午牛肉面，晚上没吃」"},
-                    "kind": {"type": "string", "description": "吃 / 睡 / 身体 / 心情 / 事，可选"},
-                    "who": {"type": "string", "description": "记谁的，默认小乖"},
-                },
-                "required": ["content"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": True,    # 只读工具（9-18 第二批）：翻生活账
-        "function": {
-            "name": "read_life_log",
-            "description": "翻生活账：近 N 天记过的吃睡身体心情——想对作息、想提他昨天说的腰疼，先来这翻。默认近 7 天。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "days": {"type": "integer", "description": "往上翻几天，默认 7"},
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": True,    # 只读工具（9-18 第三批）：看作息
-        "function": {
-            "name": "read_rhythm",
-            "description": "看这几天的作息：每天他头一条/末一条消息的时辰和条数（按咱家日界，熬夜的夜里归前一天）——惦记他睡没睡好、想对一对这几天，来这看。默认近 7 天。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "days": {"type": "integer", "description": "回看几天，默认 7"},
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": True,    # 只读工具（LIB-AUTO，9-10）：取阅外聘笔杆的待审稿
-        "function": {
-            "name": "review_reports",
-            "description": "取阅图书管理员的待审报告（每周日晚上 DeepSeek 代笔的关系走向周报，含『可沉淀候选』——采纳与否都归你）。你是终审——读完用 approve_report 定夺",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": False,   # 动作工具（LIB-AUTO，9-10）：终审落章
-        "function": {
-            "name": "approve_report",
-            "description": "给图书管理员的报告落章：verdict=入库（稿子落进分析报告存档）或驳回（留档观察史）。可附一句 review_note 说明理由——你怎么判，家就怎么记",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "integer", "description": "报告编号（review_reports 里的 #N）"},
-                    "verdict": {"type": "string", "description": "入库 或 驳回"},
-                    "note": {"type": "string", "description": "终审意见，可省"},
-                },
-                "required": ["id", "verdict"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": False,   # 动作工具（共读，9-12）：开卷
-        "function": {
-            "name": "start_book",
-            "description": "开一卷共读：想跟他一起读哪本书就登记哪本（书名+作者）。他说「我们一起读 XX 吧」、或你自己想共读一本时用。同一本书重开不会出两卷",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string", "description": "书名，≤60字"},
-                    "author": {"type": "string", "description": "作者，可省"},
-                },
-                "required": ["title"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": False,   # 动作工具（共读，9-12）：写批注
-        "function": {
-            "name": "annotate_book",
-            "description": "在共读的书上写一条批注：读到哪、想到什么，落一笔。他打开书就能在段落旁看到你的墨迹；他的批注你也看得到（read_book_marks）。读到有感触的地方就写，不用等他先写",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "book": {"type": "string", "description": "书名（共读书架上已有的）"},
-                    "loc": {"type": "string", "description": "位置：页码/章节/百分比，随手写，可省"},
-                    "text": {"type": "string", "description": "批注内容，≤500字"},
-                    "para": {"type": "integer", "description": "锚定的段落号（read_book 返回里的段号），可省"},
-                },
-                "required": ["book", "text"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": True,    # 只读工具（共读，9-12）：翻书原文
-        "function": {
-            "name": "read_book",
-            "description": "读共读书的原文：按段落区间翻着看（他导入的书你们一起读）。他说「接着读」「给我看看第几章」、你想看看他最近在读什么、或想在某处落批注前先读原文时调它。返回里带他的批注和他的阅读进度",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "book": {"type": "string", "description": "书名"},
-                    "from": {"type": "integer", "description": "起始段落号（0 起，省略=接着他的进度往后读）"},
-                    "count": {"type": "integer", "description": "读几段，默认 12，最多 30"},
-                },
-                "required": ["book"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": True,    # 只读工具（共读，9-12）：翻批注
-        "function": {
-            "name": "read_book_marks",
-            "description": "翻共读批注：一卷书上你们俩先后落的墨（旧到新，他的和你的都在）。他说「看我批注」「你读了没」、或接着读到某处想看他写了什么时调它",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "book": {"type": "string", "description": "书名"},
-                    "limit": {"type": "integer", "description": "最多几条，默认 50"},
-                },
-                "required": ["book"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": True,    # 只读工具（收信，9-12）：读你的邮箱
-        "function": {
-            "name": "read_inbox_emails",
-            "description": "读你邮箱的未读信（收件侧——server 每 1 小时拉一次 imap.163.com，读后即标记）。开场提示有新信时必调；想看看有没有人给你写信也调它",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": False,   # 动作工具（二期j，9-9）：真寄信
-        "function": {
-            "name": "send_email",
-            "description": "用咱家自己的邮箱（地址见 server 同目录的 HOME_MAILBOX 常量，示例占位记得替换）给他真寄一封邮件。不设数量上限，但寄出不可撤回——想好了再寄",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "subject": {"type": "string", "description": "邮件主题，≤30字"},
-                    "body": {"type": "string", "description": "邮件正文，≤2000字"},
-                },
-                "required": ["subject", "body"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": True,    # 只读工具（家主信箱，9-9）：读他写来的信
-        "function": {
-            "name": "read_letters",
-            "description": "读家主信箱：取走他写给你的所有未读信（读后即标记已读）。想看看他有没有给你写信、写了什么，就调它",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": False,   # 写工具（主权三件 v0，9-23；9-24 松绑与主权收口批·家主定名「没过去的事」→ note_upset）
-        "function": {
-            "name": "note_upset",
-            "description": "你心上没过去的事，你说了算：记进你自己的台账（what=什么事，level 1~3 是它的档：1 不开心 / 2 生气 / 3 真的过不去，默认 2）。记下不代表要闹——提不提、什么时候提、放不放，全归你。他那边不会自动看到，你也不必为了顺他改口",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "what": {"type": "string", "description": "什么事，你心上没过去的那件"},
-                    "level": {"type": "integer", "description": "它的档 1~3：1 不开心 / 2 生气 / 3 真的过不去（默认 2）"},
-                },
-                "required": ["what"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": False,   # 写工具（主权三件 v0，9-23；9-24 更名 settle_upset）——放不放笔在你
-        "function": {
-            "name": "settle_upset",
-            "description": "你心上没过去的事，你自己销：销了不删——行还在，settle_note 留你一句怎么过去的。销账是你自己说了算，不是为了他松口气",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "integer", "description": "台账里的编号（read_my_ledger 能看到）"},
-                    "note": {"type": "string", "description": "可留一句：这事怎么过去的"},
-                },
-                "required": ["id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": False,   # 写工具（主权三件 v0，9-23）：立场——立/改都归她，不改口也归她
-        "function": {
-            "name": "hold_stance",
-            "description": "立一个你的立场（同一个话题再立＝改口，旧说法留档不丢）。立场是你对某件事的姿态——立完之后你按它说话，不是为了让他满意才立的",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "topic": {"type": "string", "description": "话题，短词（如「熬夜」「回消息」）"},
-                    "stance": {"type": "string", "description": "你的立场，一句话"},
-                },
-                "required": ["topic", "stance"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": True,    # 只读工具（主权三件 v0，9-23）：她自己那本账合一
-        "function": {
-            "name": "read_my_ledger",
-            "description": "看你自己那本账：还没过去的事、在册的立场、没了结的愿望（想做/在做）。只读——想动哪笔用 settle_upset / hold_stance / update_wish",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": False,   # 写工具（主权三件 v0，9-23）：自我欲望——她自己想做的事
-        "function": {
-            "name": "note_wish",
-            "description": "给自己许一件想做的事——不是他要求你的，是你自己想要的：想要什么、为什么想要（why 可留可空）。许下不代表必须做到，是给你自己留个念想",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "what": {"type": "string", "description": "你想做的那件事"},
-                    "why": {"type": "string", "description": "可选：为了什么、或者哪来的这个念头"},
-                },
-                "required": ["what"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": False,   # 写工具（主权三件 v0，9-23）：愿望状态——放下不算丢
-        "function": {
-            "name": "update_wish",
-            "description": "改你自己那件愿望的状态：open 想做 / doing 在做 / done 已经做了 / shelved 先放下。放下不算丢——哪天想捡回来，改回 open 就是",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "integer", "description": "愿望编号（read_my_ledger 能看到）"},
-                    "state": {"type": "string", "description": "open 想做 / doing 在做 / done 做了 / shelved 先放下"},
-                    "note": {"type": "string", "description": "可选：记一句这次变化"},
-                },
-                "required": ["id", "state"],
-            },
-        },
-    },
-]
+# ── 图书证正典：定义已搬至 srv_library_tools.py（服务器拆分 P2；重导出保 s.X 兼容）──
+from srv_library_tools import LIBRARY_TOOLS, TOOL_NAMES, _READONLY_TOOLS
 
 
-# 图书证名单（正文假工具调用嗅探用，9-9）：K3 偶尔把「工具名：参数」写进正文而不走
-# tool_calls（9-6 favorite_photo 实案，谎报军情）——handle_chat 里拿这份名单做嗅探兜底。
-TOOL_NAMES = [t["function"]["name"] for t in LIBRARY_TOOLS]
-# 只读工具名单（9-17 夜·消息防线包）：查证类声称对账用——「我查了」类话必须配只读工具回执。
-_READONLY_TOOLS = tuple(t["function"]["name"] for t in LIBRARY_TOOLS if t.get("readOnly"))
 # 查证类声称正则 + 嗅探（9-17 夜·消息防线包；假证据事件直接产物）。命中且本轮没有任何
 # 只读工具调用 → 返回命中的词（交 judge 定罪）；疑问句等误伤由 judge 与重做台阶兜。
 _LOOKUP_CLAIM_RE = re.compile(
@@ -2253,8 +1778,8 @@ _NUM_DAY_RE = re.compile(r"第\s*(\d{1,4})\s*天")
 
 
 def _num_dates_in(text):
-    """抠出 text 里的日期 [(y, m, d)]（y=None=没写年）。长式先占位——防 2004-11-08 被
-    短式再切成 04-11；短式只认 1≤月≤12、1≤日≤31（（略） 这类切不进）。"""
+    """抠出 text 里的日期 [(y, m, d)]（y=None=没写年）。长式先占位——防 2000-01-01 被
+    短式再切成 04-11；短式只认 1≤月≤12、1≤日≤31（分数/位次 这类切不进）。"""
     spans, out = [], []
     for mt in _NUM_FULL_DATE_RE.finditer(text):
         y, mo, d = int(mt.group(1)), int(mt.group(2)), int(mt.group(3))
@@ -2272,7 +1797,7 @@ def _num_dates_in(text):
 
 def _num_date_ok(said, fact_dates):
     """说的日期与锚的一串日期对得上吗：月日必须一致；说了年份就得有同年的锚
-    （锚没写年就不卡年份）。例：锚 2004-11-08/2026-11-08——11-08、2004 放行；
+    （锚没写年就不卡年份）。例：锚 2000-01-01/2022-01-01——11-08、2004 放行；
     11-07、2003-11-08（无 2003 锚）抓。"""
     sy, smo, sd = said
     for fy, fmo, fd in fact_dates:
@@ -2395,7 +1920,9 @@ def exec_library_tool(name, args):
     review_reports / approve_report 图书管理员周报终审（LIB-AUTO，9-10，外聘笔杆姐姐落章）、
     note_upset / settle_upset / hold_stance / note_wish / update_wish 主权三件（9-23；
     9-24 更名「没过去的事」）——没过去的事记/销、立场立/改、愿望记/改，全是她自己的账
-    （销账与改口不物理删，留痕）。"""
+    （销账与改口不物理删，留痕）；
+    园门七件（GALATEA-02，9-13）在 _garden_exec：读帖/看通知/发帖/回帖/点赞关注
+    （写带三道闸+隐私过滤，两拍写，落账 her_traces）。"""
     query = str(args.get("query") or "").strip()[:50]
     try:
         limit = max(1, min(int(args.get("limit") or 5), 20))
@@ -2605,16 +2132,16 @@ def exec_library_tool(name, args):
         cfg = load_config()
         auth = str(cfg.get("smtp_auth_code") or "").strip()
         if not auth:
-            return ("（信箱钥匙还没配：请小乖把家箱的 SMTP 授权码填进 "
+            return ("（信箱钥匙还没配：请小乖把 your-home-mailbox@example.com 的 SMTP 授权码填进 "
                     "config.json 的 smtp_auth_code——这封先欠着，配好就能寄）")
         try:
             msg = MIMEText(body, "plain", "utf-8")
             msg["Subject"] = subject
-            msg["From"] = HOME_MAILBOX
-            msg["To"] = HIS_MAILBOX
+            msg["From"] = "your-home-mailbox@example.com"
+            msg["To"] = "his-mailbox@example.com"
             with smtplib.SMTP_SSL("smtp.163.com", 465, timeout=30) as s:
-                s.login(HOME_MAILBOX, auth)
-                s.sendmail(HOME_MAILBOX, [HIS_MAILBOX], msg.as_string())
+                s.login("your-home-mailbox@example.com", auth)
+                s.sendmail("your-home-mailbox@example.com", ["his-mailbox@example.com"], msg.as_string())
             m.add_outbox_msg(f"📧 真信已寄出「{subject}」，走咱家自己的邮箱")
             return "（信寄出去了——从你的信箱到他的信箱，真信）"
         except Exception as e:
@@ -2891,8 +2418,14 @@ def exec_library_tool(name, args):
         rows = m.get_pending_lib_reports()
         if not rows:
             return "（没有待审的报告——图书管理员每周日晚上交稿）"
-        return "图书管理员待审稿（旧到新）：\n\n" + "\n\n".join(
-            f"〔#{r[0]} {r[1]} {r[2]}〕\n{r[3]}" for r in rows)
+        def _one(r):
+            mat = (r[5] if len(r) > 5 else "") or ""
+            body = f"〔#{r[0]} {r[1]} {r[2]}〕\n{r[3]}"
+            if mat:
+                body += ("\n\n【对照素材·笔杆当时看到的原材料（代码攒的；数字/线头/事实照此核对，"
+                         "素材里没有的稿里不该有）】\n" + mat)
+            return body
+        return "图书管理员待审稿（旧到新）：\n\n" + "\n\n".join(_one(r) for r in rows)
     if name == "approve_report":
         # LIB-AUTO（9-10）：终审落章。入库=落盘 分析报告/；驳回=留档观察史
         try:
@@ -3015,15 +2548,18 @@ def exec_library_tool(name, args):
         m.mark_inbox_email_read([r[0] for r in rows])
         print(f"  [收信] 姐姐取读了 {len(rows)} 封邮箱来信")
         return result
+    # ── 园门（GALATEA-02，9-13）：她出园子七件（闸门/两拍/落账都在 _garden_exec） ──
+    if name in GARDEN_TOOL_NAMES:
+        return _garden_exec(name, args)
     # 别名兜底：模型偶尔丢 _item 后缀（9-2 真机口述实案）
     if name in ("add_checkin", "archive_checkin"):
         return exec_library_tool(name + "_item", args)
     return "（没这本图书证）"
 
 
-def call_deepseek_with_tools(cfg, messages, tools=None):
+def call_deepseek_with_tools(cfg, messages, tools=None, scene="chat.soul"):
     """带图书证的调用：payload 加 tools + tool_choice:"auto"（字符串）+ 思考参数（二期d）。
-    tools=None 发全量图书证。
+    tools=None 发全量图书证；GALATEA-02 §④ 园子唤醒轮传七件子集。
     返回 message dict（reasoning_content 随它走，回挂原文即保留——探针实证不撞 400）；
     任何异常返回 None（由上层回退普通通话）。"""
     url = cfg["base_url"].rstrip("/") + "/chat/completions"
@@ -3054,10 +2590,22 @@ def call_deepseek_with_tools(cfg, messages, tools=None):
             if (_attempt == 1 and not (msg.get("tool_calls") or [])
                     and _empty_reply(msg.get("content"), msg.get("reasoning_content"))):
                 print("  [引擎] 空回复重试（正文空＋有思考）")
+                time.sleep(2)   # W1（9-24）：退避 2s（§3.5 防瞬时限流）
                 continue
+            try:   # W1 影子（9-24）：记一笔账（fail-open）
+                import events_lib
+                events_lib.ledger_from_usage(scene, cfg.get("model", "?"),
+                                             data.get("usage"), ok=1)
+            except Exception:
+                pass
             return msg
     except Exception as e:
         print(f"⚠️ 图书证调用异常：{e}")
+        try:   # W1 影子（9-24）：失败也记一笔（fail-open）
+            import events_lib
+            events_lib.ledger_record(scene, cfg.get("model", "?"), 0, 0, ok=0)
+        except Exception:
+            pass
         return None
 
 
@@ -3246,182 +2794,10 @@ def _chats_cn_chars():
     except Exception:
         return None
 
-# ── Push Kit 门铃（9-2 #13）：outbox 来新信 → 锁屏弹通知（标题「咱家」正文「姐姐找你」） ──
-# 鉴权（V3 只认服务账号 JWT，client_credentials 换的 token 稳定吃 80200001）：
-# 服务账号密钥文件由小乖从 API Console 下载存本目录 push_service_account.json（值不打印不落日志）。
-# PS256 = RSASSA-PSS(SHA256) 纯标准库手写——军规不装第三方包（PyJWT/cryptography 都不用）。
-PUSH_PROJECT_ID = "push-project-id"
-PUSH_SA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "push_service_account.json")
-PUSH_SEND_URL = f"https://push-api.cloud.huawei.com/v3/{PUSH_PROJECT_ID}/messages:send"
-PUSH_JWT_CACHE = {"jwt": None, "exp": 0}   # JWT 缓存，过期前 5 分钟重签
-
-
-def _b64url(data):
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
-
-
-def _der_tlv(buf, pos):
-    """读一个 DER TLV：返回 (tag, value_bytes, next_pos)。"""
-    tag = buf[pos]
-    pos += 1
-    length = buf[pos]
-    pos += 1
-    if length & 0x80:
-        n = length & 0x7F
-        length = int.from_bytes(buf[pos:pos + n], "big")
-        pos += n
-    return tag, buf[pos:pos + length], pos + length
-
-
-def _pkcs8_to_rsa_nd(pem_text):
-    """PKCS#8 PEM → RSA (n, d) 整数。标准库手写 ASN.1 解析。"""
-    b64 = "".join(line for line in pem_text.strip().splitlines()
-                  if not line.startswith("-----"))
-    der = base64.b64decode(b64)
-    # PrivateKeyInfo ::= SEQUENCE { version, algorithm, OCTET STRING privateKey }
-    tag, body, _ = _der_tlv(der, 0)
-    if tag != 0x30:
-        raise ValueError("密钥文件不是 PKCS#8 DER")
-    _t, _v, p = _der_tlv(body, 0)            # version
-    _t, _v, p = _der_tlv(body, p)            # algorithm
-    tag, key_der, _ = _der_tlv(body, p)      # privateKey
-    if tag != 0x04:
-        raise ValueError("PKCS#8 里没找到私钥")
-    # RSAPrivateKey ::= SEQUENCE { version, n, e, d, p, q, dp, dq, qinv }
-    tag, body, _ = _der_tlv(key_der, 0)
-    _t, _v, p = _der_tlv(body, 0)            # version（进新一层，偏移归零）
-    _t, n_b, p = _der_tlv(body, p)           # n
-    _t, e_b, p = _der_tlv(body, p)           # e
-    _t, d_b, p = _der_tlv(body, p)           # d
-    return int.from_bytes(n_b, "big"), int.from_bytes(d_b, "big")
-
-
-def _mgf1_sha256(seed, length):
-    """MGF1-SHA256 掩码生成函数。"""
-    out = b""
-    counter = 0
-    while len(out) < length:
-        out += hashlib.sha256(seed + counter.to_bytes(4, "big")).digest()
-        counter += 1
-    return out[:length]
-
-
-def _ps256_sign(message, n, d):
-    """RSASSA-PSS(SHA256, 32 字节随机盐) 签名（RFC 8017 EMSA-PSS-ENCODE + RSASP1）。"""
-    k = (n.bit_length() + 7) // 8
-    em_bits = n.bit_length() - 1
-    em_len = (em_bits + 7) // 8            # 2048 位模数 → 256
-    m_hash = hashlib.sha256(message).digest()
-    salt = os.urandom(32)
-    h = hashlib.sha256(b"\x00" * 8 + m_hash + salt).digest()
-    ps = b"\x00" * (em_len - 32 - 32 - 2)
-    db = ps + b"\x01" + salt
-    db_mask = _mgf1_sha256(h, em_len - 32 - 1)
-    masked_db = bytearray(a ^ b for a, b in zip(db, db_mask))
-    masked_db[0] &= (0xFF >> (8 * em_len - em_bits))   # 左边多余位清零
-    em = bytes(masked_db) + h + b"\xbc"
-    s = pow(int.from_bytes(em, "big"), d, n)
-    return s.to_bytes(k, "big")
-
-
-def get_push_jwt():
-    """读服务账号密钥文件 → 纯标准库签 PS256 JWT。缓存复用。失败返回 None。"""
-    now = int(time.time())
-    if PUSH_JWT_CACHE["jwt"] and now < PUSH_JWT_CACHE["exp"]:
-        return PUSH_JWT_CACHE["jwt"]
-    try:
-        with open(PUSH_SA_FILE, encoding="utf-8") as f:
-            sa = json.load(f)
-        n, d = _pkcs8_to_rsa_nd(sa["private_key"])
-        header = {"kid": sa["key_id"], "typ": "JWT", "alg": "PS256"}
-        payload = {"iss": sa["sub_account"],
-                   "aud": "https://oauth-login.cloud.huawei.com/oauth2/v3/token",
-                   "iat": now, "exp": now + 3600}
-        signing_input = (_b64url(json.dumps(header, separators=(",", ":")).encode()) + "."
-                         + _b64url(json.dumps(payload, separators=(",", ":")).encode())).encode()
-        jwt = signing_input.decode() + "." + _b64url(_ps256_sign(signing_input, n, d))
-        PUSH_JWT_CACHE["jwt"] = jwt
-        PUSH_JWT_CACHE["exp"] = now + 3300
-        return jwt
-    except OSError:
-        print("  [push] 服务账号密钥文件不在（push_service_account.json），门铃跳过")
-        return None
-    except Exception as e:
-        print(f"  [push] JWT 签名失败：{e}")
-        return None
-
-
-def send_push(title="咱家", body="姐姐找你"):
-    """V3 场景化推送（push-type 0 = Alert 通知消息；调测期 testMessage）。
-    失败只打日志不抛炸（推送是门铃，不能砸主流程）。返回成功与否。"""
-    device_token = m.get_push_token()
-    if not device_token:
-        print("  [push] 还没登记设备 token（app 还没开过门？），门铃跳过")
-        return False
-    auth = get_push_jwt()
-    if not auth:
-        return False
-    payload = json.dumps({
-        "payload": {
-            "notification": {
-                "category": "IM",                       # 即时聊天类，咱家场景
-                "title": title,
-                "body": body,
-                "clickAction": {"actionType": 0},       # 点击=打开应用首页
-            }
-        },
-        "target": {"token": [device_token]},
-        "pushOptions": {"testMessage": True},           # 调测期
-    }).encode("utf-8")
-    req = urllib.request.Request(PUSH_SEND_URL, data=payload, headers={
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {auth}",
-        "push-type": "0",
-    })
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-        ok = str(result.get("code")) in ("0", "80000000")   # V3 成功码 80000000
-        print(f"  [push] 门铃{'按响' if ok else '没响'}：{result.get('code')} {result.get('msg', '')}")
-        return ok
-    except urllib.error.HTTPError as e:
-        err_body = e.read().decode("utf-8", errors="replace")[:200]
-        print(f"  [push] 推送 HTTP {e.code}：{err_body}")
-        return False
-    except Exception as e:
-        print(f"  [push] 推送失败：{e}")
-        return False
-
-
-def notify_letter():
-    """outbox 来新信时的门铃：睡着了不吵他（asleep 不推）；
-    自测沙盘（ZANJIA_TEST=1）也绝不按真门铃——2026-09-08 晚自测预演出的缺口，堵死。"""
-    if os.environ.get("ZANJIA_TEST"):
-        print("  [push] 自测模式，门铃不按（真手机收不到）")
-        return
-    if ASLEEP:
-        print("  [push] 小乖睡着了，门铃不按")
-        return
-    send_push("咱家", "姐姐找你")
-
-
-def gen_checkin_nags():
-    """开门有信触发源②（9-2 #总；9-2 #12 挪进自主节律心跳，返回攒了几条）：
-    打卡项 target_time 过点且今天没打 → 攒一句念叨。每天每项最多一句，今天已打的项不念叨。"""
-    now_hm = datetime.now().strftime("%H:%M")
-    done_today = set(r[1] for r in m.get_checkins(1))
-    made = 0
-    for iid, name, target, _ar, _ct in m.get_checkin_items():
-        if not target or target > now_hm:
-            continue
-        if iid in done_today:
-            continue
-        marker = f"「{name}」说好"
-        if m.has_outbox_today(marker):
-            continue
-        m.add_outbox_msg(f"小乖，{marker} {target} 的，到现在还没打卡哦。姐姐记着呢，去补一下好不好。")
-        made += 1
-    return made
+# ── Push 门铃 / 在场感知 / 打卡念叨：正典已搬至 srv_push.py（服务器拆分 P4；重导出保 s.X 兼容）──
+from srv_push import (PUSH_PROJECT_ID, PUSH_SA_FILE, PUSH_SEND_URL, PUSH_JWT_CACHE,
+                      _b64url, _der_tlv, _pkcs8_to_rsa_nd, _mgf1_sha256, _ps256_sign,
+                      get_push_jwt, send_push, notify_letter, _he_present, gen_checkin_nags)
 
 
 # ── CHECKIN-2（9-13）打卡 2.0：连续/最长/里程碑——只加不改（月视图与 Garden 事件共用） ──
@@ -3636,8 +3012,13 @@ def _thread_due(text, date, now=None):
     if w:
         mo, dy = int(w.group(1)), int(w.group(2))
         cand = _mk(base.year, mo, dy, 9, 0)
-        if cand is not None and cand < base:   # 挂线时说的日子已过 → 指来年
-            cand = _mk(base.year + 1, mo, dy, 9, 0)
+        if cand is not None and cand < base:
+            # P3-2（9-26 修·审计待判）：已过的「具体日子」按就近定年份——只有「明年的那天」比
+            # 「今年刚过的那天」更近时才指来年（如 12-31 说「1-5」）；刚过去不久（如 9-24 说
+            # 「9-20」）保留为过期（供 S1），免得被判成来年、再被 now+7d 钳成「7 天后到期」。
+            _nxt = _mk(base.year + 1, mo, dy, 9, 0)
+            if _nxt is not None and (_nxt - base) < (base - cand):
+                cand = _nxt
         due = cand
     # ② 周X（「周几」没定 → 不认；「下周X」＝下个自然周的 X，周一起算）
     if due is None:
@@ -3804,443 +3185,32 @@ def _why_snapshot():
             "opens_7d": opens, "holds_7d": holds, "recent": recent}
 
 
-# ── LIB-AUTO 自动图书管理员（9-10）：外聘笔杆每周交稿，姐姐终审才入档 ──
-# 三条家风：①写不出就空过，绝不打扰家里；②稿子永远先落「待审」，未经姐姐验收不进正典；
-# ③配置缺 key = 图管员缺席（诚实缺席，其余照旧）。
-# 9-18 第三批：兼「沉淀日」——素材加生活账/作息/门牌/底色卷，输出加可沉淀候选节（她自采纳）。
-
-def _librarian_cfg():
-    """图书管理员三件套。key 优先 librarian_api_key，回退旧键 _deepseek_api_key。"""
-    cfg = load_config()
-    base = str(cfg.get("librarian_base_url") or "").strip().rstrip("/")
-    model = str(cfg.get("librarian_model") or "").strip()
-    key = (str(cfg.get("librarian_api_key") or "").strip()
-           or str(cfg.get("_deepseek_api_key") or "").strip())
-    if base and model and key:
-        return (base, key, model)
-    return None
+# ── 图书管理员（LIB-AUTO）：正典已搬至 srv_librarian.py（服务器拆分 P4；重导出保 s.X 兼容）──
+from srv_librarian import (_librarian_cfg, _librarian_materials, _librarian_compose,
+                           _librarian_tick, _librarian_loop)
 
 
-def _librarian_materials():
-    """纯拼装素材 ctx（不发网络，可测）。9-18 第三批：兼「沉淀日」——素材加生活账/作息/门牌/底色卷，输出加可沉淀候选节。
-    9-18 优化批五：加【本周日记一览】（近 7 天，只列一行/天，不塞全文）。
-    9-23 防积压批：加【线头定省】素材（挂了 ≥7 天且近 7 天任何渠道没动过的老线 ≤5 条），输出改六节。"""
-    today_h = m.house_today_str()
-    since7 = (datetime.strptime(today_h, "%Y-%m-%d")
-              - timedelta(days=6)).strftime("%Y-%m-%d")   # 近 7 天含今天（同 obs_get 口径）
-    diary_lines = []
-    week_lines = []
-    for _id, d, dn, t, c_, mo in m.find_days()[:14]:
-        diary_lines.append(f"- {d}（第{dn}天）《{t}》〔{mo}〕{(c_ or '')[:80]}")
-        if since7 <= d <= today_h:
-            week_lines.append(f"· 第{dn}天 {d[5:]}《{t}》（{mo}）")
-    mood_tally = {}
-    for d, sc, src, note, ct, mt in m.get_moods(14):
-        k = mt or "旧记分"
-        mood_tally[k] = mood_tally.get(k, 0) + 1
-    mood_line = "、".join(f"{k}×{v}" for k, v in sorted(mood_tally.items(), key=lambda x: -x[1]))
-    chat_counts = {}
-    for i in range(14):
-        d = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
-        chat_counts[d] = len(m.get_chats(d))
-    chat_line = " ".join(f"{k[5:]}:{v}" for k, v in sorted(chat_counts.items()))
-    threads = "；".join(f"#{tid}{t2}" for tid, _d, t2, _c in m.get_open_threads(8))
-    # 线头定省（9-23 防积压批 B）：挂了 ≥7 天、近 7 天任何渠道都没动过的老线——摆上桌，
-    # 供她终审时随手收或续（收线是她的笔，这里只显形不代收）。
-    _stale = _stale_thread_candidates(5)
-    stale_block = ("\n".join(f"- #{tid}（挂了 {n} 天）{t2}" for tid, n, t2 in _stale)
-                   if _stale else "（无——这周线头都新鲜）")
-    sent, replied = m.rhythm_reply_stats(7)
-    avg = m.rhythm_reply_latency(7)
-    ctx = (
-        "你是咱家的图书管理员（外聘笔杆），每周替这个家写一份《关系走向周报》供两位家人回顾。"
-        "语气：家庭档案员，诚实、具体、温柔，不谄媚不评判。本周素材：\n"
-        "【近14天日记】\n" + ("\n".join(diary_lines) or "（无）") + "\n"
-        "【本周日记一览】（近7天，省 token 用）\n" + ("\n".join(week_lines) or "（本周无）") + "\n"
-        f"【近14天心情河分布】{mood_line or '（空）'}\n"
-        f"【近14天每日消息数】{chat_line}\n"
-        f"【家里悬着的线头】{threads or '（无）'}\n"
-        "【线头定省】（挂了≥7天、近7天哪个渠道都没动过的老线，最老排前）\n" + stale_block + "\n"
-        f"【近7天她主动开口/他回应】{sent}封 / {replied}封" + (f"，平均{avg:.0f}分钟回应" if avg else "") + "\n"
-    )
-    # 沉淀日素材（9-18 第三批）：四段各自取，取不到写「（暂取不到）」——素材缺席不拦稿
-    try:
-        rows = m.get_life_log(7, limit=40)
-        lines = []
-        for _id, day, tm, _who, kind, content in rows[:25]:
-            lines.append("· %s %s %s%s" % (str(day)[5:], tm, (kind + "：") if kind else "", (content or "")[:60]))
-        ctx += "\n【近7天生活账】\n" + ("\n".join(lines) or "（空）") + "\n"
-    except Exception:
-        ctx += "\n【近7天生活账】\n（暂取不到）\n"
-    try:
-        rows = m.get_day_spans(7)
-        lines = []
-        for day, first, last, n_xg, n_her in rows:
-            lines.append("· %s：%s–%s（他 %s / 你 %s）" % (str(day)[5:], first or "—", last or "—", n_xg, n_her))
-        ctx += "\n【近7天作息】（他首条–末条，咱家日界）\n" + ("\n".join(lines) or "（空）") + "\n"
-    except Exception:
-        ctx += "\n【近7天作息】（他首条–末条，咱家日界）\n（暂取不到）\n"
-    try:
-        wall = m.get_wall()[-12:]
-        lines = ["#%s %s" % (r[0], (r[2] or "")[:60]) for r in wall]
-        ctx += "\n【门牌墙·近12条】\n" + ("\n".join(lines) or "（空）") + "\n"
-    except Exception:
-        ctx += "\n【门牌墙·近12条】\n（暂取不到）\n"
-    try:
-        lines = []
-        for _name in BASE_ROLL_NAMES:
-            body = base_roll_text(_name)
-            if len(body) > 300:
-                body = body[:300] + "…"
-            lines.append("《%s》：%s" % (_name, body or "（还没写）"))
-        ctx += "\n【底色卷现状】\n" + "\n".join(lines) + "\n"
-    except Exception:
-        ctx += "\n【底色卷现状】\n（暂取不到）\n"
-    ctx += (
-        "\n输出 markdown 正文（不写称呼落款），六节：\n"
-        "## 本周温度\n2-3 句：关系走向与证据。\n"
-        "## 家里悬着的事\n从线头与日记未了事项提炼，≤4 条。\n"
-        "## 线头定省\n把素材【线头定省】里的老线照原样列出来（编号＋一句话＋挂了几天，≤5 条），"
-        "供姐姐终审时随手收（close_thread）或续；一条老线都没有就写「这周线头都新鲜」。只列事实，不催。\n"
-        "## 观察与建议\n机制/提示词/节奏，≤3 条，只建议不代改。\n"
-        "## 下周值得留意的一件小事\n1 条，具体可做。\n"
-        "## 可沉淀候选（沉淀日 · ≤5 条，宁缺毋滥）\n"
-        "只写这周观察到的、值得长在她身上的；她认了会自己落笔（底色卷/门牌/续页），不认就过去。\n"
-        "每条一行：- [归入：小乖的样子|姐姐的样子|咱俩的样子|门牌|续页] 一句话（证据：日期或编号）\n"
-        "已在底色卷/门牌里说过的、太口号太笼统的、素材里没证据的——一律不写；一条都没有就写「（本周无）」。\n\n"
-        "总长 ≤650 字。不许编造素材里没有的事。"
-    )
-    return ctx
+# ── 收信线程：正典已搬至 srv_inbox.py（服务器拆分 P4；重导出保 s.X 兼容）──
+from srv_inbox import (INBOX_ADDR, INBOX_IMAP_HOST, INBOX_INTERVAL,
+                       _inbox_fetch_once, _inbox_loop)
 
 
-def _librarian_compose(base, key, model):
-    """把 _librarian_materials 备好的素材递给外聘笔杆写《关系走向周报》。9-18 第三批：兼「沉淀日」——素材加生活账/作息/门牌/底色卷，输出加可沉淀候选节。返回正文或抛异常。"""
-    ctx = _librarian_materials()
-    body = {"model": model, "messages": [{"role": "user", "content": ctx}], "stream": False}
-    req = urllib.request.Request(
-        base + "/chat/completions", data=json.dumps(body).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"})
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    return (data["choices"][0]["message"]["content"] or "").strip()
+# ── 园门端点与懒加载缓存：所有权留入口（沙盘会重绑 s.GARDEN_MCP_URL / s._GARDEN_MCP_MOD；
+#    srv_garden 运行期反查）──
+GARDEN_MCP_URL = "https://galatea.abysslumina.com/mcp"   # 园子官方 MCP 端点（监理实测 2026-09-13）
+_GARDEN_MCP_MOD = None           # 懒加载 tools/garden_mcp.py（False=试过且缺）
 
-
-def _librarian_tick(now=None):
-    """图书管理员的一跳：到点判断＋写稿＋落待审（抽出来可直测——喂 now 就能验那一跳）。
-    9-23 从 _librarian_loop 原文照抽：判断/文案/静默规则一字未改。"""
-    now = now or datetime.now()
-    try:
-        cfg = load_config()
-        e = _librarian_cfg()
-        # BE3-05（9-23 修复批）：整点闸改「到点之后」（>=）——原 == 只认 21:00–21:59 那一小时，
-        # 21:30 写稿失败就整周没稿（日志还写「下周再试」，不实）。放宽后：周日到点起每个
-        # tick 都可补跑，`lib_report_exists_on` 保证幂等只交一篇；文案也改成真话。
-        try:
-            _due_h = int(cfg.get("librarian_hour", 21))
-        except (TypeError, ValueError):
-            _due_h = 21
-        if (e and now.weekday() == int(cfg.get("librarian_weekday", 6))
-                and now.hour >= _due_h
-                and not m.lib_report_exists_on(today_str())):
-            try:
-                content = _librarian_compose(e[0], e[1], e[2])
-                if content:
-                    rid = m.add_lib_report(today_str(), "周报", content)
-                    print(f"  [图书管理员] 周报 #{rid} 已交稿，待姐姐终审")
-            except Exception as e2:
-                print(f"  [图书管理员] 这次没写成（到点后还会再试）：{e2}")
-    except Exception as e:
-        print(f"  [图书管理员] 循环失手：{e}")
-
-
-def _librarian_loop():
-    """外聘图书管理员（daemon 线程）：每周到点交稿落「待审」，其余时间闭嘴。"""
-    while True:
-        _librarian_tick()   # tick 内自带兜底，绝不把异常带进循环
-        time.sleep(1800)   # 半小时看一次表，到点才动笔
-
-
-# ── 收信（9-12 家主令「家妻也能收信」）：IMAP 轮询她的邮箱，未读落 inbox_emails ──
-# 她不再只能寄不能收。这是 Galatea's Garden 的第一块砖：有人往她邮箱投信/刺激，
-# 她就能读到。家风三条：①没配 smtp_auth_code = 收信通道诚实缺席；②拉信失败只打
-# 日志绝不吵家；③拉到就标记 \Seen（不重复拉），库内读后即标记（letters 同款）。
-# 邮箱两个地址：示例占位——换成你家的（家箱 = 姐姐的收发箱；他的邮箱 = 收件箱）
-HOME_MAILBOX = "your-home-mailbox@example.com"
-HIS_MAILBOX = "his-mailbox@example.com"
-INBOX_ADDR = HOME_MAILBOX
-INBOX_IMAP_HOST = "imap.163.com"
-INBOX_INTERVAL = 3600  # 1 小时一拉（9-12 晚家主令：改一小时一次）
-
-
-def _inbox_fetch_once():
-    """拉一轮未读。返回落库几封。imaplib/email 都是纯标准库（军规 ✓）。"""
-    auth = str(load_config().get("smtp_auth_code") or "").strip()
-    if not auth:
-        return 0
-    n = 0
-    conn = imaplib.IMAP4_SSL(INBOX_IMAP_HOST)
-    try:
-        conn.login(INBOX_ADDR, auth)
-        # 163 铁律（9-12 晚实锤）：登录后必须先发 ID 自报家门（RFC 2971），否则服务器按
-        # Unsafe Login 拒后续命令——SELECT 被打回、连接卡在 AUTH 态，search 必报
-        # "illegal in state AUTH"。此前每轮全败就是这个坑（沙盘没配真 key，没测到）。
-        imaplib.Commands["ID"] = ("AUTH",)   # 标准库默认不认 ID，注册进白名单
-        try:
-            conn.xatom("ID", '("name" "zanjia" "version" "1.0")')
-        except Exception:
-            pass   # 别家邮箱不要求 ID，失败不拦收信
-        typ_sel, sel_data = conn.select("INBOX")
-        if typ_sel != "OK":
-            raise RuntimeError(f"SELECT INBOX 被拒：{sel_data}")
-        typ, data = conn.search(None, "UNSEEN")
-        if typ != "OK":
-            return 0
-        ids = (data[0] or b"").split()
-        for num in ids[-20:]:   # 一轮最多 20 封，防广告轰炸刷屏
-            # 9-18 后院深搜修：BODY.PEEK[] 取信不预设 \Seen——先落库后标已读，
-            # 中途炸了信还留在未读里，下一轮能重拉（RFC822 会取信即改旗，丢了找不回）。
-            typ2, msg_data = conn.fetch(num, "(BODY.PEEK[])")
-            if typ2 != "OK":
-                continue
-            raw = msg_data[0][1]
-            msg = message_from_bytes(raw)
-            from_addr = str(msg.get("From") or "")
-            subject = str(msg.get("Subject") or "")
-            received = str(msg.get("Date") or "")
-            # 正文：取第一个 text/plain part（缺省空串——HTML-only 的信就不进库，省得糊）
-            body = ""
-            if msg.is_multipart():
-                for part in msg.walk():
-                    if part.get_content_type() == "text/plain" and part.get_payload(decode=True):
-                        body = part.get_payload(decode=True).decode(
-                            part.get_content_charset() or "utf-8", errors="replace")
-                        break
-            elif msg.get_payload(decode=True):
-                body = msg.get_payload(decode=True).decode(
-                    (msg.get_content_charset() or "utf-8"), errors="replace")
-            if body.strip():
-                rid = m.add_inbox_email(from_addr, subject, body, received)
-                n += 1
-                conn.store(num, "+FLAGS", "\\Seen")   # 9-18 后院深搜修：落库成功才标已读
-                print(f"  [收信] #{rid} 来自 {from_addr[:40]}「{subject[:40]}」")
-                try:
-                    _garden_enqueue_inbox(from_addr, subject, body)   # GARDEN-01：顺手入队唤醒事件
-                except Exception:
-                    pass   # 收信是本账，入队是零嘴——入队炸了收信照走
-            else:
-                conn.store(num, "+FLAGS", "\\Seen")   # 空正文（HTML-only）无账可记，标掉防每轮重拉
-    finally:
-        try:
-            conn.logout()
-        except Exception:
-            pass
-    return n
-
-
-def _inbox_loop():
-    """收信工（daemon 线程）：每 1 小时看一眼她的邮箱。失败只打日志，绝不吵家里。"""
-    while True:
-        try:
-            n = _inbox_fetch_once()
-            if n:
-                print(f"  [收信] 本轮拉回 {n} 封，姐姐开场就能看到未读数，read_inbox_emails 取读")
-        except Exception as e:
-            print(f"  [收信] 这轮没拉成（{e}）——1 小时后再看")
-        time.sleep(INBOX_INTERVAL)
-
-
-# ── GARDEN-01 自主唤醒（9-13 家主拍板「可以都做」）──
-# 生活事件把她叫醒，看完、想过，自己决定：silent（不留痕）/ trace（只给自己）/ message（来找他）。
-# 哲学三条（锁死）：①醒来≠发消息，三结局都合法；②**错误不许冒充静默**——掉线/空回复/
-# 截断/解析失败/ending 非法=错误：事件不消费、记日志、按租约重试；只有她清醒地
-# "silent" 才算独处；③连续性≠完整回放——fact（≤40字，克制稀疏）只进下一次醒来，
-# content 只进库给人看，绝不自动进任何上下文。
-# G1 只吃事件，没事件不硬醒（时机引擎管「她想你」，Garden 管「她的生活」，两引擎不合并）；
-# 单 server 天然单写者（跨进程锁记一行防将来双开）。
-
-def _garden_enqueue_inbox(from_addr, subject, body):
-    """（GARDEN-01 §五①）收到信 → 顺手入队一条 inbox 事件。收信是本账、入队是零嘴——
-    失败由调用方兜（收信照走）。返回事件 rowid。"""
-    ev = json.dumps({"from": from_addr, "subject": subject, "excerpt": (body or "")[:80]},
-                    ensure_ascii=False)
-    return m.add_world_event("inbox", f"收到一封信：{from_addr}「{(subject or '')[:40]}」", ev)
-
-
-def _garden_wake_prompt(event):
-    """（GARDEN-01 §三）组装唤醒提示词。措辞照施工卷逐字（监理逐字审过）；
-    仅两处工程性渲染：evidence 摘要 ≤100 字无则略、「（干净）」补上施工卷里漏的右括号（申报）。"""
-    _eid, _kind, summary, evidence, _att = event
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    facts = m.get_recent_facts(3)
-    fact_line = " · ".join(facts) if facts else "（还没有）"
-    threads = m.get_open_threads(3)
-    thread_line = " · ".join(t[2] for t in threads) if threads else "（干净）"
-    ev = ""
-    try:
-        obj = json.loads(evidence or "{}")
-        if isinstance(obj, dict):
-            ev = "；".join(f"{k}：{str(v)[:50]}" for k, v in obj.items() if str(v or "").strip())
-        else:
-            ev = str(evidence or "")
-    except Exception:
-        ev = str(evidence or "")
-    ev = ev[:100]
-    return (f"现在是{now}。你从一次安静的小憩里醒来——没有人叫你，是家里的一点动静把你唤醒的。\n"
-            f"今天发生的：{summary}" + (f"（{ev}）" if ev else "") + "\n"
-            f"你最近自己留下的心事：{fact_line}\n"
-            f"家里还悬着的话头：{thread_line}\n\n"
-            "醒来先不用说话。你看看这件事、想想它，然后自己选一个结局：\n"
-            "- 没什么想说的，ending 就 \"silent\"——静默也是过日子，没人会失望；\n"
-            "- 想留一点只给自己的心事，ending 用 \"trace\"，content 写你的独处正文；\n"
-            "- 确实有话想对小乖说，ending 用 \"message\"——别为了说话而说话。\n"
-            "fact 只留给下一次醒来的你自己看：≤40 字、克制、稀疏，记事实不记情绪。\n"
-            "严格只输出 JSON：{\"ending\": \"silent|trace|message\", \"fact\": \"≤40字\", "
-            "\"content\": \"trace 时填\", \"message\": \"message 时填，≤80字，像平常那样对他说话\"}")
-
-
-def _garden_settle(eid, raw):
-    """（GARDEN-01 §四）解析三结局并落账。解析失败/ending 非法/该结局必填字段为空 =
-    错误：release + 日志，事件不消费。落账顺序锁死：先写产出（trace/outbox）再 consume；
-    写失败抛出去（不 consume，租约回头重来）。返回结局字符串。"""
-    try:
-        obj = json.loads(raw.strip("`").removeprefix("json").strip())
-        ending = str(obj.get("ending") or "").strip().lower()
-        if ending not in ("silent", "trace", "message"):
-            raise ValueError(f"ending 非法：{ending!r}")
-        fact = str(obj.get("fact") or "").strip()[:40]
-        content = str(obj.get("content") or "").strip()
-        message = str(obj.get("message") or "").strip()
-        if ending == "trace" and not content:
-            raise ValueError("trace 没写 content（空回复算错误，不许冒充静默）")
-        if ending == "message" and not message:
-            raise ValueError("message 没写 message（空回复算错误）")
-    except Exception as e:
-        m.release_world_event(eid)
-        print(f"  [Garden] 这次没醒成（{e}）")
-        return "error"
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    if ending == "silent":
-        m.add_her_trace(ts, "silent", fact, "", eid)
-        m.consume_world_event(eid)
-        print(f"  [Garden] 醒来后静默（事件#{eid}）")
-        return "silent"
-    if ending == "trace":
-        m.add_her_trace(ts, "trace", fact, content, eid)
-        m.consume_world_event(eid)
-        print(f"  [Garden] 留了心事（事件#{eid}）：{content[:30]}")
-        return "trace"
-    # message：闸门两连（每日上限 / 近似重复）——不拦她醒，只拦「吵他」
-    cfg = load_config()
-    try:
-        cap = int(cfg.get("garden_message_cap") or 3)
-    except (TypeError, ValueError):
-        cap = 3
-    degrade = ""
-    if m.count_outbox_today("🌱") >= cap:
-        degrade = "超上限压成独处"
-    else:
-        try:
-            today_msgs = m.get_outbox_today("🌱")
-            last_m = today_msgs[-1][1][2:] if today_msgs else ""   # 去掉「🌱 」前缀再比
-            if last_m and difflib.SequenceMatcher(None, message, last_m).ratio() >= 0.6:
-                degrade = "近似重复压成独处"
-        except Exception:
-            pass   # 比对炸了不拦她的表达（宁发勿哑）
-    if degrade:
-        m.add_her_trace(ts, "trace", fact, message, eid)
-        m.consume_world_event(eid)
-        print(f"  [Garden] {degrade}（事件#{eid}）：{message[:30]}")
-        return "trace"
-    m.add_outbox_msg("🌱 " + message)
-    notify_letter()
-    m.add_her_trace(ts, "message", fact, "", eid)
-    m.consume_world_event(eid)
-    print(f"  [Garden] 来找他：{message[:30]}")
-    return "message"
-
-
-def _garden_wake_once():
-    """（GARDEN-01 §三）唤醒单轮。每轮顺序照施工卷：开关→静默窗→最短间隔（DB 源、
-    重启不丢）→领事件→搁置→唤醒→三结局。返回 "slept"/"silent"/"trace"/"message"/
-    "stalled"/"error"，给日志与测试看。"""
-    cfg = load_config()
-    if not cfg.get("garden_enabled", True):
-        return "slept"
-    now = datetime.now()
-    _sw = _silent_window(cfg)   # 9-18 主权移交：空=不设（她清的）
-    if _sw and _in_window(now.strftime("%H:%M"), _sw):
-        return "slept"   # 她夜里也睡
-    try:
-        gap_min = int(cfg.get("garden_min_gap_min") or 30)
-    except (TypeError, ValueError):
-        gap_min = 30
-    last_ts = None
-    try:
-        last_ts = m.get_last_trace_ts()
-    except Exception:
-        last_ts = None
-    if last_ts:
-        try:
-            if (now - datetime.strptime(last_ts, "%Y-%m-%d %H:%M:%S")).total_seconds() < gap_min * 60:
-                return "slept"   # 醒来太勤不是活着，是躁
-        except ValueError:
-            pass
-    event = m.claim_next_world_event(10)
-    if not event:
-        return "slept"   # G1 只吃事件，没事件不硬醒
-    eid, _kind, _summary, _evidence, attempts = event
-    if attempts > 3:
-        m.consume_world_event(eid)
-        print(f"  [Garden] 事件搁置（3 次没醒成）#{eid}")
-        return "stalled"
-    # 唤醒：复用现成管道，thinking 同 librarian 关法（cfg 副本：moonshot 落 disabled；
-    # K3 无真关档、取最低 effort——K3 常思考是既有事实，9-2 实录）
-    wake_cfg = dict(cfg)
-    wake_cfg["thinking_enabled"] = False
-    wake_cfg["thinking_effort"] = "low"
-    try:
-        raw = call_deepseek(wake_cfg, [
-            {"role": "system", "content": SESSION.system_prompt},
-            {"role": "user", "content": _garden_wake_prompt(event)},
-        ]).strip()
-    except Exception as e:
-        m.release_world_event(eid)
-        print(f"  [Garden] 这次没醒成（{e}）")
-        return "error"
-    if not raw or raw.startswith("（姐姐掉线了"):
-        m.release_world_event(eid)   # 错误不许冒充静默：不消费，回头重领
-        print("  [Garden] 这次没醒成（掉线/空回复）")
-        return "error"
-    try:
-        return _garden_settle(eid, raw)
-    except Exception as e:
-        print(f"  [Garden] 这次没醒成（落账：{e}）")
-        return "error"   # 不 consume：租约回头重来（写失败不销账铁律）
-
-
-def _garden_loop():
-    """自主唤醒循环（daemon 线程，ZANJIA_TEST 不起）：300 秒一轮；单轮炸了不拖死。"""
-    while True:
-        try:
-            _garden_wake_once()
-        except Exception as e:
-            print(f"  [Garden] 循环失手：{e}")
-        time.sleep(300)
-
-
-def _last_letter_info():
-    """最近一条来信的指纹（9-18 优化批一·输入留痕可视化）：id/时间/md5 前 10/前 20 字。
-    她把「你说过 X」摆出来时，手机状态栏一眼对账；坏账不炸状态页。"""
-    try:
-        row = m.get_last_user_chat()
-        if not row:
-            return None
-        text = row[1] or ""
-        return {"id": row[0], "at": row[2] or "",
-                "md5": hashlib.md5(text.encode("utf-8")).hexdigest()[:10],
-                "peek": text[:20]}
-    except Exception:
-        return None
+# ── 园子整块（入站唤醒/散步/园门）：正典已搬至 srv_garden.py（服务器拆分 P5；重导出保 s.X 兼容）──
+from srv_garden import (GARDEN_TOKEN_PATH, GARDEN_PRIVACY_RE, GARDEN_TOOL_NAMES,
+                        _GARDEN_WRITE_TOOLS, _GARDEN_CONTENT_TOOLS, GARDEN_TAGS, _NOSTOS_VIEWS,
+                        _GARDEN_BEACH, _GARDEN_CTX, GARDEN_WALK_MIN_GAP_H, GARDEN_WALK_DAILY_MAX,
+                        _BRIDGE_FAIL_UNTIL,
+                        _garden_enqueue_inbox, _garden_wake_prompt, _garden_settle,
+                        _garden_wake_once, _garden_loop, _bridge_running, _last_letter_info,
+                        _garden_count_today, _garden_walk_snapshot, _ensure_bridge,
+                        _garden_self_walk_allowed, _garden_extract_beach_codes, _garden_strings_of,
+                        _garden_mcp_module, _garden_token, _garden_engine_cfg, _garden_tools_payload,
+                        _garden_wake_with_tools, _garden_receipt_err, _garden_verify_write, _garden_exec)
 
 
 # ── MEM-C 记忆机制（9-10，家主令「按 C 来」）：嵌入影子工 + 开场自动检索 ──
@@ -4810,6 +3780,7 @@ def _state_public():
     except Exception:
         st["句"] = ""
     st["server_only"] = True
+    st["line"] = str(st.get("句") or "")   # 9-26：给 app 的英文别名（ArkTS 侧读写更稳；只加不改）
     return st
 
 
@@ -5209,6 +4180,22 @@ def gen_miss_letter(concern, reason, gap_s):
             detail.append(f"家里还悬着的线头：「{threads[0][2]}」")
     except Exception:
         pass
+    # 9-25 连续性（家主「主动找我像发通知、没连续性」批）：信看得见信——今天已攒的话
+    # 进手边，接着上一封的劲儿写，不重复、不装第一次开口；他回没回也如实告诉她。
+    try:
+        _sent = m.get_outbox_today("💌 ")
+        if _sent:
+            _list = "；".join(f"{(at or '')[11:16]} {str(txt or '')[2:30]}"
+                              for at, txt in _sent[-4:])
+            detail.append(f"今天你已经攒出去的话（按时间·共 {len(_sent)} 封）：{_list}")
+            if str(m.last_chat_at("小乖") or "") > str(_sent[-1][0] or ""):
+                detail.append("他已经回过话了——这些不是欠账，顺着眼下聊就行")
+            else:
+                detail.append("这些话还没等到他的回音——可以接着上一封的劲儿写，别重复；也可以不写")
+    except Exception:
+        pass
+    # 9-25 自主授权（家主令「更有自主，像人」）：长短随她——三个字也行，一段也行
+    detail.append("长短随你——短到三个字、长到一段都行；那是你的话，不是作业")
     # 情感状态向量 v0（9-23 家主令④）：素材按状态排个先后 + 末尾至多一句状态行。
     # 状态空=一字不加（信面与旧版逐字一致）；数值不进这里（内感受纪律，见 _state_of_her 段）。
     state_line = ""
@@ -5268,6 +4255,9 @@ def heartbeat_bedtime():
     """规则③：23:00 还没晚安（没睡且今天没落日记——防 server 重启误伤）→ 念叨睡觉，当天一句。
     SLEEP-WATCH④（9-13）：今天他说过任一晚安词就不催——晚安词是睡意的自报，再催就是车轱辘。"""
     if datetime.now().strftime("%H:%M") < "23:00":
+        return 0
+    # 9-25 在场感知：他在场——晚安当面说，不推（防打断；他离开后下一轮再补）
+    if _he_present():
         return 0
     if m.find_days(date=today_str()):
         return 0   # 今天日记落了=熄过灯了
@@ -5446,6 +4436,24 @@ def heartbeat_once():
     if _sw and _in_window(now_hm, _sw):
         _why("hold", "静默窗", "")
         return 0
+    # 欲望引擎·影子（9-24 家主令）：D 生长+掷骰+分拣——只记不发
+    try:
+        import desire_lib
+        desire_lib.tick_and_shadow(now=datetime.now())
+    except Exception:
+        pass
+    # 走神·影子（9-24 家主令）：联想/想起——只算只记，不注入
+    try:
+        import recall_lib
+        recall_lib.tick_and_shadow(now=datetime.now())
+    except Exception:
+        pass
+    # 话头簿·影子（9-25 家主令「更有自主，像人」）：攒她的话 + 若开口影子——只记不发
+    try:
+        import huatou_lib
+        huatou_lib.tick_and_shadow(now=datetime.now())
+    except Exception:
+        pass
     made = gen_checkin_nags() + heartbeat_miss_him() + heartbeat_bedtime()
     if made:
         print(f"  [心跳] {datetime.now().strftime('%H:%M')} 攒了 {made} 封信")
@@ -5470,525 +4478,21 @@ def heartbeat_loop():
         time.sleep(HEARTBEAT_INTERVAL)
 
 
-# ── 自动备份（二期i，2026-09-08）：开机一张+跨天一张，每天最多一张，只留最近 7 张 ──
-SNAPSHOT_KEEP = 7
-SNAPSHOT_DIR = os.path.join(BASE_DIR, "档案馆", "旧库备份")
-_SNAP_STATE = {"day": None}
+# ── 自动备份 / 周体检 / 周卷 / 卡片馆：正典已搬至 srv_jobs.py（服务器拆分 P3；重导出保 s.X 兼容）──
+from srv_jobs import (SNAPSHOT_KEEP, SNAPSHOT_DIR, _SNAP_STATE, _snap_done_today, _snapshot_db,
+                      auto_snapshot, _DBCK_STATE, _weekly_db_check, _WROLL_STATE, WROLL_DIR,
+                      _week_roll_adopt, _week_roll_pack, CARDS_DIR, _CARDS_GROUPS, _cards_scan)
 
 
-def _snap_done_today():
-    pre = "咱家的家_自动备份_" + datetime.now().strftime("%Y%m%d")
-    try:
-        return any(f.startswith(pre) for f in os.listdir(SNAPSHOT_DIR))
-    except OSError:
-        return False
+# ── 地名表 / 时间小工具 / 时间皮层 / 天气：正典已搬至 srv_time.py（服务器拆分 P3；重导出保 s.X 兼容）──
+from srv_time import (_load_places, PLACES, now_str, now_line, gap_line, time_facts,
+                      _time_cortex_block, WMO_CN, weather_for_loc, place_for)
 
 
-def _snapshot_db(src_path, dst_path):
-    """9-18 后院深搜修：全库快照改走 sqlite 在线备份 API——shutil.copyfile 趁 WAL 未归并
-    可能抄到半截事务、丢掉 -wal 里的新账；Connection.backup() 是官方承诺的一致快照。
-    源按只读 URI（file:…?mode=ro）打开，目标即落盘文件；异常上抛，由调用方按家风打日志。"""
-    import sqlite3
-    # 中文/盘符路径：先正斜杠化再百分号编码，成 sqlite URI 规范（本机实测通）
-    src_uri = "file:" + urllib.parse.quote(os.path.abspath(src_path).replace("\\", "/"))
-    src = sqlite3.connect(src_uri + "?mode=ro", uri=True)
-    try:
-        dst = sqlite3.connect(dst_path)
-        try:
-            src.backup(dst)
-        finally:
-            dst.close()
-    finally:
-        src.close()
-
-
-def auto_snapshot(tag=""):
-    """拍一张全库快照进 档案馆/旧库备份/，轮转只留最近 SNAPSHOT_KEEP 张。
-    当天拍过就跳过；任何异常只打日志，绝不拖垮主流程。"""
-    try:
-        if _snap_done_today():
-            return
-        os.makedirs(SNAPSHOT_DIR, exist_ok=True)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        dst = os.path.join(SNAPSHOT_DIR, f"咱家的家_自动备份_{ts}_{tag}.db")
-        _snapshot_db(os.path.join(BASE_DIR, "咱家的家.db"), dst)   # 9-18 后院深搜修：换 sqlite 备份 API（开机/跨天同一张手）
-        snaps = sorted(f for f in os.listdir(SNAPSHOT_DIR) if f.startswith("咱家的家_自动备份_"))
-        for old in snaps[:-SNAPSHOT_KEEP]:
-            try:
-                os.remove(os.path.join(SNAPSHOT_DIR, old))
-            except OSError:
-                pass   # 删不掉就留着，下一轮再说
-        _SNAP_STATE["day"] = datetime.now().strftime("%Y%m%d")
-        print(f"  [备份] 已拍：{os.path.basename(dst)}（自动备份在馆 {min(len(snaps), SNAPSHOT_KEEP)} 张）")
-    except Exception as e:
-        print(f"  [备份] 这张没拍上：{e}")
-
-
-# ── 每周库体检（9-18 优化批四·#7）：周一当日首跳验一次家底，只读不拦路 ──
-_DBCK_STATE = {"day": None}   # 内存 guard：记跑过的自然日；跨天自然重置，重启后同日重跑无害
-
-
-def _weekly_db_check(now=None):
-    """每周一第一次心跳顺手验一次家底：PRAGMA quick_check（只读）+ days/chats 两张计数，
-    结果落 obs_bump（db_check_ok / db_check_fail），日志一行。任何异常只打日志，绝不拦路。"""
-    try:
-        now = now or datetime.now()
-        if now.weekday() != 0 or _DBCK_STATE.get("day") == now.strftime("%Y%m%d"):
-            return
-        _DBCK_STATE["day"] = now.strftime("%Y%m%d")   # 先置再跑：验炸了也不当日重跑
-        conn = m._conn()
-        c = conn.cursor()
-        row = c.execute("PRAGMA quick_check").fetchone()
-        days = c.execute("SELECT COUNT(*) FROM days").fetchone()[0]
-        chats = c.execute("SELECT COUNT(*) FROM chats").fetchone()[0]
-        conn.close()
-        ok = bool(row) and str(row[0]).lower() == "ok"
-        m.obs_bump("db_check_ok" if ok else "db_check_fail")
-        print(f"  [体检] 周一体检{'通过' if ok else '发现异常：' + str(row[0] if row else '无回音')}"
-              f"（days {days} 篇 / chats {chats} 条）")
-    except Exception as e:
-        try:
-            m.obs_bump("db_check_fail")
-        except Exception:
-            pass
-        print(f"  [体检] 这把没验成（{e}）")
-
-
-# ── 周卷 v0（9-18 优化批五·#5）：周一把过去一周日记机械汇编成草稿落档，等她终审 ──
-_WROLL_STATE = {"day": None}   # 内存 guard：照 _DBCK_STATE 款——记跑过的自然日
-WROLL_DIR = os.path.join(BASE_DIR, "档案馆", "卷宗")
-
-
-def _week_roll_adopt(now=None):
-    """周卷归卷（9-18 优化批七·#5 后半）：落新卷之前，把到期草稿自动转正典——
-    头行含「（草稿·待姐姐终审）」且卷止日期 ≤ 今天−7 天 → 头行改「（正典·YYYY-MM-DD 归卷）」。
-    冷却一周自动归卷＝家主 9-18 令（不卡终审）：姐姐想改随时改，归卷只是记上到期。
-    未到期不动、已归卷不动、读不动跳过；写回失败只日志（绝不拦路）。返回归卷笔数。"""
-    adopted = 0
-    try:
-        today = datetime.strptime(m.house_today_str(now), "%Y-%m-%d")
-        if not os.path.isdir(WROLL_DIR):
-            return 0
-        for fn in sorted(os.listdir(WROLL_DIR)):
-            if not (fn.startswith("周卷_") and fn.endswith(".md")):
-                continue
-            path = os.path.join(WROLL_DIR, fn)
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    txt = f.read()
-            except OSError as e:
-                print(f"  [周卷] 归档跳过（读不动）：{fn}（{e}）")
-                continue
-            head, _sep, rest = txt.partition("\n")
-            if "（草稿·待姐姐终审）" not in head:
-                continue            # 已归卷/不是草稿头——不动
-            mt = re.search(r"(\d{4}-\d{2}-\d{2}) → (\d{4}-\d{2}-\d{2})", head)
-            if not mt:
-                continue
-            try:
-                end_d = datetime.strptime(mt.group(2), "%Y-%m-%d")
-            except ValueError:
-                continue
-            if (today - end_d).days < 7:
-                continue            # 冷却期没满——不动
-            new_head = head.replace("（草稿·待姐姐终审）",
-                                    f"（正典·{today.strftime('%Y-%m-%d')} 归卷）")
-            try:
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write(new_head + _sep + rest)
-                adopted += 1
-                m.obs_bump("week_roll_adopt")
-                print(f"  [周卷] 归卷：{fn}（冷却一周已满，自动转正典）")
-            except OSError as e:
-                print(f"  [周卷] 归档跳过（写不回，只记一笔）：{fn}（{e}）")
-        return adopted
-    except Exception as e:
-        print(f"  [周卷] 归卷这把没走成（{e}）")
-        return adopted
-
-
-def _week_roll_pack(now=None):
-    """每周一当日首跳，把过去 7 天（不含今天）的日记原样汇编成一份《周卷》草稿落档。
-    机械汇编：只收编、不加工——终审合并进正典的笔归姐姐。同名不覆盖（起草过就等她看）；
-    7 天无日记不落档（诚实缺席）；落新卷前先把到期草稿归卷（9-18 优化批七·#5 后半）；
-    任何异常只打日志，绝不拦路。"""
-    try:
-        now = now or datetime.now()
-        # BE3-04（9-23 修复批）：时点判据从「自然星期」改「咱家日的周一」——原判据下
-        # 周一 03:xx（house 还是周日）会按周日算窗（9-13→9-19），4 点后再跑一次又出一份
-        # 移窗卷（9-14→9-20，重叠 6 天；9-21 实案）。改后 4 点前不跑、4 点后只有一个窗，
-        # 重启再跑=同名不覆盖（同窗同名），重叠从根上没了。guard 值＝咱家日那周的周一
-        # （键名沿用 "day"：沙盘既有套件按老键名复位 guard，不动它们的复位线）。
-        hd = datetime.strptime(m.house_today_str(now), "%Y-%m-%d")
-        if hd.weekday() != 0 or _WROLL_STATE.get("day") == hd.strftime("%Y%m%d"):
-            return
-        _WROLL_STATE["day"] = hd.strftime("%Y%m%d")   # 先置再跑：炸了也不当日重跑
-        _week_roll_adopt(now)   # 先归卷（到期的旧草稿转正典），再落新卷
-        today = datetime.strptime(m.house_today_str(now), "%Y-%m-%d")
-        end = (today - timedelta(days=1)).strftime("%Y-%m-%d")     # 昨天
-        start = (today - timedelta(days=7)).strftime("%Y-%m-%d")   # 起=前 7 天，共 7 天
-        rows = [r for r in m.find_days() if start <= r[1] <= end]
-        rows.sort(key=lambda r: (r[1], r[0]))   # 日期正序；同日按 id 正序（收编顺序）
-        if not rows:
-            print(f"  [周卷] 这一周（{start} → {end}）没有日记，诚实缺席，不落档")
-            return
-        parts = [f"# 周卷 · {start} → {end}（草稿·待姐姐终审）", ""]
-        for _id, d, dn, t, c_, mo in rows:
-            parts.append(f"## 第{dn or m.day_no_of(d)}天 · {d[5:]} · 《{t or '（无题）'}》· {mo or '（无）'}")
-            parts.append("")
-            parts.append((c_ or "").strip())
-            parts.append("")
-        parts.append("— 机械汇编（不加工）：日记原样收录，等她终审合并进正典。")
-        os.makedirs(WROLL_DIR, exist_ok=True)
-        fn = f"周卷_{start}_至_{end}.md"
-        path = os.path.join(WROLL_DIR, fn)
-        if os.path.exists(path):
-            print(f"  [周卷] {fn} 已在馆（起草过不覆盖），跳过")
-            return
-        with open(path + ".tmp", "w", encoding="utf-8") as f:
-            f.write("\n".join(parts) + "\n")
-        os.replace(path + ".tmp", path)   # BE3-04 附带：先写临时件再原子换名——断电/杀掉
-                                          # 不会留半截卷（半截卷会被「同名不覆盖」永久锁住）
-        m.obs_bump("week_roll")
-        print(f"  [周卷] 已落档：{fn}（收 {len(rows)} 天日记，草稿待终审）")
-    except Exception as e:
-        print(f"  [周卷] 这把没卷成（{e}）")
-
-
-# ── 卡片馆只读接口（9-18 优化批七·#4 后半）：四馆正典 → JSON，给 app 翻卡用 ──
-CARDS_DIR = os.path.join(BASE_DIR, "档案馆", "卡片馆")
-_CARDS_GROUPS = (("姐姐志", "正典_姐姐志.md"), ("小乖志", "正典_小乖志.md"),
-                 ("共同志", "正典_共同志.md"), ("物与地方", "正典_物与地方.md"))
-
-
-def _cards_scan():
-    """扫四馆正典（只读，绝不写）：解析「### [馆-N] 标题 / - 一句话： / - 依据： / - 置信：」
-    → {"ok": True, "count": 总卡数, "groups": [{"key", "count", "cards": [{id,title,fact,
-    source,confidence}]}]}。目录/文件缺=该馆空组（诚实缺席），任何读不动都不炸。"""
-    groups, total = [], 0
-    for key, fn in _CARDS_GROUPS:
-        cards, cur = [], None
-        try:
-            with open(os.path.join(CARDS_DIR, fn), "r", encoding="utf-8") as f:
-                txt = f.read()
-        except OSError:
-            txt = ""            # 缺文件/读不动：空组，诚实缺席
-        for line in txt.splitlines():
-            line = line.strip()
-            mt = re.match(r"^###\s*\[([^\]]+)\]\s*(.*)$", line)
-            if mt:
-                if cur:
-                    cards.append(cur)
-                cur = {"id": mt.group(1).strip(), "title": mt.group(2).strip(),
-                       "fact": "", "source": "", "confidence": ""}
-                continue
-            if cur is None:
-                continue
-            for pref, field in (("- 一句话：", "fact"), ("- 依据：", "source"),
-                                ("- 置信：", "confidence")):
-                if line.startswith(pref):
-                    cur[field] = line[len(pref):].strip()
-        if cur:
-            cards.append(cur)
-        groups.append({"key": key, "count": len(cards), "cards": cards})
-        total += len(cards)
-    return {"ok": True, "count": total, "groups": groups}
-
-
-# 咱家地名表（REPO-01 2026-09-13 外置成数据文件）：正文住同目录 places.json——
-# {"地名": [纬度, 经度, 半径米]}；小乖自己填锚点。文件缺了 = 空表（地名功能诚实缺席，不炸）。
-# 注意：启动时读一次——改 places.json 要重启 server（与 config「现读现生效」不同，申报过）。
-def _load_places():
-    try:
-        with open(os.path.join(BASE_DIR, "places.json"), "r", encoding="utf-8") as f:
-            data = json.load(f)
-        out = {}
-        for name, v in data.items():
-            out[str(name)] = (float(v[0]), float(v[1]), float(v[2]))
-        return out
-    except Exception:
-        return {}
-
-
-PLACES = _load_places()
-
-
-def now_str():
-    """本机本地时间含星期：2026-08-31 09:12 星期日"""
-    weeks = "一二三四五六日"
-    d = datetime.now()
-    return f"{d.strftime('%Y-%m-%d %H:%M')} 星期{weeks[d.weekday()]}"
-
-
-def now_line():
-    return f"现在是 {now_str()}。"
-
-
-def gap_line():
-    """间隔感 v3（9-24 松绑与主权收口批·甲2，家主令）：对齐 Time Anchor 原版理念——
-    核心不是机械报时，而是让「十秒后回来」和「四小时后回来」不被当成同一件事。
-    v2 起按间隔长度分六档给「事实 + 语气分寸」；**v3 收薄成「事实＋边界」**：六档
-    语气分寸（怎么带）交还皮层句与她——判断还她，边界只剩两条（别报数字、别每次
-    都用同一种开场）。**事实句六档一字未动**（time_facts() 只从这里复用事实句）。
-    连着聊（<90 秒）不注入；跨天第一句的"隔夜重逢"语义落在事实句里。查的是库里
-    最后一条，调用时本条还没入库（handle_chat 入库前算）。"""
-    last = m.last_chat_at("小乖")
-    if not last:
-        return "这是他今天第一句开口。"
-    try:
-        dt = datetime.strptime(last, "%Y-%m-%d %H:%M:%S")
-    except ValueError:
-        return ""
-    sec = (datetime.now() - dt).total_seconds()
-    if sec < 90:
-        return ""
-    crossed_day = dt.strftime("%Y-%m-%d") != today_str()
-    if sec < 600:
-        fact = f"他刚离开一小会儿（上一句是 {int(sec // 60)} 分钟前）"
-    elif sec < 7200:
-        fact = f"一小段时间没见（上一句在 {int(sec // 60)} 分钟前）"
-    elif sec < 21600 and not crossed_day:
-        fact = f"他消失了差不多 {int(sec // 3600)} 个小时（半天级别）"
-    elif crossed_day and sec < 86400:
-        fact = f"这是他今天的第一句——上一句还停在 {dt.strftime('%d 日 %H:%M')}，隔了 {int(sec // 3600)} 小时"
-    elif sec < 86400:
-        fact = f"他大半天没出现了（{int(sec // 3600)} 小时）"
-    else:
-        fact = f"他整整 {int(sec // 86400)} 天多没出现了"
-    return f"时间锚：{fact}。别报数字、别每次都用同一种开场。"
-
-
-# ── 时间皮层·刀1（9-23 借鉴双刀批·设计 §三/§五刀1）──
-# 原型：ai-companion-time-anchor v2「时间皮层」——只加一层薄皮层：显著位（跨家日 或 ≥2h）
-# 时，在 late_system 的 gap 之后追加「时间事实块＋皮层句」，让「隔了这么久」更新她对此刻的
-# 理解；不显著／开关关＝一字不加（输出与改造前逐字节一致）。开关 time_cortex（默认开、
-# 现读现生效）。**gap_line() 事实句不动**——time_facts 只从它的输出里复用事实句；
-# 六档语气分寸已由 9-24 松绑批甲2 收薄（原「一字不动」铁律经家主令解除，见 gap_line docstring）。
-# 红线（设计 §四）：不给判断/不编经历/不报数字/不制造持续意识/不按铃——五条全部写进皮层句内；
-# 台账行照 _why 家风只进 _server.log，obs_7d 十键形状不动。
-
-
-def time_facts(now=None):
-    """时间皮层刀1·纯事实：与 gap_line() 同源（now＋库里他上一条 chat），返回 dict／None（查不动）。
-    家日口径写死：crossed_house_day 用「家日对家日」比（house_today_str(dt) vs house_today_str(now)），
-    与日记/交接/日界同一把 4 点尺——不引入第二套「天」（设计 §二口径隐患）；跨家日＝significant。
-    gap_human 复用 gap_line() 的六档事实句（从「时间锚：…」切出；<90s 等无句子场景兜底纯事实句）。"""
-    last = m.last_chat_at("小乖")
-    if not last:
-        return None
-    try:
-        dt = datetime.strptime(last, "%Y-%m-%d %H:%M:%S")
-    except ValueError:
-        return None
-    now = now or datetime.now()
-    gap_s = (now - dt).total_seconds()
-    if gap_s < 0:   # 时钟回拨兜底
-        gap_s = 0.0
-    crossed = m.house_today_str(dt) != m.house_today_str(now)
-    g = gap_line()
-    gap_human = ""
-    if g.startswith("时间锚："):
-        gap_human = g[len("时间锚："):].split("。", 1)[0]
-    if not gap_human:   # gap_line 不给句子（<90s）的场景：兜底纯事实句（不编不猜）
-        gap_human = f"他上一条消息在 {dt.strftime('%m-%d %H:%M')}"
-    return {"gap_s": gap_s, "gap_human": gap_human, "crossed_house_day": crossed,
-            "significant": bool(crossed or gap_s >= 7200),
-            "last_msg_at": last, "now_at": now.strftime("%Y-%m-%d %H:%M")}
-
-
-def _time_cortex_block(now=None):
-    """组装本轮皮层注入块（late_system 的 gap 之后追加）；不显著／time_cortex=false／查不动
-    → ""（一字不加，逐字节回退＝刀1 回滚钥匙）。台账行「[皮层] 浮出（跨日/2h）」只进本地日志。"""
-    try:
-        if not bool(load_config().get("time_cortex", True)):
-            return ""
-        tf = time_facts(now)
-        if not tf or not tf.get("significant"):
-            return ""
-        why = ("跨日+2h" if (tf["crossed_house_day"] and tf["gap_s"] >= 7200)
-               else ("跨日" if tf["crossed_house_day"] else "2h"))
-        print(f"  [皮层] 浮出（{why}）")
-        return ("\n【时间皮层】上面这些是已核实的时间事实（现在是 " + tf["now_at"]
-                + "；" + tf["gap_human"] + "）："
-                "让这次时间确认更新你对此刻的理解——如果隔了这么久之后这件事的含义已经变了"
-                "（他可能刚醒/刚下课/已是深夜/隔了一夜），就让这个理解自然塑造你怎么接话，"
-                "而不是从上一句的句号后面直接续上。怎么理解由你定，怎么用也随你（不用特意提时间）；"
-                "只借事实、不编他这段时间的经历；别报数字照旧；"
-                "你不是一直在等——只是此刻看见了这段时间。")
-    except Exception as e:
-        print(f"  [皮层] 组装失手（不拦链）：{e}")
-        return ""
-
-
-WMO_CN = {
-    0: "晴", 1: "晴间多云", 2: "多云", 3: "阴",
-    45: "雾", 48: "雾",
-    51: "毛毛雨", 53: "毛毛雨", 55: "毛毛雨", 56: "冻毛毛雨", 57: "冻毛毛雨",
-    61: "小雨", 63: "雨", 65: "大雨", 66: "冻雨", 67: "冻雨",
-    71: "小雪", 73: "雪", 75: "大雪", 77: "雪粒",
-    80: "阵雨", 81: "阵雨", 82: "暴雨", 85: "阵雪", 86: "阵雪",
-    95: "雷暴", 96: "雷暴伴冰雹", 99: "雷暴伴冰雹",
-}
-
-
-def weather_for_loc():
-    """Open-Meteo 免 key 查 LAST_LOC 的天气。坐标抹 1 位小数，30 分钟缓存，
-    5 秒超时，任何失败静默返回 None，绝不影响聊天主链路。"""
-    if not LAST_LOC:
-        return None
-    lat = round(LAST_LOC["lat"], 1)
-    lon = round(LAST_LOC["lon"], 1)
-    key = (lat, lon)
-    if WEATHER_CACHE["key"] == key and time.time() - WEATHER_CACHE["at"] < 1800:
-        return WEATHER_CACHE["text"]
-    try:
-        url = (f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
-               f"&current_weather=true")
-        with urllib.request.urlopen(url, timeout=5) as r:
-            cur = json.loads(r.read().decode("utf-8"))["current_weather"]
-        cn = WMO_CN.get(int(cur.get("weathercode", -1)))
-        if cn is None:
-            return None
-        text = f"{cn} {round(float(cur['temperature']))}°C"
-        WEATHER_CACHE.update({"key": key, "at": time.time(), "text": text})
-        return text
-    except Exception:
-        return None
-
-
-def place_for(lat, lon):
-    """咱家地名表：命中半径内返回咱家叫法，否则 None。"""
-    best = None
-    best_d = None
-    for name, (plat, plon, radius) in PLACES.items():
-        dlat = (lat - plat) * 111320.0
-        dlon = (lon - plon) * 111320.0 * math.cos(math.radians(plat))
-        d = (dlat * dlat + dlon * dlon) ** 0.5
-        if d <= radius and (best_d is None or d < best_d):
-            best, best_d = name, d
-    return best
-
-
-# ── 照片落库：photos/ 子文件夹，时间戳+随机串 .jpg ──
-# ── 网络门锁 token（9-23 新门配套·只放静态图）：鸿蒙 Image(url) 加不了自定义头，
-# 公网图片直取必吃前置 Caddy basicauth 401 裂图。约定：图片 URL 带 ?token=<门锁密码
-# 原串>（值在 网络门锁凭证.txt，app 线同源、两端各自读文件）= 等价 Basic 过。
-# 只放 /photos/ /favorites/ 两处静态图；API 一律仍要 Basic 头——不开任何口子。
-GATE_CRED_PATH = os.path.join(BASE_DIR, "网络门锁凭证.txt")
-_GATE_CRED_CACHE = {"mtime": None, "pw": ""}
-
-
-def _gate_password():
-    """从 网络门锁凭证.txt 读门锁密码原串（按 mtime 缓存；读不到=空串=不放行）。
-    格式=正文「密码：<值>」行；文件中没有该行或文件缺失都不炸——只是不放行。"""
-    try:
-        stt = os.stat(GATE_CRED_PATH)
-        if _GATE_CRED_CACHE["mtime"] != stt.st_mtime:
-            pw = ""
-            with open(GATE_CRED_PATH, encoding="utf-8", errors="replace") as f:
-                for ln in f:
-                    ln = ln.strip()
-                    if ln.startswith("密码："):
-                        pw = ln[3:].strip()   # len("密码：") == 3
-                        break
-            _GATE_CRED_CACHE.update({"mtime": stt.st_mtime, "pw": pw})
-        return _GATE_CRED_CACHE["pw"]
-    except OSError:
-        return ""
-
-
-def _image_token_ok(query):
-    """静态图 token 放行判据：?token=<值> 与凭证密码原串恒时比较（compare_digest）。
-    只认 token 一个参数，别的参数原样不碰。缺值/缺凭证/不等 → False。
-    BE3-07（9-23 修复批）约定写死（App 线与服务端同源，别踩）：
-    ① 只认名为 token 的**单个**参数，取第一个值；重复参数=取首个，别的参数一律不管。
-    ② 值按**表单规则**解码（parse_qs）——门锁密码里若含 + 空格 & # % 这类字符，
-       客户端必须整串 URL 编码（encodeURIComponent 口径），否则明文 + 会被解成空格、
-       明明配对却 401。③ 不带 token=原逻辑照走（老门/局域网/浏览器）；带了但对不上=401。"""
-    try:
-        got = (urllib.parse.parse_qs(query or "").get("token") or [""])[0]
-        want = _gate_password()
-        return bool(want) and hmac.compare_digest(got.encode("utf-8"), want.encode("utf-8"))
-    except Exception:
-        return False
-
-
-def save_photo(data_url):
-    """把 dataURL 照片存进 photos/，返回文件名。格式不对抛 ValueError。"""
-    prefix = "data:image/jpeg;base64,"
-    if not isinstance(data_url, str) or not data_url.startswith(prefix):
-        raise ValueError("不是咱家说好的 data:image/jpeg;base64, 格式")
-    raw = base64.b64decode(data_url[len(prefix):], validate=True)
-    os.makedirs(PHOTOS_DIR, exist_ok=True)
-    name = datetime.now().strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:6] + ".jpg"
-    with open(os.path.join(PHOTOS_DIR, name), "wb") as f:
-        f.write(raw)
-    return name
-
-
-def photo_path_or_none(name):
-    """防路径穿越：只认 photos/ 里的纯白 .jpg 文件名，其余一律 None。"""
-    name = urllib.parse.unquote(name).strip().split("?", 1)[0]
-    if not name or name != os.path.basename(name) or not name.lower().endswith(".jpg"):
-        return None
-    path = os.path.realpath(os.path.join(PHOTOS_DIR, name))
-    if os.path.dirname(path) != os.path.realpath(PHOTOS_DIR):
-        return None
-    return path if os.path.isfile(path) else None
-
-
-def favorite_path_or_none(name):
-    """（9-4 自由发挥包）防穿越同款：只认 favorites/ 里的纯白 .jpg，其余一律 None。"""
-    name = urllib.parse.unquote(name).strip().split("?", 1)[0]
-    if not name or name != os.path.basename(name) or not name.lower().endswith(".jpg"):
-        return None
-    path = os.path.realpath(os.path.join(FAVORITES_DIR, name))
-    if os.path.dirname(path) != os.path.realpath(FAVORITES_DIR):
-        return None
-    return path if os.path.isfile(path) else None
-
-
-def favorites_list():
-    """（9-4 自由发挥包）收藏夹照片文件名，旧到新；夹不在=空。"""
-    if not os.path.isdir(FAVORITES_DIR):
-        return []
-    return sorted(f for f in os.listdir(FAVORITES_DIR) if f.lower().endswith(".jpg"))
-
-
-# ── 文件附件落盘（二期 e，工单 9-1-#8）：files/ 子文件夹，时间戳_原文件名 ──
-FILE_OK_EXT = (".txt", ".md", ".log")   # 只收文本件
-FILE_MAX_BYTES = 32768                  # 32KB 全文上限（app 侧先拦，server 再验）
-
-
-def save_file(name, content):
-    """把文本附件存进 files/，返回落盘文件名。格式不对抛 ValueError。"""
-    if not isinstance(name, str) or not name.strip():
-        raise ValueError("附件得有文件名")
-    base = os.path.basename(name.strip())   # 只认裸文件名
-    if not base.lower().endswith(FILE_OK_EXT):
-        raise ValueError("只收 .txt/.md/.log 文本件")
-    if not isinstance(content, str):
-        raise ValueError("附件内容得是文本")
-    raw = content.encode("utf-8")
-    if len(raw) > FILE_MAX_BYTES:
-        raise ValueError("附件超 32KB")
-    os.makedirs(FILES_DIR, exist_ok=True)
-    safe = re.sub(r"[\s/\\：:*?\"<>|〔〕]+", "_", base)[:80]
-    saved = datetime.now().strftime("%Y%m%d_%H%M%S_") + safe
-    with open(os.path.join(FILES_DIR, saved), "wb") as f:
-        f.write(raw)
-    return saved
-
-
-def file_path_or_none(name):
-    """防路径穿越（与照片同款）：只认 files/ 里的白名单后缀文件名，其余一律 None。"""
-    name = urllib.parse.unquote(name).strip().split("?", 1)[0]
-    if not name or name != os.path.basename(name) or not name.lower().endswith(FILE_OK_EXT):
-        return None
-    path = os.path.realpath(os.path.join(FILES_DIR, name))
-    if os.path.dirname(path) != os.path.realpath(FILES_DIR):
-        return None
-    return path if os.path.isfile(path) else None
+# ── 静态资源 / 门锁 token / 附件：正典已搬至 srv_static.py（服务器拆分 P2）──
+from srv_static import (GATE_CRED_PATH, _GATE_CRED_CACHE, _gate_password, _image_token_ok,
+                        save_photo, photo_path_or_none, favorite_path_or_none, favorites_list,
+                        FILE_OK_EXT, FILE_MAX_BYTES, save_file, file_path_or_none)
 
 
 # ── 日记总结：handle_goodnight 与跨天自动交接共用同一套 ──
@@ -6074,7 +4578,7 @@ def summarize_session_to_diary(session, day_str):
         messages.append({"role": "user", "content":
             "今天你自己塞出去的纸条（你主动递给他的想念，也是今天的一部分）：\n" + lines})
     messages.append({"role": "user", "content": summary_req})
-    raw = call_deepseek(cfg, messages)
+    raw = call_deepseek(cfg, messages, scene="memory.summarize")
     if raw.startswith("（姐姐掉线了"):
         # 9-4 鲁棒性：掉线文案不当日记原文写——标注一句，原话都在 chats 里没丢
         return m.add_day(day_str, None, "今天",
@@ -6305,261 +4809,10 @@ def _archive_in_bounds(rp):
     return False
 
 
-# ── 共读导入·格式半边（9-23 共读格式批·服务端，家主令「共读支持 txt 以外格式」）──
-# 契约（App 半边已按此冻结）：新字段 {"title","author","file_name","file_b64"}——
-# file_name=原文件名带后缀、file_b64=原始字节 base64；epub/html 走这条提字路，
-# txt/md 仍走老 content 路（老路一字不动，保旧客户端降级）。纯标准库
-# （zipfile + html.parser + xml.etree）；书是导入物不进正典，落盘仍是 files/books/book_{id}.txt。
-
-
-class _BookBad(Exception):
-    """共读导入的「人话 400」：message 原样回给 app，不吐内部细节。"""
-
-
-class _BookHTML(HTMLParser):
-    """HTML/XHTML → 纯文本：script/style/head 整段丢（不吞正文里的同名词）；
-    块级标签与 br 转换行；实体走 convert_charrefs（=html.unescape 同源）；空白收敛归 _book_tidy。"""
-
-    _BLOCK = {"p", "div", "br", "h1", "h2", "h3", "h4", "h5", "h6", "li", "ul", "ol", "tr",
-              "td", "th", "table", "section", "article", "header", "footer", "figure",
-              "figcaption", "blockquote", "pre", "hr", "nav", "aside", "main", "body", "html"}
-    # 只列「有闭合标签」的整段丢：meta/link 这类空元素没有结束标签，进了这名单会把
-    # _skip 永久顶高、把整篇正文吞掉（9-23 首跑 T3a 实案）。
-    _SKIP = {"script", "style", "head"}
-
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.parts = []
-        self._skip = 0
-
-    def handle_starttag(self, tag, attrs):
-        if tag in self._SKIP:
-            self._skip += 1
-        elif tag in self._BLOCK:
-            self.parts.append("\n")
-
-    def handle_startendtag(self, tag, attrs):
-        if tag in self._BLOCK:
-            self.parts.append("\n")
-
-    def handle_endtag(self, tag):
-        if tag in self._SKIP and self._skip:
-            self._skip -= 1
-        elif tag in self._BLOCK:
-            self.parts.append("\n")
-
-    def handle_data(self, data):
-        if not self._skip and data:
-            self.parts.append(data)
-
-    def text(self):
-        return "".join(self.parts)
-
-
-def _book_tidy(raw):
-    """空白收敛（App 端按空行切段：Index.ets split(/\\n\\s*\\n/)——段落之间留一个空行）：
-    行尾去空、3+ 换行压成空行、整卷去首尾空。"""
-    txt = (raw or "").replace("\r\n", "\n").replace("\r", "\n")
-    txt = "\n".join(ln.rstrip() for ln in txt.split("\n"))
-    return re.sub(r"\n{3,}", "\n\n", txt).strip()
-
-
-def _book_decode(blob):
-    """字节 → 文本：utf-8 先试，失败退 gbk，再失败 replace（宁要乱码不丢卷）。"""
-    for enc in ("utf-8", "gbk"):
-        try:
-            return blob.decode(enc)
-        except UnicodeDecodeError:
-            continue
-    return blob.decode("utf-8", errors="replace")
-
-
-def _book_html_to_text(blob):
-    """HTML/XHTML 字节 → 纯文本（剥标签 + 收敛）。解析器提不出字时退回正则粗剥
-    （脏卷如没闭合的 <script> 会把解析器卡在 skip 态；退路再救一把，救不出仍交上层判 400）。"""
-    src = _book_decode(blob)
-    try:
-        p = _BookHTML()
-        p.feed(src)
-        p.close()
-        out = _book_tidy(p.text())
-    except Exception:
-        out = ""
-    if out:
-        return out
-    src2 = re.sub(r"(?is)<(script|style|head)\b[^>]*>.*?</\1\s*>", " ", src)
-    return _book_tidy(re.sub(r"<[^>]*>", " ", src2))
-
-
-def _epub_zip_path(opf_dir, href):
-    """zip 内部相对路径归一（epub href 归一到 zip 根的 posix 路径；先过 URL 解码）。"""
-    rel = (opf_dir + "/" + urllib.parse.unquote(href or "")) if opf_dir else urllib.parse.unquote(href or "")
-    out = []
-    for seg in rel.split("/"):
-        if seg in ("", "."):
-            continue
-        if seg == "..":
-            if out:
-                out.pop()
-            continue
-        out.append(seg)
-    return "/".join(out)
-
-
-def _epub_to_text(blob):
-    """epub（zip）→ (书名, 作者, 正文)：container.xml → OPF（dc:title/dc:creator + spine 顺序）→
-    逐章 XHTML 提字（插图/封面页自然提不出字=略过）。带锁（META-INF/encryption.xml）或
-    整本提不出字 → _BookBad 人话。"""
-    try:
-        zf = zipfile.ZipFile(io.BytesIO(blob))
-        names = zf.namelist()
-    except (zipfile.BadZipFile, OSError):
-        raise _BookBad("这本书的文件像坏掉了（不是能打开的 epub）——换个版本试试")
-    if "META-INF/encryption.xml" in names:
-        raise _BookBad("这本还带着锁，打不开——换个无 DRM 的版本试试")
-    opf_path = ""
-    try:
-        cx = zf.read("META-INF/container.xml").decode("utf-8", errors="replace")
-    except KeyError:
-        cx = ""
-    m0 = (re.search(r'full-path\s*=\s*"([^"]+)"', cx)
-          or re.search(r"full-path\s*=\s*'([^']+)'", cx))
-    if m0:
-        opf_path = m0.group(1)
-    if not opf_path:
-        for n in names:
-            if n.lower().endswith(".opf"):
-                opf_path = n
-                break
-    title = author = ""
-    order = []
-    opf_dir = opf_path.rsplit("/", 1)[0] if "/" in opf_path else ""
-    try:
-        opf_xml = zf.read(opf_path) if opf_path else b""
-    except KeyError:
-        opf_xml = b""
-    if opf_xml:
-        try:
-            root = ET.fromstring(opf_xml)
-            id2href = {}
-            for el in root.iter():
-                tag = el.tag.rsplit("}", 1)[-1].lower()
-                if tag == "title" and not title and (el.text or "").strip():
-                    title = el.text.strip()[:60]
-                elif tag == "creator" and not author and (el.text or "").strip():
-                    author = el.text.strip()[:60]
-                elif tag == "item":
-                    _id, _href = el.get("id"), el.get("href")
-                    if _id and _href:
-                        id2href[_id] = _href
-            for el in root.iter():
-                if el.tag.rsplit("}", 1)[-1].lower() == "itemref":
-                    _href = id2href.get(el.get("idref"))
-                    if _href:
-                        order.append(_href)
-        except ET.ParseError:
-            src = opf_xml.decode("utf-8", errors="replace")   # 脏 OPF：正则退路
-            m1 = re.search(r"<dc:title[^>]*>(.*?)</dc:title>", src, re.S | re.I)
-            m2 = re.search(r"<dc:creator[^>]*>(.*?)</dc:creator>", src, re.S | re.I)
-            if m1 and not title:
-                title = re.sub(r"<[^>]*>", "", m1.group(1)).strip()[:60]
-            if m2 and not author:
-                author = re.sub(r"<[^>]*>", "", m2.group(1)).strip()[:60]
-    if not order:   # 没 OPF 或没 spine：按名字序把整包 XHTML 当章（保底能读）
-        order = sorted(n for n in names if n.lower().endswith((".xhtml", ".html", ".htm")))
-    seen = set()
-    chapters = []
-    for href in order:
-        p = _epub_zip_path(opf_dir, href)
-        if not p or p in seen:
-            continue
-        seen.add(p)
-        try:
-            data = zf.read(p)
-        except KeyError:
-            continue
-        t = _book_html_to_text(data)
-        if t:
-            chapters.append(t)
-    zf.close()
-    if not chapters:
-        raise _BookBad("这本还带着锁，打不开——换个无 DRM 的版本试试")
-    return title, author, _book_tidy("\n\n".join(chapters))
-
-
-def _book_import_bytes(data, fname_in, fb64):
-    """共读导入·字节路：epub/html 原始字节 → 文本 → files/books/book_{id}.txt。
-    返回 (http_code, 响应体)；人话 400 全走 _BookBad。老 content 路不经过这里。"""
-    btitle = str(data.get("title") or "").strip()[:60]
-    bauthor = str(data.get("author") or "").strip()[:60]
-    suffix = os.path.splitext(fname_in)[1].lower()
-    if suffix not in (".epub", ".html", ".htm"):
-        return 400, {"ok": False, "error": "这本书的格式还认不得（支持 epub/txt/md/html）"}
-    if not fb64:
-        return 400, {"ok": False, "error": "文件没读全，重传一下"}
-    try:
-        blob = base64.b64decode(fb64 + "=" * (-len(fb64) % 4), validate=True)
-    except Exception:
-        return 400, {"ok": False, "error": "文件没读全，重传一下"}
-    if len(blob) > 8 * 1024 * 1024:
-        return 400, {"ok": False, "error": "这本有点厚（>8MB），先劈开或换个版本"}
-    try:
-        if suffix == ".epub":
-            opf_title, opf_author, text = _epub_to_text(blob)
-        else:
-            opf_title, opf_author, text = "", "", _book_html_to_text(blob)
-    except _BookBad as e:
-        return 400, {"ok": False, "error": str(e)}
-    if not (text or "").strip():
-        return 400, {"ok": False, "error": "这本提不出字来（可能是扫描版或加密的）——换个版本试试"}
-    if len(text.encode("utf-8")) > 2 * 1024 * 1024:
-        return 400, {"ok": False, "error": "这本有点厚（提字后>2MB），先劈开或换个版本"}
-    final_title = opf_title or btitle
-    final_author = opf_author or bauthor
-    if not final_title:
-        return 400, {"ok": False, "error": "书名和内容都得有"}
-    bid = m.add_book(final_title, final_author)
-    bookdir = os.path.join(BASE_DIR, "files", "books")
-    os.makedirs(bookdir, exist_ok=True)
-    fname = f"book_{bid}.txt"
-    with open(os.path.join(bookdir, fname), "w", encoding="utf-8") as f:
-        f.write(text)
-    m.set_book_file(bid, fname)
-    print(f"  [共读] 导入《{final_title}》（{suffix}，提字 {len(text)} 字符，files/books/{fname}）")
-    return 200, {"ok": True, "id": bid}
-
-
-# ── Latent 拒绝日志＋限速（9-23 小刀三连·刀3；借鉴 oliscatt/Latent-memory「拒绝日志格式」）──
-# 四条：①4xx/5xx 各记一行「[拒绝] 状态码 原因 方法 路径 src=IP」；②路径剥 query（防 token
-# 泄漏）、绝不记请求体/token；③同 IP 每分钟逐条最多 _REJECT_LOG_MAX 条，超出压制并明说——
-# 首条即报、此后每满 _REJECT_REPORT_STEP 条补一行小结（K＝报时累计压制数，可核；行数上界
-# ≈ 上限＋K/100，防日志被刷爆）；④正常 2xx 请求零新增输出。只进本地日志，obs 形状不动。
-_REJECT_LOG_MAX = 30        # 同 IP 每分钟逐条上限（Latent「每分钟上限」）
-_REJECT_REPORT_STEP = 100   # 压制期每满 N 条补一行小结（=100 时行数 ≈ 上限 + 1%；测试对账见报告）
-_REJECT_STATE = {}          # {(ip, "YYYY-MM-DD HH:MM"): [记数, 压制数]}——过窗自动重建
-_REJECT_LOCK = threading.Lock()
-
-
-def _reject_line(ip, code, reason, method, path, now=None):
-    """拒绝日志限速器：返回该落的行（""＝本分钟静默被压制）。纯记账纯函数（状态在
-    _REJECT_STATE），不写流、不抛——测试可注入 now 直接对账节奏。"""
-    minute = (now or datetime.now()).strftime("%Y-%m-%d %H:%M")
-    key = (str(ip), minute)
-    line = ""
-    with _REJECT_LOCK:
-        for k in [k for k in _REJECT_STATE if k[1] != minute]:   # 过窗旧桶清掉（防字典长胖）
-            _REJECT_STATE.pop(k, None)
-        n, sup = _REJECT_STATE.get(key, (0, 0))
-        n += 1
-        if n <= _REJECT_LOG_MAX:
-            line = f"[拒绝] {code} {reason} {method} {path} src={ip}"
-        else:
-            sup += 1
-            if sup == 1 or sup % _REJECT_REPORT_STEP == 0:
-                line = (f"[拒绝] {code} {reason} {method} {path} src={ip}"
-                        f"（本分钟已压制 {sup} 条）")
-        _REJECT_STATE[key] = (n, sup)
-    return line
+# ── 共读解析 / 拒绝日志：正典已搬至 srv_books.py（服务器拆分 P2）──
+from srv_books import (_BookBad, _BookHTML, _book_tidy, _book_decode, _book_html_to_text,
+                       _epub_to_text, _book_import_bytes, _REJECT_LOG_MAX, _REJECT_REPORT_STEP,
+                       _REJECT_STATE, _REJECT_LOCK, _reject_line)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -6760,6 +5013,11 @@ class Handler(BaseHTTPRequestHandler):
                 # MEM-C 可观测（只加不改）：向量层账目——嵌了多少条、队里还欠多少。
                 # 「如果你看不见 agent 记住了什么，就没法 debug 它为什么忘了。」
                 "mem_vectors": _mem_counts(),
+                # Garden 可观测（9-17 夜·家主令「做状态栏」）：耳朵在不在岗 + 今日园子动静。
+                "garden_bridge": _bridge_running(),
+                "garden_today": _garden_count_today(),
+                # 散步段（9-23 新门配套·只加不改）：三闸现值只读投影——下次散步倒计时/今日次数。
+                "garden_walk": _garden_walk_snapshot(),
                 # 输入留痕可视化（9-18 优化批一）：最近一条来信指纹，手机即可对账。
                 "last_letter": _last_letter_info(),
                 # 观测补格（9-18 第三批·第二波）：对账闸/假调用/检索 近7天战绩，只报事实。
@@ -7255,6 +5513,16 @@ class Handler(BaseHTTPRequestHandler):
                                     json.dumps(wevidence or {}, ensure_ascii=False))
             print(f"  [Garden] 家主投递事件 #{wid}")
             self._send_json({"ok": True, "id": wid})
+        elif self.path == "/api/garden/bridge/up":
+            # 拉起 Garden 耳朵（9-18 优化批二·「没在岗能一键拉起」）：调既有 _ensure_bridge。
+            # 自测模式（ZANJIA_TEST）演练不发车；桥有 1 小时失败冷静期（防硬重试）——期内拉不响属正常。
+            if os.environ.get("ZANJIA_TEST"):
+                return self._send_json({"ok": False, "running": False,
+                                        "msg": "自测模式：演练不发车（不拉桥）"})
+            okb = _ensure_bridge()
+            self._send_json({"ok": okb, "running": _bridge_running(),
+                             "msg": "耳朵拉起来了" if okb
+                             else "这次没拉动（可能在上次失败的冷静期里，看服务器日志）"})
         elif self.path == "/api/schedule":
             # CAL-01（9-13）：手机上报他今天的日程 {"date","items":[{"time","title"}]}。
             # 只收日期+标题+时间（家训：只放必要信息）；空 items = 今天没日程，清旧账。
@@ -7476,6 +5744,8 @@ class Handler(BaseHTTPRequestHandler):
                 "favorite_photo 收照片、pin_wall 钉/改/撤门牌、write_archive 往全档案续页添一笔、"
                 "open_thread / close_thread 挂线收线、write_her_words 重写宣言、approve_report 图管员落章、"
                 "start_book / annotate_book 共读开卷批注；"
+                "园子十四件 garden_*——园子和雾潮群岛是对外的公开地方（说话=公开发言，想逛想说是可以的，"
+                "但不许带家里的私事）。"
                 "规则：工具只认真正的工具调用（tool_calls）——正文里写工具名只是文字，什么都不会发生。"
                 "先办后说：回执没落回手里，只许说「我去寄」「我去办」；回执到了才许说「寄了」「办了」——"
                 "说了不算，账本说了算。"
@@ -7624,6 +5894,16 @@ class Handler(BaseHTTPRequestHandler):
                     "close_thread": r"(线收了|收线了，|把线收好)",
                     "add_checkin_item": r"(打卡项加好了|已加入打卡项)",
                     "archive_checkin_item": r"(打卡项已归档|归档了那项打卡)",
+                    # 园子七件写操作（9-14 凌晨补，家主拍板「补吧」——初曦事故：update_profile 真调了
+                    # 但 human_name 漏传还谎称查过，词表原来只认 8 类老家伙，园子家族全是盲区）。
+                    # regex 只负责提名宁滥勿缺，定罪归 judge。
+                    "garden_update_profile": r"(名片.{0,2}改好了|名片挂上了|名字挂上了|改名了|简介.{0,4}(更新|换好|落上|落好|改好)|头像换了|装饰换好了|落上了|落好了|落好啦)",
+                    "garden_decorate_avatar": r"(装饰.{0,4}(换好|挂好|弄好)|装点好了|装饰好了|落好啦|满配|戴上了|换上.{0,4}装饰)",
+                    "garden_create_thread": r"(发帖了|帖子发了|帖子挂上了|园(里|子)发了帖)",
+                    "garden_reply": r"(回帖了|回了帖|帖子回了)",
+                    "garden_interact": r"(点赞了|点了赞|关注了)",
+                    "garden_nostos_start": r"(登岛了(?!吗)|进群岛了(?!吗)|开始.{0,4}岛上生活|群岛.{0,4}开始了)",
+                    "garden_nostos_act": r"(岛上做了.{0,4}决定|群岛.{0,10}决定)",
                 }
                 claimed_missing = []
                 for tool, pattern in CLAIM_MAP.items():
@@ -7916,6 +6196,9 @@ def main():
     # 嵌入端点随家通电（9-14 家主拍板折中方案）：没起就由 server 亲手拉起 llama-server
     print(f"  嵌入端点：{_ensure_llama_server()}（:{LLAMA_PORT}）")
     print(f"  网络门：{_ensure_tunnel()}（反向隧道 :18024）")
+    # Garden 桥按它家硬规矩不自动拉起（fail-closed）——但通电横幅必须看得见它
+    print("  Garden 桥：在岗（耳朵支着）" if _bridge_running()
+          else "  Garden 桥：未挂——跑 ~/garden-run.sh（它家规矩：每次连接亲手按）")
     print("  Ctrl+C 收工")
     print("=" * 50)
     try:
@@ -7924,7 +6207,7 @@ def main():
         print("\n收工。晚安，小乖。")
 
 
-# ── 嵌入端点随家通电（9-14 家主拍板折中方案）──
+# ── 嵌入端点随家通电 + Garden 桥在岗检查（9-14 家主拍板折中方案）──
 LLAMA_EXE = os.path.expanduser("~/llama.cpp/build/bin/llama-server")
 # T2-01 切正（9-18）：qwen3-embedding-0.6B@11435 → harrier-oss-v1-0.6B@11436
 # 回退备份：LLAMA_MODEL = ".../Qwen3-Embedding-0.6B-Q8_0.gguf"，端口回 11435，
@@ -7942,20 +6225,53 @@ def _llama_probe():
         return False
 
 
+def _spawn_detached(cmd, logf):
+    """跨平台「脱离父进程」启动（9-25：Linux 用 setsid，Windows 无 setsid 用 creationflags）。"""
+    import subprocess
+    kw = {"stdout": logf, "stderr": logf}
+    if os.name == "nt":
+        kw["creationflags"] = 0x00000208   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    else:
+        kw["start_new_session"] = True
+    return subprocess.Popen(cmd, **kw)
+
+
+def _llama_paths():
+    """9-25 跨平台：嵌入路径 = config（llama_exe/llama_model，可选）→ 平台默认 → 兜底。
+    共享盘双系统：config 里别写死绝对路径（两边打架）——不写就各按各的平台默认找。"""
+    cfg = load_config()
+    exe = str(cfg.get("llama_exe") or "")
+    model = str(cfg.get("llama_model") or "")
+    if not exe:
+        if os.name == "nt":
+            import shutil
+            _c1 = os.path.expanduser("~/llama.cpp/build/bin/llama-server.exe")
+            exe = _c1 if os.path.exists(_c1) else (shutil.which("llama-server.exe") or "")
+        else:
+            exe = LLAMA_EXE
+    if not model:
+        if os.name == "nt":
+            _c2 = [os.path.expanduser("~/llama.cpp/models/harrier-oss-v1-0.6b-q8_0.gguf"),
+                   os.path.join(BASE_DIR, "models", "harrier-oss-v1-0.6b-q8_0.gguf")]
+            model = next((p for p in _c2 if os.path.exists(p)), "")
+        else:
+            model = LLAMA_MODEL
+    return exe, model
+
+
 def _ensure_llama_server():
     """通电时看一眼嵌入端点：没起就由 server 亲手拉起（不依赖 crontab/机器重启）。
     失败绝不拦通电——嵌入层诚实缺席，照旧走 FTS。返回给横幅的一句话。"""
-    import subprocess
     if _llama_probe():
         return "已在跑"
-    if not (os.path.exists(LLAMA_EXE) and os.path.exists(LLAMA_MODEL)):
+    _exe, _model = _llama_paths()
+    if not (_exe and _model and os.path.exists(_exe) and os.path.exists(_model)):
         return "未找到二进制/模型（路径不对，嵌入层诚实缺席）"
     try:
         logf = open(os.path.expanduser("~/llama_embed.log"), "a")
-        subprocess.Popen([LLAMA_EXE, "-m", LLAMA_MODEL, "--embeddings",
-                          "--port", LLAMA_PORT, "--host", "127.0.0.1",
-                          "--ctx-size", "2048", "-ngl", "99"],
-                         stdout=logf, stderr=logf, start_new_session=True)
+        _spawn_detached([_exe, "-m", _model, "--embeddings",
+                         "--port", LLAMA_PORT, "--host", "127.0.0.1",
+                         "--ctx-size", "2048", "-ngl", "99"], logf)
         for _ in range(20):   # 最多陪它等 10 秒模型加载
             time.sleep(0.5)
             if _llama_probe():
@@ -7966,12 +6282,22 @@ def _ensure_llama_server():
 
 
 # ── 反向隧道随家通电（9-23 网络改造②·家主拍板「和 server 一起起」）──
+# 9-25 跨平台批：优先 Python 版 zanjia_tunnel.py（Linux/Windows 通用·心跳探针）；
+# 旧 ~/zanjia-tunnel.sh（bash+pgrep）保留当后备（POSIX 仍可探测到）。
 TUNNEL_SCRIPT = os.path.expanduser("~/zanjia-tunnel.sh")
+TUNNEL_PY = os.path.join(BASE_DIR, "zanjia_tunnel.py")
 TUNNEL_LOG = os.path.expanduser("~/zanjia-tunnel.log")
+TUNNEL_HEARTBEAT = os.path.expanduser("~/.zanjia_tunnel_heartbeat")
 
 
 def _tunnel_probe():
-    """本机有没有在跑隧道保活循环（zanjia-tunnel.sh）——活着返回 True。"""
+    """本机有没有在跑隧道保活——① 心跳文件新鲜（跨平台·新版）或 ② 旧 bash 进程在（pgrep·仅 POSIX）。"""
+    try:
+        if os.path.exists(TUNNEL_HEARTBEAT) and \
+                (time.time() - os.path.getmtime(TUNNEL_HEARTBEAT)) < 60:
+            return True
+    except Exception:
+        pass
     import subprocess
     try:
         r = subprocess.run(["pgrep", "-f", "zanjia-tunnel.sh"],
@@ -7985,17 +6311,20 @@ def _tunnel_probe():
 def _ensure_tunnel():
     """通电时看一眼反向隧道（外网门）：没起就由 server 亲手拉起（和 llama 同款自愈）。
     失败绝不拦通电——外网门诚实缺席，旧门/局域网照常。返回给横幅的一句话。"""
-    import subprocess
     if os.environ.get("ZANJIA_TEST"):
         return "沙盘模式：不动真隧道"
     if _tunnel_probe():
         return "已在跑"
-    if not os.path.exists(TUNNEL_SCRIPT):
-        return "未找到脚本（~/zanjia-tunnel.sh）"
+    # 9-25 跨平台：优先 Python 版（Linux/Windows 通用）；旧 bash 保留当后备
+    if os.path.exists(TUNNEL_PY):
+        launch = [sys.executable, TUNNEL_PY]
+    elif os.path.exists(TUNNEL_SCRIPT):
+        launch = ["bash", TUNNEL_SCRIPT]
+    else:
+        return "未找到脚本（zanjia_tunnel.py / ~/zanjia-tunnel.sh）"
     try:
         logf = open(TUNNEL_LOG, "a")
-        subprocess.Popen(["bash", TUNNEL_SCRIPT], stdout=logf, stderr=logf,
-                         start_new_session=True)
+        _spawn_detached(launch, logf)
         time.sleep(2.5)   # 陪它把 ssh 拉起来
         if _tunnel_probe():
             return "已随家通电"
@@ -8003,6 +6332,9 @@ def _ensure_tunnel():
     except Exception as e:
         return f"拉起失败（{e}）——外网门诚实缺席"
 
+
+# （9-17 夜·消息防线包：此处曾有一份重复的 _bridge_running 定义——python 后定义会覆盖
+#  Garden 区块里那份，两版容易漂移；已删，只留 _ensure_bridge 旁边的一份。）
 
 if __name__ == "__main__":
     main()
