@@ -13,6 +13,7 @@ v1 来源（攒）：
   话头 —— 昨天没说完的挂念弧拍子（跨天延续——以前天一亮就丢）
   已说 —— 实际发出的信/念叨入簿（旧通道产物；回没回交给 settle 结算）
 状态链：待说 → 已说 → 已回；（收着＝留给自己·字段预留未启用）
+  上岗另有一态『已提』＝只递到她眼前、话没说出口：他之后来过了 → 还回『待说』（她忍住的话不当作说过了）。
 
 表 huatou：id / ts / day / kind / text / status / src_key(唯一·去重) / said_at / closed_at
 开关：outreach_shadow（默认 true）/ outreach_unified（总闸·默认 false·切换用）/ outreach_chance（每跳挑件概率）
@@ -197,10 +198,15 @@ def collect(now=None):
 
 
 def settle(now=None):
-    """回音结算：『已说』（真发出）与『已提』（上岗后递到她眼前）的条目，他之后说过话 → 已回
-    （没回应的跨天挂着）。两条状态分开观测——「提过」与「真说了」不混账。返回结算条数。"""
+    """回音结算：**『已说』**（真发出）的条目，他之后说过话 → 已回（没回应的跨天挂着）。
+
+    9-26 审计修（家主令「她忍住的话不应该一直憋着」）：**『已提』**（只递到她眼前、话没说出口）
+    的条目，他之后说过话 → 还回『待说』，不算已回——她只是看见了那件事，并没有说出去。
+    原写法把两条一起记『已回』＝簿子悄悄漏干（她忍住的那些，一觉醒来就当作"说过了"）。
+    两条状态分开记账：「提过」不冒充「真说了」，也不冒充「回音到了」。返回结算（已回）条数。"""
     now = now or datetime.now()
     closed = 0
+    requeued = 0
     try:
         con = _conn()
         row = con.execute(
@@ -210,15 +216,23 @@ def settle(now=None):
             con.close()
             return 0
         rows = con.execute(
-            "SELECT id, text, said_at FROM huatou WHERE status IN ('已说','已提')").fetchall()
-        for rid, txt, said_at in rows:
-            if said_at and his_last > str(said_at):
+            "SELECT id, text, said_at, status FROM huatou WHERE status IN ('已说','已提')").fetchall()
+        for rid, txt, said_at, st in rows:
+            if not (said_at and his_last > str(said_at)):
+                continue
+            if st == "已说":
                 con.execute("UPDATE huatou SET status='已回', closed_at=? WHERE id=?",
                             (now.strftime("%F %T"), rid))
                 closed += 1
                 _log(f"[{now:%F %T}] 回音到 → #{rid} 已回：{str(txt)[:42]}")
+            else:
+                con.execute("UPDATE huatou SET status='待说', said_at=NULL WHERE id=?", (rid,))
+                requeued += 1
+                _log(f"[{now:%F %T}] 她忍住没说出口 → #{rid} 还回待说：{str(txt)[:42]}")
         con.commit()
         con.close()
+        if requeued:
+            print(f"  [话头簿] 忍住的 {requeued} 件还回待说（他没回应的那些，不当作说过了）")
     except Exception:
         pass
     return closed
@@ -249,6 +263,47 @@ def take_huatou(now=None):
         return {"id": rid, "kind": kind, "text": text}
     except Exception:
         return None
+
+
+def take_huatou_for_send(now=None):
+    """真发出口（OUTREACH-02，9-26）：从『待说』挑一件，**标『已说』**（与『已提』分开——
+    这回是真说出去了，不是只递到眼前），供 _outreach_say_once 生成一句话发出去。
+    开关同一个 outreach_send（在 server 侧判）。返回 dict|None；fail-open。"""
+    now = now or datetime.now()
+    try:
+        con = _conn()
+        rows = con.execute(
+            "SELECT id, ts, kind, text FROM huatou WHERE status='待说' ORDER BY id").fetchall()
+        if not rows:
+            con.close()
+            return None
+        rid, ts, kind, text = random.choice(rows[:5])
+        con.execute("UPDATE huatou SET status='已说', said_at=? WHERE id=?",
+                    (now.strftime("%F %T"), rid))
+        con.commit()
+        con.close()
+        _log(f"[{now:%F %T}] 真说出去了 → #{rid}〔{kind}〕{text[:60]}")
+        return {"id": rid, "kind": kind, "text": text}
+    except Exception:
+        return None
+
+
+def unmark_sent(rid, now=None):
+    """把取走待发的话头还回『待说』（生成失败时不白丢一条）。fail-open。
+    只认『已说』——已经回音到的（已回）拽不回来。回执照实：真还回去了才 True（9-26 审计修）。"""
+    try:
+        con = _conn()
+        cur = con.execute(
+            "UPDATE huatou SET status='待说', said_at=NULL WHERE id=? AND status='已说'",
+            (rid,))
+        n = cur.rowcount or 0
+        con.commit()
+        con.close()
+        _log(f"[{(now or datetime.now()):%F %T}]"
+             + (f" 生成失败 → #{rid} 还回待说" if n else f" 还回待说不成立（#{rid} 已非『已说』）"))
+        return n == 1
+    except Exception:
+        return False
 
 
 def shadow_pick(now=None, note=""):

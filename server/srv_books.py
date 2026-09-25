@@ -210,7 +210,7 @@ def _book_import_bytes(data, fname_in, fb64):
     bauthor = str(data.get("author") or "").strip()[:60]
     suffix = os.path.splitext(fname_in)[1].lower()
     if suffix not in (".epub", ".html", ".htm"):
-        return 400, {"ok": False, "error": "这本书的格式还认不得（支持 epub/txt/md/html）"}
+        return 400, {"ok": False, "error": "这本书的格式还认不得（传文件只收 epub/html；txt/md 走粘文本）"}
     if not fb64:
         return 400, {"ok": False, "error": "文件没读全，重传一下"}
     try:

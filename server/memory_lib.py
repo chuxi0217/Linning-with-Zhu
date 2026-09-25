@@ -3282,14 +3282,22 @@ def count_traces_today(ending):
     return n
 
 
-def find_days(keyword="", date=""):
+def find_days(keyword="", date="", limit=30):
     """
     查日子。
     - 传 date：精确查某天
     - 传 keyword：标题/正文/心情模糊搜索
-    - 都不传：返回最近30条
+    - 都不传：返回最近 limit 条（默认 30；limit<=0 = 不设上限）
+    limit 显式化（9-26 审计修）：原「无参只回最近 30 条」是暗桩——周卷收编一周日记、
+    图书管理员取最近 14 天都靠它兜着，一旦某天多篇（同日 append）撑过 30 条，
+    窗内最早几天会被静默截掉。要「全窗」的调用方现在显式传 limit=0。
     返回 list of tuple: (id, date, day_no, title, content, mood)
     """
+    try:
+        lim = int(limit)
+    except (TypeError, ValueError):
+        lim = 30
+    tail = "" if lim <= 0 else " LIMIT %d" % lim
     conn = _conn()
     c = conn.cursor()
     if date:
@@ -3302,13 +3310,12 @@ def find_days(keyword="", date=""):
         c.execute('''
             SELECT id, date, day_no, title, content, mood
             FROM days WHERE title LIKE ? OR content LIKE ? OR mood LIKE ?
-            ORDER BY id DESC
-        ''', (like, like, like))
+            ORDER BY id DESC''' + tail,
+            (like, like, like))
     else:
         c.execute('''
             SELECT id, date, day_no, title, content, mood
-            FROM days ORDER BY date DESC, id DESC LIMIT 30
-        ''')
+            FROM days ORDER BY date DESC, id DESC''' + tail)
     rows = c.fetchall()
     conn.close()
     return rows

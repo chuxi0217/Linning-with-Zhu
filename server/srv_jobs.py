@@ -179,7 +179,7 @@ def _week_roll_pack(now=None):
         today = datetime.strptime(m.house_today_str(now), "%Y-%m-%d")
         end = (today - timedelta(days=1)).strftime("%Y-%m-%d")     # 昨天
         start = (today - timedelta(days=7)).strftime("%Y-%m-%d")   # 起=前 7 天，共 7 天
-        rows = [r for r in m.find_days() if start <= r[1] <= end]
+        rows = [r for r in m.find_days(limit=0) if start <= r[1] <= end]   # 9-26 审计修：显式全量，别让默认 30 条截掉窗内最早几天
         rows.sort(key=lambda r: (r[1], r[0]))   # 日期正序；同日按 id 正序（收编顺序）
         if not rows:
             print(f"  [周卷] 这一周（{start} → {end}）没有日记，诚实缺席，不落档")

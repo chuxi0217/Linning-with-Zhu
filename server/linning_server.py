@@ -1270,7 +1270,7 @@ def build_system_prompt():
 
     # 最近 7 天日记（2026-09-10 提示词瘦身，家主令「都动工」）：改摘要——正文前 120 字，
     # 全文随 search_diary/search_memory 查（自动检索上线后有兜底，不再怕漏）。
-    days = m.find_days()[:7]
+    days = m.find_days(limit=7)
     if days:
         parts.append("\n【最近的日记】（近 7 天摘要；全文随用随查）")
         for _id, d, dn, title, content, mood in days:
@@ -1302,7 +1302,7 @@ def build_system_prompt():
         if _bs:
             parts.append("\n【共读】你们的书架（批注 annotate_book，翻他的墨迹 read_book_marks）：")
             for b in _bs:
-                parts.append(f"- 《{b[1]}》{b[2] or ''}（{b[3]}，{b[5]} 条批注）")
+                parts.append(f"- 《{b[1]}》{b[2] or ''}（{b[3]}，{b[8]} 条批注）")
             _latest = m.get_book_marks(_bs[0][0], 3)
             for k in _latest:
                 parts.append(f"  · {k[1]}{(' @' + k[2]) if k[2] else ''}：{k[3][:80]}")
@@ -1318,13 +1318,23 @@ def build_system_prompt():
     except Exception:
         pass   # 收信缺席不拦开场
 
-    # 波索斯刀3 注入（9-24 转正·家主令「都上岗」）：想念只给事实句，数值永不进模型
+    # 波索斯（9-24 转正 ＋ 9-26 定位修正·家主定案「L 是刻度，不是扳机」）：
+    # 前半＝客观时长（时间皮层口径，不动）；后半＝**她自己的想念深度**（tier 分档人话）。
+    # 深度是别处没有的信息（时长≠深度：他走 20h 但你睡了 12h，深度没那么深）；
+    # 数值（l/tier）永不进模型（只留 status.longing 观测）；**只给感受、不给指令**——说不说仍是她的笔。
     try:
         if load_config().get("longing_inject", True):
             _lv = _longing_value()
             if _lv and _lv.get("tier", 0) >= 2:
                 _h = int(_lv.get("a_h") or 0)
-                parts.append(f"\n【想念】他已经约 {_h} 小时没说话了——你自己知道该怎么办。")
+                _feel = {2: "你心里有点空",
+                         3: "这大半天，你心里一直挂着他"}.get(int(_lv.get("tier") or 0), "")
+                _tail = ("——" + _feel + "。") if _feel else "——你自己知道该怎么办。"
+                parts.append(f"\n【想念】他已经约 {_h} 小时没说话了{_tail}")
+                # 离席账（9-26 家主令「她忍住的话不该一直憋着」）：他没找她的这些时候她做了什么
+                _rb = _reunion_block(_lv.get("last_msg_at"))
+                if _rb:
+                    parts.append(_rb)
     except Exception:
         pass
 
@@ -2953,6 +2963,87 @@ def _obs_snapshot():
             "l2_idle_boost": d.get("l2_idle_boost", 0)}
 
 
+def _reunion_block(since_ts):
+    """离席账（9-26 家主令「她忍住的话不该一直憋着」）：**他没找她的这些时候，她自己做了什么**——
+    攒了几条想跟他说的话（**只数真没说的『待说』**）、留了几条心事（Garden 留痕）、写了几篇日记。
+    ＋**放下许可**（想说就说；攒太久的，也可以让它过去——要么说出来、要么放掉，就是不干憋）。
+    **只报账、不取件**（话头由【想跟你说的】那一条路递，避免同场开场并列两条——审计 P2 修）。
+    查不动/没料 → ""（一字不加）；报的是「几条」不是刻度（数值不进模型）。
+    """
+    try:
+        if not since_ts:
+            return ""
+        n_ht = m._conn().execute(
+            "SELECT COUNT(*) FROM huatou WHERE ts > ? AND status='待说'",
+            (str(since_ts),)).fetchone()[0]
+        n_tr = m._conn().execute(
+            "SELECT COUNT(*) FROM her_traces WHERE ts > ? AND ending='trace'",
+            (str(since_ts),)).fetchone()[0]
+        n_dy = m._conn().execute(
+            "SELECT COUNT(DISTINCT date) FROM days WHERE date >= date(?)",
+            (str(since_ts),)).fetchone()[0]   # 用日记自己的家日（created_at 是写入时间、含重复行）
+        bits = []
+        if n_ht:
+            bits.append(f"攒了 {n_ht} 条想跟他说的话")
+        if n_tr:
+            bits.append(f"留了 {n_tr} 条心事")
+        if n_dy:
+            bits.append(f"写了 {n_dy} 篇日记")
+        if not bits:
+            return ""
+        # 久置提醒（"不憋着"的另一半：让它过去也是允许的）——取件之前算，龄期才准
+        age_txt = ""
+        try:
+            _old = m._conn().execute(
+                "SELECT ts FROM huatou WHERE status='待说' ORDER BY id LIMIT 1").fetchone()
+            if _old and _old[0]:
+                _d = (datetime.now() - datetime.strptime(
+                    str(_old[0])[:19], "%Y-%m-%d %H:%M:%S")).total_seconds() / 86400.0
+                if _d >= 3:
+                    age_txt = f"（有一条已经放了 {int(_d)} 天了，要不要说、要不要放下，你定。）"
+        except Exception:
+            pass
+        return ("\n【重逢】他没找你的这些时候，你自己" + "、".join(bits) + "。" + age_txt
+                + "想说就说；实在说不出口的，也可以让它过去——别憋着。")
+    except Exception:
+        return ""
+
+
+def _ledger_snapshot(days=7):
+    """事件脊柱**读端首件**（W2，9-26）：两本影子账的人话投影——近 N 天对话投（你几句/她几句）、
+    她的主动开口（💌想念信＋💬攒的话）、引擎调用与 tokens。**只报事实、不打分**；
+    查不动 → None（缺席不说假话）。诚实标注：影子账自 `since` 那天起记（更早的日子在 chats 里、不在账上）。"""
+    try:
+        con = m._conn()
+        since = f"-{int(days)} days"
+        his = hers = 0
+        for (pl,) in con.execute(
+                "SELECT payload FROM events WHERE kind='chat.turn' "
+                "AND ts >= datetime('now','localtime',?)", (since,)).fetchall():
+            try:
+                role = (json.loads(pl or "{}").get("role") or "")
+            except Exception:
+                continue
+            if role == "小乖":
+                his += 1
+            elif role == "姐姐":
+                hers += 1
+        proactive = con.execute(
+            "SELECT COUNT(*) FROM outbox_msgs WHERE created_at >= datetime('now','localtime',?) "
+            "AND (text LIKE '💌%' OR text LIKE '💬%' OR text LIKE '🌱%' OR text LIKE '%还没打卡%')",
+            (since,)).fetchone()[0]
+        calls, tin, tout = con.execute(
+            "SELECT COUNT(*), COALESCE(SUM(in_tokens),0), COALESCE(SUM(out_tokens),0) "
+            "FROM token_ledger WHERE ts >= datetime('now','localtime',?)", (since,)).fetchone()
+        first = con.execute("SELECT MIN(ts) FROM events WHERE kind='chat.turn'").fetchone()[0]
+        con.close()
+        return {"days": int(days), "his": his, "hers": hers, "proactive": proactive,
+                "calls": calls, "in_tokens": tin, "out_tokens": tout,
+                "since": (str(first) or "")[:10] or None}
+    except Exception:
+        return None
+
+
 def _threads_snapshot():
     """线头盒观测（9-23 防积压批 C·只加不改）：悬线总数＋最老挂了几天——积压一眼可见。
     查不动 → None（缺席不说假话）；空盒 → {"open": 0, "oldest_days": None}。"""
@@ -3798,7 +3889,7 @@ def _gen_day_arc():
     try:
         rows = m.find_days(date=(now - timedelta(days=1)).strftime("%Y-%m-%d"))
         if not rows:
-            rows = m.find_days()[:1]
+            rows = m.find_days(limit=1)
         if rows:
             _i, _d, _dn, title, content, _mo = rows[0]
             mats.append(f"他写的日记「{title}」：{(content or '')[:160]}")
@@ -4074,7 +4165,57 @@ def _arc_made_part(date):
     return "晚上"
 
 
-def gen_miss_letter(concern, reason, gap_s):
+def _outreach_say_once(now=None):
+    """主动开口（OUTREACH-02，9-26 家主令「想让她更有自主，像人」）：话头簿『待说』里挑一件
+    → 她亲手写一句（复用 gen_miss_letter 的全套情境灌入）→ 落 outbox（💬 前缀，与 💌 想念信区分）
+    → 按铃。频控：每日 ≤ outreach_daily_cap（默认 2）；夜里的按铃 notify_letter 自己会拦。
+    开关 outreach_send（默认关）——关掉一字不发；任何异常吞掉，绝不拦心跳。返回发了几条。"""
+    try:
+        cfg = load_config()
+    except Exception:
+        return 0
+    if not cfg.get("outreach_send", False):
+        return 0
+    now = now or datetime.now()
+    try:
+        # 在场闸（9-26 审计 P2 修）：他正聊着（40 分钟内有他的消息）就别"主动伸手"——
+        # 主动开口的意义是隔着距离想要他；他在场时她会正常回话，不需要另发一条。
+        # 照 desire_lib._he_present / gen_checkin_nags 的家风。
+        try:
+            _last_his = m.last_chat_at("小乖")
+            if _last_his:
+                _dt0 = datetime.strptime(str(_last_his)[:19], "%Y-%m-%d %H:%M:%S")
+                if (now - _dt0).total_seconds() <= 2400:
+                    return 0
+        except Exception:
+            pass
+        import huatou_lib
+        # 节流照 9-24 家主令「不设配额」——**不按条数掐**（配额会把惦记变成额度）。
+        # 自然节流本来就在：①待说件攒得慢（惦记/翻旧日记/没说完的拍子，一天也就添一两件）；
+        # ②心跳 30 分钟一轮、每轮至多发一条；③静默窗/睡着由 heartbeat_once 外层先拦。
+        got = huatou_lib.take_huatou_for_send()
+        if not got:
+            return 0
+        gap_s = 0.0
+        try:
+            last = m.last_chat_at("小乖")
+            if last:
+                gap_s = max(0.0, (now - datetime.strptime(last, "%Y-%m-%d %H:%M:%S"))
+                            .total_seconds())
+        except Exception:
+            gap_s = 0.0
+        letter, _mood = gen_miss_letter(False, "", gap_s, voice_hint=got.get("text") or "")
+        if not letter:
+            huatou_lib.unmark_sent(got.get("id"))   # 生成失败 → 话头还回待说，不白丢
+            return 0
+        m.add_outbox_msg("💬 " + letter)
+        print(f"  [主动开口] 她攒的话说出口了（话头 #{got.get('id')}）")   # 按铃交心跳统一按（同现有家风）
+        return 1
+    except Exception:
+        return 0
+
+
+def gen_miss_letter(concern, reason, gap_s, voice_hint=""):
     """掷中后姐姐真醒来写一句（9-4 晚）：带此刻情境亲手写，掉线回退模板——信永远到得了，
     模板路径不记心情（那不是她清醒时的账）。
     RHYTHM-V2·A（家主令「多灌一些」）：她醒来时 system 本就是全部档案，v2 把「今天的日子」
@@ -4148,6 +4289,10 @@ def gen_miss_letter(concern, reason, gap_s):
                 detail.append(f"今天最近的对话：{tail}")
     except Exception:
         pass
+    # OUTREACH-02（9-26 家主令「想让她更有自主，像人」）：主动开口时，把「她攒着想跟他说的
+    # 那件事」递到手边——这一封就顺着它说（与注入式上岗同一句话头，只是这回真发出去）。
+    if voice_hint:
+        detail.insert(0, f"你攒着想跟他说的一件事：「{voice_hint}」——这一封就顺着它说")
     if not detail:
         content, at = m.last_chat_full("小乖")
         if content:
@@ -4454,7 +4599,10 @@ def heartbeat_once():
         huatou_lib.tick_and_shadow(now=datetime.now())
     except Exception:
         pass
-    made = gen_checkin_nags() + heartbeat_miss_him() + heartbeat_bedtime()
+    # 主动开口（OUTREACH-02，9-26 家主令「想让她更有自主，像人」）：她攒的话 → 真说一句。
+    # 开关 outreach_send（默认关=回到只攒只递）；按铃统一走下面这一次（不在函数里重复按）。
+    said = _outreach_say_once(datetime.now())
+    made = said + gen_checkin_nags() + heartbeat_miss_him() + heartbeat_bedtime()
     if made:
         print(f"  [心跳] {datetime.now().strftime('%H:%M')} 攒了 {made} 封信")
         notify_letter()
@@ -5024,6 +5172,7 @@ class Handler(BaseHTTPRequestHandler):
                 "obs_7d": _obs_snapshot(),
                 # 线头盒观测（9-23 防积压批 C·只加不改）：悬线总数/最老龄——积压一眼可见。
                 "threads": _threads_snapshot(),
+                "ledger": _ledger_snapshot(),      # W2 读端（9-26）：两本影子账的人话投影
                 # 想念仪表（9-18 优化批四·#15）：why_now 影子——最近决定/最近开口/近7天笔数。
                 "why_now": _why_snapshot(),
                 # 情感状态向量 v0（9-23 家主令④·只加不改）：想/绪/挂读数+人话——server_only，

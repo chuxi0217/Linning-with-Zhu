@@ -43,7 +43,7 @@ def _librarian_materials():
               - timedelta(days=6)).strftime("%Y-%m-%d")   # 近 7 天含今天（同 obs_get 口径）
     diary_lines = []
     week_lines = []
-    for _id, d, dn, t, c_, mo in m.find_days()[:14]:
+    for _id, d, dn, t, c_, mo in m.find_days(limit=14):   # 9-26 审计修：显式 14，别再靠默认 30 兜
         diary_lines.append(f"- {d}（第{dn}天）《{t}》〔{mo}〕{(c_ or '')[:80]}")
         if since7 <= d <= today_h:
             week_lines.append(f"· 第{dn}天 {d[5:]}《{t}》（{mo}）")

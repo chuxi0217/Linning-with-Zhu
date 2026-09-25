@@ -227,6 +227,19 @@ interface StatusResp {
   obs_7d?: ObsFacts | null;           // 9-23 能上批 c：对账观测十键（键缺/全 0 → 整段不出）
   threads?: ThreadsSnap | null;       // 9-26：线头盒观测（悬线数/最老几天）——键缺/null → 整行不出
   state?: StateSnap | null;           // 9-26：她此刻（只用 line 人话句；服务端标 server_only）
+  ledger?: LedgerSnap | null;         // 9-26 W2：两本影子账的人话投影——键缺/null → 整行不出
+}
+
+// 事件脊柱读端（W2，9-26）：status.ledger——只报事实不打分；since=影子账从哪天起记
+interface LedgerSnap {
+  days?: number | null;               // 窗口天数（默认 7）
+  his?: number | null;                // 他说了几句
+  hers?: number | null;               // 她说了几句
+  proactive?: number | null;          // 她主动开口几次（💌＋💬）
+  calls?: number | null;              // 引擎调用笔数
+  in_tokens?: number | null;          // 上下文 token
+  out_tokens?: number | null;         // 她写出来的 token
+  since?: string | null;              // 账从哪天起记
 }
 
 // 线头盒观测（9-26）：status.threads——悬线总数 + 最老挂了几天；只报事实，不打分
@@ -1210,6 +1223,7 @@ struct Index {
   @State stWhyNow: string = '';    // 9-18 #15：想念仪表行（''=不显示；旧 server 没这键）
   @State stThreads: string = '';   // 9-26：线头盒行（''=不显示；旧 server 没这键）
   @State stState: string = '';     // 9-26：她此刻行（只用服务端给的人话句）
+  @State stLedger: string = '';    // 9-26 W2：家里两本账的一行人话
   // 9-23 能上批 c：对账观测三行（obs_7d 十键→人话；''=不出行，键缺/全 0 都不出）
   @State stObs1: string = '';
   @State stObs2: string = '';
@@ -1312,6 +1326,7 @@ struct Index {
   @State xgBusy: boolean = false;
   @State statsLine: string = '';       // 咱家的账本（9-12 晚）：一行总账文案
   @State statsLoaded: boolean = false;
+  private statsFetchedAt: number = 0;   // 9-26：上次取账时间（时间闸，5 分钟内不重取）
   // 9-23 B2-1：账本全屏页（点卡进；卡片老路不动，新键只在全屏页用）
   @State statsOpen: boolean = false;
   @State statsData: StatsResp | null = null;   // 账本页原始数据（含新四键）
@@ -3312,8 +3327,10 @@ struct Index {
   // 咱家的账本（9-12 晚 家主令「总账上墙」）：从在一起记到现在，聊了多少条、多少字
   // ── 设置页 v1（9-1-#8 刀3）：门牌切换 + 自定义 + 测一测，preferences 持久化 ──
   private async fetchStats(): Promise<void> {
-    if (this.statsLoaded) {
-      return;   // 一次拉够——账本不会分钟级变化
+    // 9-26 修（审计 P2-3）：原「一次拉够」= 一个会话只取一次，卡片字数会冻在第一次——
+    // 改 5 分钟时间闸：够省请求，又不会一直不刷。
+    if (this.statsLoaded && Date.now() - this.statsFetchedAt < 300000) {
+      return;
     }
     const req = http.createHttp();
     try {
@@ -3326,6 +3343,7 @@ struct Index {
       if (res.responseCode === 200) {
         this.applyStats(JSON.parse(res.result as string) as StatsResp);
         this.statsLoaded = true;
+        this.statsFetchedAt = Date.now();   // 9-26：记时间戳（配合 5 分钟时间闸）
       }
     } catch (err) {
       // 拉不到就下次再算，不占设置页
@@ -4506,6 +4524,13 @@ struct Index {
         }
         if (this.stState !== '') {
           Text(this.stState)
+            .fontSize(FS_AUX)
+            .fontColor(this.dk(C_TEXT_3))
+            .width('100%')
+        }
+        if (this.stLedger !== '') {
+          // 9-26 修（审计 P2-2）：行里带上"账自哪天起记"（影子账不是从开天辟地记的）
+          Text(this.stLedger)
             .fontSize(FS_AUX)
             .fontColor(this.dk(C_TEXT_3))
             .width('100%')
@@ -5953,10 +5978,15 @@ struct Index {
     return item.key;
   }
 
-  private scrollToEnd(): void {
+  // 贴底（9-26 审计修 P3）：原「100ms 一把梭」——列表刚追加、还没长出条数时那一把空放，
+  // 气泡就停在半空。改成有界重试：数出来了才滚，最多试 6 次（约 600ms）收手；已贴底的照旧。
+  private scrollToEnd(tries: number = 0): void {
     setTimeout(() => {
-      if (this.chatData.totalCount() > 0) {
-        this.scroller.scrollToIndex(this.chatData.totalCount() - 1);
+      const n = this.chatData.totalCount();
+      if (n > 0) {
+        this.scroller.scrollToIndex(n - 1);
+      } else if (tries < 6) {
+        this.scrollToEnd(tries + 1);
       }
     }, 100);
   }
@@ -6128,28 +6158,49 @@ struct Index {
         if (sta && sta.line !== undefined && sta.line !== null && sta.line !== '') {
           this.stState = `💗 她此刻：${sta.line}`;
         }
+        // 9-26 W2：家里两本账（近 7 天说了多少、她主动几次、引擎多少笔）——只报事实，空则不出
+        this.stLedger = '';
+        const lg = d.ledger;
+        if (lg && ((lg.his ?? 0) + (lg.hers ?? 0) + (lg.proactive ?? 0) > 0)) {
+          // 9-26 修（审计 P2-2）：条件补 proactive（有主动开口但对话投为 0 时也该出行）；
+          // 行尾附「账自 since 起记」——影子账不是从开天辟地记的，别让读数显得比实际全。
+          const days = lg.days ?? 7;
+          const tok = (lg.in_tokens ?? 0) / 10000;
+          const _since = (lg.since !== undefined && lg.since !== null && lg.since !== '')
+            ? `（账自 ${lg.since} 起记）` : '';
+          this.stLedger = `📒 家里的账 · 近 ${days} 天：说了 ${(lg.his ?? 0) + (lg.hers ?? 0)} 句`
+            + `（你 ${lg.his ?? 0} · 她 ${lg.hers ?? 0}）· 她主动开口 ${lg.proactive ?? 0} 次`
+            + ` · 引擎 ${lg.calls ?? 0} 笔${_since}`;
+        }
         this.fetchPromise();
         this.pushCard();
       } else {
-        this.stNow = '—';
-        this.stWeather = '—';
-        this.stPlace = '—';
-        this.stChats = '—';
-        this.stObs1 = '';
-        this.stObs2 = '';
-        this.stObs3 = '';
+        this.clearStatusLines();
       }
     } catch (err) {
-      this.stNow = '—';
-      this.stWeather = '—';
-      this.stPlace = '—';
-      this.stChats = '—';
-      this.stObs1 = '';
-      this.stObs2 = '';
-      this.stObs3 = '';
+      this.clearStatusLines();
     } finally {
       req.destroy();
     }
+  }
+
+  // 9-26 修（审计 P2-1）：取不到状态时把**所有**读数一起复位——
+  // 原只复位 7 项，新增的三行仪表（🧵/💗/📒）与 why_now/longing 等会留着旧值装作还在。
+  private clearStatusLines(): void {
+    this.stNow = '—';
+    this.stWeather = '—';
+    this.stPlace = '—';
+    this.stChats = '—';
+    this.stObs1 = '';
+    this.stObs2 = '';
+    this.stObs3 = '';
+    this.stWhyNow = '';
+    this.stFacts = '';
+    this.stLonging = -1;
+    this.stThreads = '';
+    this.stState = '';
+    this.stLedger = '';
+    this.stWalk = '';
   }
 
   // ── 桌面卡片推送：写 preferences（系统定时刷新读它），并主动 updateForm 已添加的卡片 ──
@@ -8396,11 +8447,16 @@ struct Index {
   }
 
   // 滚到所选日的首条（历史 time 是 MM-DD HH:MM——只对月日；找不到就落到窗口尾）
-  private scrollToDay(through: string): void {
+  // 9-26 审计修 P3：数据还没落进列表时（length=0）原来直接放弃——改成有界重试，
+  // 换窗那一拍没赶上也能补上；真找不到那天（idx<0）仍诚实落到窗口尾。
+  private scrollToDay(through: string, tries: number = 0): void {
     const mmdd = through.substring(5);
     setTimeout(() => {
       const list = this.chatData.snapshot();
       if (list.length === 0) {
+        if (tries < 6) {
+          this.scrollToDay(through, tries + 1);
+        }
         return;
       }
       let idx = -1;
