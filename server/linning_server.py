@@ -4168,7 +4168,9 @@ def _arc_made_part(date):
 def _outreach_say_once(now=None):
     """主动开口（OUTREACH-02，9-26 家主令「想让她更有自主，像人」）：话头簿『待说』里挑一件
     → 她亲手写一句（复用 gen_miss_letter 的全套情境灌入）→ 落 outbox（💬 前缀，与 💌 想念信区分）
-    → 按铃。频控：每日 ≤ outreach_daily_cap（默认 2）；夜里的按铃 notify_letter 自己会拦。
+    → 按铃。**不设配额**（9-24 家令）：节流全靠自然闸——在场闸（他 40 分钟内有消息就不伸手）＋
+    心跳 30 分钟一轮／每轮至多一条＋静默窗/睡着由 heartbeat_once 外层先拦；
+    发出后另记「她最近一次主动出手」到 LONGING["last_send"]，免得同一轮里 💬 紧跟一封 💌。
     开关 outreach_send（默认关）——关掉一字不发；任何异常吞掉，绝不拦心跳。返回发了几条。"""
     try:
         cfg = load_config()
@@ -4209,6 +4211,17 @@ def _outreach_say_once(now=None):
             huatou_lib.unmark_sent(got.get("id"))   # 生成失败 → 话头还回待说，不白丢
             return 0
         m.add_outbox_msg("💬 " + letter)
+        # 同轮「刚开过口」记账（9-26 审计修 A）：💬 与 💌 是同一个 gen_miss_letter、灌同一套情境，
+        # 心跳一轮里的顺序是 💬→打卡→💌→晚安——不记账的话他安静久+骰子掷中时，**同一轮会连出两条**
+        # （中间 0 秒、文风还几乎一样，一眼就是机器连按两下）。
+        # 所以 💬 出手也要写「她最近一次主动出手」这根尺（RHYTHM_MIN_GAP_S=1h 的 too_soon 读它）。
+        # **只记事实、不加配额**（日上限 10 那条是 💌 自己的额度，照 9-24 家令一个字不动）；
+        # 不动 LONGING["p"]——渴望归零是「想念被这封信卸掉了」，攒话出口不冒充那个。
+        try:
+            LONGING["last_send"] = now.strftime("%Y-%m-%d %H:%M:%S")
+            _longing_save()
+        except Exception:
+            pass
         print(f"  [主动开口] 她攒的话说出口了（话头 #{got.get('id')}）")   # 按铃交心跳统一按（同现有家风）
         return 1
     except Exception:
