@@ -6630,9 +6630,12 @@ class Handler(BaseHTTPRequestHandler):
 
         if sse_ok:
             # 9-4 流式收尾：done 带齐元数据（思考全文已落库，app 回看走 /api/thinking）
+            # 9-27 bug B 修：done 补带 **reply 全文**——此前 done 只有元数据，app 收尾只能用自己
+            # 累计的 reply delta；中途若丢帧，正文就**静默变短且零报错**（实况：只剩开头几个字）。
+            # 带上全文后，客户端「done.reply 比本地累计长就以 done 为准」即可自愈，不必绕对账。
             try:
                 self._sse({"type": "done", "think_ms": think_ms, "tools": tools_used,
-                           "chat_id": reply_chat_id})
+                           "chat_id": reply_chat_id, "reply": reply})
             except Exception:
                 pass   # 他划走了也不碍事，库是全的
             self._sse_end()   # chunked 收尾帧

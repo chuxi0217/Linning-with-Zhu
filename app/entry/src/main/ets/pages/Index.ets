@@ -1175,6 +1175,20 @@ struct Index {
   private liveThinkKey: string = '';
   // FE3-04（9-23）：本轮未收尾的流式正文气泡 key——流没收 done 时 catch 里先摘半截再对账
   private liveReplyKey: string = '';
+  // ── 9-27 打字机真修（v5）：正在流的两张卡改由 @State 驱动、在 List 尾部条件渲染 ──
+  // 病因：LazyForEach 里"原地改一条"（updateText/updateByKey → onDataChange）**画不出来**——
+  // 官方文档 @Builder 参数传递规则：按值传递（传变量）时参数变化**不会**引起 @Builder 内 UI 刷新；
+  // 列表项 `this.MsgBubble(item)` 正是按值传。于是 177 帧 thinking、100 帧正文全到了、数据也是全的，
+  // 屏上却只有创建那一刻的第 1 个字（「哈」）——"打字机从 9-12 起就没在屏幕上长过"。
+  // 修法照文档原话「建议通过 this 访问组件的状态变量，而不是通过参数传递」：
+  //   正在流的两张卡**不进 chatData**，读 this 上的 @State（每次 delta 赋值即重画）；
+  //   封口/收尾时才 append 进 chatData（新增=onDataAdd=可见）。
+  @State liveThinkOn: boolean = false;       // 有一张正在写的思考卡
+  @State liveThinkStarted: boolean = false;  // 已收到过 thinking 事件（决定显示「叫姐姐中…」还是计时）
+  @State liveThinkText: string = '';         // 正在流的思考原文（点开可看尾段）
+  @State liveReplyOn: boolean = false;       // 有一条正在长的正文气泡
+  @State liveReplyText: string = '';         // 正在流的正文
+  @State liveReplyTime: string = '';         // 正文气泡的时间戳（建卡时定）
   // 夜下取色：色值在 NIGHT_MAP 里就换夜装，查不到原样——一个函数，全屋换灯。
   // pref 与系统色模式变化都会触发整树重渲染，色函数跟着重算。
   private dk(c: string): string {
@@ -1812,6 +1826,24 @@ struct Index {
               this.MsgBubble(item)
             }
           }, (item: ChatItem) => item.key)
+          // 9-27 v5：正在流的两张卡——传**对象字面量**（官方：按引用传递，仅一个参数且直接传字面量时生效），
+          // 字面量里读 this 上的 @State ⇒ 每次赋值即重画。这两张卡不进 chatData，归档时才 append。
+          if (this.liveThinkOn) {
+            ListItem() {
+              this.MsgBubble({
+                key: '@live-think', who: '思考', text: this.liveThinkText, imageUrl: '',
+                time: this.liveThinkStarted ? '' : '叫姐姐中…',
+              })
+            }
+          }
+          if (this.liveReplyOn) {
+            ListItem() {
+              this.MsgBubble({
+                key: '@live-reply', who: '姐姐', text: this.liveReplyText, imageUrl: '',
+                time: this.liveReplyTime,
+              })
+            }
+          }
         }
         .width('100%')
         .height('100%')
@@ -7956,18 +7988,14 @@ struct Index {
     this.thinkingOn = true;
     this.thinkingSec = 0;
     this.thinkPeek = false;   // 💭 默认折叠：新一轮重新折叠
-    // 恢复挂占位卡（9-12 晚修「纯干等」）：SSE 第一个事件没到之前（server 慢/旧版/
-    // 不在线）界面不该全静——立刻给一张「叫姐姐中…」卡，thinking 事件来了就复用它。
-    const item: ChatItem = {
-      key: `think${this.keySeq++}`,
-      who: '思考',
-      text: '',
-      imageUrl: '',
-      time: '叫姐姐中…',
-    };
-    this.chatData.append(item);
-    this.pendingThinkKey = item.key;
-    this.liveThinkKey = item.key;   // 9-18 修复批八（APP2-02）：占位卡也是「未封口」，记账
+    // 9-27 v5：占位卡不再 append 进 chatData（那样它永远不重画）——改挂 live 思考卡：
+    // 读 this 的 @State，第一个事件没到之前显示「💭 叫姐姐中…」，thinking 一到就变计时＋逐字。
+    this.liveThinkOn = true;
+    this.liveThinkStarted = false;
+    this.liveThinkText = '';
+    this.liveReplyOn = false;
+    this.liveReplyText = '';
+    this.liveReplyTime = '';
     this.scrollToEnd();
     this.thinkTimer = setInterval(() => {
       this.thinkingSec += 0.1;
@@ -7980,14 +8008,13 @@ struct Index {
       this.thinkTimer = -1;
     }
     const elapsed = this.thinkingSec;
-    // 9-18 修复批八（APP2-02）：只清「未封口」的半截思考卡——按 liveThinkKey 精确清。
-    // 以前按 key 前缀扫，扫不到 SSE thinking 事件新开的 k 卡（多轮+异常收尾会留「思考中…」僵尸）
-    const lk = this.liveThinkKey;
-    if (lk !== '') {
-      this.chatData.removeWhere((m: ChatItem) => m.key === lk && !m.thinkDone);
-      this.liveThinkKey = '';
-    }
-    this.pendingThinkKey = '';   // 占位卡要么已被 thinking 事件收编、要么随上面清掉
+    // 9-27 v5：live 思考卡不进 chatData——收工只需摘状态（未封口的半截卡自然消失，
+    // 已封口的早已 append 归档，天然不受影响）。旧的按 key 清 chatData 那套随之退休。
+    this.liveThinkOn = false;
+    this.liveThinkStarted = false;
+    this.liveThinkText = '';
+    this.liveThinkKey = '';
+    this.pendingThinkKey = '';
     this.thinkingOn = false;
     return elapsed;
   }
@@ -8719,7 +8746,6 @@ struct Index {
         return;
       }
       const req = http.createHttp();
-      console.info('[ZJ-SSE] v4 流式发送开始');   // 9-27 v4：版本标记（确认新包在跑）
       let silenceTimer: number = -1;   // 9-26 流式卡住修：静默看门狗计时器（声明在 try 外，finally 要清）
       let hardTimer: number = -1;      // 9-27 v4：总时限硬闸（防「数据一直来但事件出不来」把看门狗饿死）
       let lastWdogLog: number = 0;     // 9-27 v4：看门狗静默播报节流
@@ -8748,7 +8774,6 @@ struct Index {
             return;   // 先到者说了算
           }
           settled = true;
-          console.info(`[ZJ-SSE] settle（${err ? '异常→' + err.message : '正常 code=' + code}）`);   // 9-27 v4 诊断
           if (err) {
             settleReject(err);   // 走 await 抛错 → catch → 对账
           } else {
@@ -8763,7 +8788,6 @@ struct Index {
             settle(-1, new Error('流式静默断尾（120s 无事件）'));
           } else if (silentMs > 30000 && Date.now() - lastWdogLog > 30000) {
             lastWdogLog = Date.now();   // 9-27 v4 诊断：静默 >30s 才播报，且 30s 一次
-            console.info(`[ZJ-SSE] 看门狗：已静默 ${Math.floor(silentMs / 1000)}s（连接还在等）`);
           }
         }, 5000);
         hardTimer = setTimeout(() => {
@@ -8782,6 +8806,10 @@ struct Index {
         let thinkT0 = 0;
         let thinkFull = '';
         this.liveReplyKey = '';   // FE3-04（9-23）：正文气泡 key 提为组件态——异常收尾时 catch 也要拿得到
+        // 9-27 v5：live 卡状态每一轮清零（beginThinking 已清过，这里再钉一次，防重入残留）
+        this.liveReplyOn = false;
+        this.liveReplyText = '';
+        this.liveReplyTime = '';
         let replyText = '';
         let thinkSealedThisSend = false;   // FE-FIX-01：本轮开过思考卡并已封口（done 兜底卡的唯一判据）
         const allThinkParts: string[] = [];   // 各轮思考全文（done 后拼挂 💭 缓存）
@@ -8790,43 +8818,53 @@ struct Index {
             return;
           }
           const sec = (Date.now() - thinkT0) / 1000;
+          const key = `think${this.keySeq++}`;   // 9-27 v5：新 key——归档=append（新增才可见）
           const sealed: ChatItem = {
-            key: curThinkKey, who: '思考', text: thinkFull, imageUrl: '',
+            key: key, who: '思考', text: thinkFull, imageUrl: '',
             time: `思考了 ${sec.toFixed(1)}s`, thinkDone: true,
           };
-          this.chatData.updateByKey(curThinkKey, sealed);
+          this.chatData.append(sealed);
+          this.scrollToEnd();
           thinkSealedThisSend = true;   // FE-FIX-01：封口即记账——done 时不再挨兜底补卡
           if (thinkFull) {
-            this.thinkingCache.set(curThinkKey, thinkFull);   // 全文进缓存
+            this.thinkingCache.set(key, thinkFull);   // 全文进缓存
             allThinkParts.push(thinkFull);
           }
-          this.liveThinkKey = '';   // 9-18 修复批八（APP2-02）：封口的卡是时间线的一部分，endThinking 不再碰它
+          // live 卡收工（它本来就不在 chatData 里，归档完直接摘状态即可）
+          this.liveThinkOn = false;
+          this.liveThinkStarted = false;
+          this.liveThinkText = '';
           curThinkKey = '';
           thinkFull = '';
         };
         const refreshThink = (): void => {
           if (curThinkKey) {
-            this.chatData.updateText(curThinkKey, thinkFull);
+            // 9-27 v5：改 @State（不是改 chatData 里那条）→ 每帧重画
+            this.liveThinkStarted = true;
+            this.liveThinkText = thinkFull;
           }
         };
         const onEvent = (obj: StreamEvent): void => {
           if (obj.type === 'round') {
-            // 轮界：上一轮的思考卡与正文卡全部封口，新一轮另起（Kimi 步骤卡的接缝）
+            // 轮界：上一轮的思考卡与正文卡全部封口，新一轮另起（Kimi 步骤卡的缝接）
             if ((obj.round ?? 0) > 0) {
               sealThink();
-              this.liveReplyKey = '';
+              // 9-27 v5：上一轮正文也得归档（append=可见）——否则换轮时它会凭空消失
+              if (this.liveReplyOn) {
+                this.appendMsg('姐姐', this.liveReplyText, '', this.liveReplyTime);
+                this.liveReplyOn = false;
+                this.liveReplyText = '';
+                this.liveReplyTime = '';
+              }
               replyText = '';
             }
           } else if (obj.type === 'thinking') {
             if (!curThinkKey) {
-              // 复用 send 时挂的「叫姐姐中…」占位卡；没有才新开（旧 server 也有 thinking 事件）
-              if (this.pendingThinkKey) {
-                curThinkKey = this.pendingThinkKey;
-                this.pendingThinkKey = '';
-              } else {
-                curThinkKey = this.appendMsg('思考', '', '');
-              }
-              this.liveThinkKey = curThinkKey;   // 9-18 修复批八（APP2-02）：事件开的新卡也记账（异常收尾按 key 清）
+              // 9-27 v5：开一张 live 思考卡（不进 chatData）；占位显示由 liveThinkStarted 决定
+              curThinkKey = '@live-think';
+              this.liveThinkOn = true;
+              this.liveThinkStarted = true;
+              this.liveThinkText = '';
               thinkT0 = Date.now();
               thinkFull = '';
             }
@@ -8841,10 +8879,14 @@ struct Index {
           } else if (obj.type === 'reply') {
             sealThink();
             replyText += obj.delta ?? '';
-            if (!this.liveReplyKey) {
-              this.liveReplyKey = this.appendMsg('姐姐', replyText, '', `… ${this.nowTime()}`);
+            if (!this.liveReplyOn) {
+              // 9-27 v5：正文走 live 气泡（@State 驱动 → 逐字长）
+              this.liveReplyOn = true;
+              this.liveReplyTime = `… ${this.nowTime()}`;
+              this.liveReplyText = replyText;
+              this.scrollToEnd();
             } else {
-              this.chatData.updateText(this.liveReplyKey, replyText);
+              this.liveReplyText = replyText;
             }
           } else if (obj.type === 'status') {
             // 常规状态文案（翻图书证/在写回复）时间线本身已表达；只有「走老路」回退值得插一行
@@ -8854,7 +8896,6 @@ struct Index {
           } else if (obj.type === 'done') {
             sealThink();
             doneEv = obj;
-            console.info('[ZJ-SSE] 收到 done');   // 9-27 v4 诊断
             settle(200);   // 9-26：协议级收尾——done 一到立刻放行，尾包/连接尾巴丢了也不冻
           } else if (obj.type === 'error') {
             throw new Error(obj.text ?? '流式中断');
@@ -8941,6 +8982,7 @@ struct Index {
         }
         if (streamCode >= 200 && streamCode < 300 && doneEv) {
           const d = doneEv as StreamEvent;
+          console.info(`[ZJ-SSE] ${replyText.length}字·兜底${(d.reply ?? '').length}字`);   // 9-27：一条一行，排障用
           if (imageToSend) {
             this.pendingImage = '';
           }
@@ -8954,29 +8996,31 @@ struct Index {
           // K3 长对话约 92% 轮次不吐 reasoning（server 实锤，非 bug），整轮可能一张思考卡都没有。
           // 进这里前 done 分支的 sealThink 已跑过——凡开过卡的本轮都已封口记账，
           // 故 thinkSealedThisSend=false 即「本轮无封口思考卡」：补一张封口袋；有则一张不加。
-          if (this.liveReplyKey) {
-            // 打字机气泡补全元数据：计时与💭入口。工具卡已在时间线上（🔧 调用工具 XX），
-            // 不再重复挂 tools——历史回看才有 FE-03 摘要卡。
-            const finalText = replyText;
+          if (this.liveReplyOn) {
+            // 9-27 v5：正文卡归档——**append 进 chatData**（新增=可见），不再是"原地改"。
+            // 同时补上 bug B 的兜底：done 若带全文且比本地累计更长（中途丢帧），以 done 为准。
+            const finalText = (d.reply !== undefined && d.reply !== null && d.reply.length > replyText.length)
+              ? d.reply : replyText;
             const allThink = allThinkParts.join('\n\n');
+            const finalKey = `k${this.keySeq++}`;
             const finalMsg: ChatItem = {
-              key: this.liveReplyKey, who: '姐姐', text: finalText, imageUrl: '',
+              key: finalKey, who: '姐姐', text: finalText, imageUrl: '',
               time: `思考 ${thinkSec.toFixed(1)}s · ${this.nowTime()}`,
               tools: [], msgId: d.chat_id, hasThinking: allThink.length > 0,
             };
             if (allThink) {
-              this.thinkingCache.set(this.liveReplyKey, allThink);   // 思考原文（各轮拼接）进缓存
+              this.thinkingCache.set(finalKey, allThink);   // 思考原文（各轮拼接）进缓存
             }
-            if (thinkSealedThisSend) {
-              this.chatData.updateByKey(this.liveReplyKey, finalMsg);
-            } else {
-              // 兜底卡要落在正文之前；数据源只有 append/removeWhere——先摘正文气泡，
-              // 补卡，再原样（finalMsg 全条重建件）挂回。ArkTS 禁 Object.assign，全条重建。
-              this.chatData.removeWhere((m: ChatItem) => m.key === this.liveReplyKey);
+            if (!thinkSealedThisSend) {
+              // 兜底思考卡要落在正文之前
               this.chatData.append(this.makeFallbackThink(thinkSec));
-              this.chatData.append(finalMsg);
             }
+            this.chatData.append(finalMsg);
+            this.scrollToEnd();
             this.liveReplyKey = '';   // 收尾完成（已补全/已入库）——异常收尾不再管它
+            this.liveReplyOn = false;
+            this.liveReplyText = '';
+            this.liveReplyTime = '';
           } else {
             if (!thinkSealedThisSend) {
               this.chatData.append(this.makeFallbackThink(thinkSec));
@@ -9016,16 +9060,15 @@ struct Index {
       console.error(`[ZJ-SSE] 进入对账：${errMsg(err)}`);   // 9-27 v4 诊断：settle 异常/收敛都到这
       // 9-18 修复批八（APP2-02）：先收思考卡再对账——对账要等网络，别让未封口的卡多挂几秒
       this.endThinking();
-      // FE3-04（9-23）：流没收 done 时正文可能已流出半截——先摘掉这半截气泡再对账追加完整回复，
-      // 不再「半截 + 完整」两条并排（key 提为组件态才拿得到）
-      if (this.liveReplyKey !== '') {
-        this.chatData.removeWhere((m: ChatItem) => m.key === this.liveReplyKey);
-        this.liveReplyKey = '';
-      }
+      // FE3-04（9-23）/ 9-27 v5：流没收 done 时正文可能已流出半截——live 卡不进 chatData，
+      // 收工即消失（不再"半截+完整"两条并排；对账拿到全文再 append）
+      this.liveReplyOn = false;
+      this.liveReplyText = '';
+      this.liveReplyTime = '';
+      this.liveReplyKey = '';
       // 超时/断线先别报错：等几秒拉 history 对账，消息和回复已入库就直接显示；
       // 真没到才提示重发——绝不盲目自动重发，防库存双份
       const settled = await this.reconcile(text, sentAtMs);
-      console.info(`[ZJ-SSE] 对账结果：${settled === null ? '空手' : '拿到全文'}`);   // 9-27 v4 诊断
       if (settled !== null) {
         if (imageToSend) {
           this.pendingImage = '';
