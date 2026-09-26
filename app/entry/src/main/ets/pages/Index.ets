@@ -8685,6 +8685,7 @@ struct Index {
       fileToSend ? fileToSend.name : undefined);
     this.beginThinking();
     let outboxBody: ChatBody | null = null;   // 入队底稿（catch 里拿不到 try 的局部量）
+    let sentAtMs: number = Date.now();        // 9-26 H7：对账 floor 锚点＝发送时刻（同因：catch 要可见）
     try {
       const loc = await this.fetchLocation(getContext(this) as common.UIAbilityContext);
       const body: ChatBody = { message: text, msg_id: newMsgId() };
@@ -8718,6 +8719,7 @@ struct Index {
         return;
       }
       const req = http.createHttp();
+      let silenceTimer: number = -1;   // 9-26 流式卡住修：静默看门狗计时器（声明在 try 外，finally 要清）
       try {
         // 9-4 自由发挥包：SSE 流式——思考+正文打字机。字节级攒 buffer 按 \n\n 切事件
         //（UTF-8 多字节高位都 ≥0x80，0x0A0A 不会出现在汉字里，字节切割安全）。
@@ -8726,6 +8728,41 @@ struct Index {
         let sseRest = new Uint8Array(0);
         let rawBuf = new Uint8Array(0);   // 9-25：原文字节也攒一份——dedup 回的是 JSON（无 data: 前缀）
         let doneEv: StreamEvent | null = null;
+        // ── 9-26 流式卡住修（工单 patch_流式客户端收尾硬化_2026-09-26）──
+        // 流式收尾多路兜底：done（协议收尾）/ dataEnd（传输收尾）/ 静默看门狗，任一先到即结算；
+        // settle 幂等；下半段（dedup / done 收尾 / 非 2xx 入队 / catch 对账）一行不改。
+        let settled = false;
+        let sawSse = false;   // 确认真出过 SSE 帧（防把带体的非 2xx 响应误判成 200 收尾）
+        let lastDataAt = Date.now();
+        let settleResolve: (v: number) => void = () => {};
+        let settleReject: (e: Error) => void = () => {};
+        const settleP = new Promise<number>((resolve: (v: number) => void, reject: (e: Error) => void) => {
+          settleResolve = resolve;
+          settleReject = reject;
+        });
+        const settle = (code: number, err?: Error): void => {
+          if (settled) {
+            return;   // 先到者说了算
+          }
+          settled = true;
+          if (err) {
+            settleReject(err);   // 走 await 抛错 → catch → 对账
+          } else {
+            settleResolve(code);
+          }
+        };
+        silenceTimer = setInterval(() => {
+          // 120s 一个事件都没来 → 当断尾：抛错走 catch→对账（server 侧回复通常已落库）。
+          // 阈值须大于一次模型调用可能的静默期（config api_timeout=300s；60s 会误杀慢思考轮）。
+          if (Date.now() - lastDataAt > 120000) {
+            settle(-1, new Error('流式静默断尾（120s 无事件）'));
+          }
+        }, 5000);
+        req.on('dataEnd', () => {
+          if (sawSse) {
+            settle(200);   // 传输层收尾（promise 万一悬死时的第二结算线）
+          }
+        });
         // ── 9-12 时间线步骤卡（Kimi 客户端式，家主令「思考→工具→输出→继续思考」）──
         // 每一轮：思考卡（实时流式→封口成「思考了 Ns」）→ 工具卡 → 正文气泡。
         // round 事件封上一轮，reply 后再有 thinking 自动开新卡。
@@ -8805,11 +8842,13 @@ struct Index {
           } else if (obj.type === 'done') {
             sealThink();
             doneEv = obj;
+            settle(200);   // 9-26：协议级收尾——done 一到立刻放行，尾包/连接尾巴丢了也不冻
           } else if (obj.type === 'error') {
             throw new Error(obj.text ?? '流式中断');
           }
         };
         req.on('dataReceive', (data: ArrayBuffer) => {
+          lastDataAt = Date.now();   // 9-26：有数据就喂看门狗（慢流不误杀，断流才收网）
           // 9-25：整份原文按字节攒——事后一次解码（逐帧解码会在多字节汉字切分处出乱码）
           const inb = new Uint8Array(data);
           const rb = new Uint8Array(rawBuf.length + inb.length);
@@ -8825,6 +8864,7 @@ struct Index {
               const block = util.TextDecoder.create('utf-8').decodeToString(merged.slice(start, i + 1));
               for (const line of block.split('\n')) {
                 if (line.startsWith('data: ')) {
+                  sawSse = true;   // 9-26：确认这是 SSE 流（dataEnd 结算只对 SSE 生效）
                   onEvent(JSON.parse(line.substring(6)) as StreamEvent);
                 }
               }
@@ -8837,13 +8877,15 @@ struct Index {
         // 报「未知属性」）。此前调 request()：响应被整体缓冲、dataReceive 不逐段触发，思考卡与正文
         // 从来没逐字流出过，每轮都绕到「流式没收到收尾」的对账老路。流式版返回状态码（number），
         // 正文走 dataReceive，收尾判定改用 rawBuf。
-        const streamCode: number = await req.requestInStream(CHAT_URL, {
+        const streamP: Promise<number> = req.requestInStream(CHAT_URL, {
           method: http.RequestMethod.POST,
           header: { 'Content-Type': 'application/json', 'Authorization': DOOR_AUTH },
           extraData: JSON.stringify(body),
           connectTimeout: CHAT_TIMEOUT_MS,
           readTimeout: 180000   // 9-4：流式放宽到 180s（K3 思考+长正文实测 36s+，max 档更久）
         });
+        // 9-26：不再单等传输 promise——done / dataEnd / 看门狗任一先到即结算（settleP 收口）
+        const streamCode: number = await Promise.race([streamP, settleP]);
         // 9-12 去重命中：重发的消息 server 认出身份证，回的是 JSON（dedup:true）而非 SSE——
         // 原样还他上次那句，直接按正常回复渲染，别当"流没收到收尾"绕去对账。
         if (streamCode >= 200 && streamCode < 300 && !doneEv) {
@@ -8937,6 +8979,9 @@ struct Index {
           }
         }
       } finally {
+        clearInterval(silenceTimer);   // 9-26：看门狗收工
+        req.off('dataReceive');
+        req.off('dataEnd');
         req.destroy();
       }
     } catch (err) {
@@ -8950,7 +8995,7 @@ struct Index {
       }
       // 超时/断线先别报错：等几秒拉 history 对账，消息和回复已入库就直接显示；
       // 真没到才提示重发——绝不盲目自动重发，防库存双份
-      const settled = await this.reconcile(text, Date.now());
+      const settled = await this.reconcile(text, sentAtMs);
       if (settled !== null) {
         if (imageToSend) {
           this.pendingImage = '';
