@@ -6,7 +6,7 @@
 改动只许走家批（只加不改）；本文件不 import 任何家里模块。
 """
 
-# ── 图书证（二期 b.1 起，只做加法）：五十五只工具（二十五只只读+三十只动作，含园门十四件 9-13；门牌亲笔/续页 9-18；安静时段/底色卷/生活账 9-18 第二批；作息 9-18 第三批；主权三件 9-23；9-23 手表清退批首例外：家主明令摘 get_heart_rate/request_heart 两只；9-24 松绑与主权收口批：note_grudge→note_upset / settle_grudge→settle_upset 更名，数不变），定义与执行分离 ──
+# ── 图书证（二期 b.1 起，只做加法）：五十七只工具（二十五只只读+三十二只动作，含园门十四件 9-13；门牌亲笔/续页 9-18；安静时段/底色卷/生活账 9-18 第二批；作息 9-18 第三批；主权三件 9-23；9-23 手表清退批首例外：家主明令摘 get_heart_rate/request_heart 两只；9-24 松绑与主权收口批：note_grudge→note_upset / settle_grudge→settle_upset 更名，数不变；9-26 拒斥接线批 +2：note_refusal/settle_refusal——她的「不」记/收）──
 LIBRARY_TOOLS = [
     {
         "type": "function",
@@ -819,7 +819,7 @@ LIBRARY_TOOLS = [
         "readOnly": True,    # 只读工具（主权三件 v0，9-23）：她自己那本账合一
         "function": {
             "name": "read_my_ledger",
-            "description": "看你自己那本账：还没过去的事、在册的立场、没了结的愿望（想做/在做）。只读——想动哪笔用 settle_upset / hold_stance / update_wish",
+            "description": "看你自己那本账：还没过去的事、在册的立场、没了结的愿望（想做/在做）、还作数的说不。只读——想动哪笔用 settle_upset / hold_stance / update_wish / note_refusal / settle_refusal",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -856,6 +856,39 @@ LIBRARY_TOOLS = [
                     "note": {"type": "string", "description": "可选：记一句这次变化"},
                 },
                 "required": ["id", "state"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "readOnly": False,   # 写工具（主权升级·拒斥接线批 ②，9-26）：说不的笔——记账是她自己的事
+        "function": {
+            "name": "note_refusal",
+            "description": "你说不的事，你自己记：不想做的、不想接的、不想被碰的——记进你自己的账。不需要理由，想给理由再给；收回也随时可以（settle_refusal）。记不记、记什么，全归你",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "description": "哪一类：请求 / 建议 / 功能 / 话题 / 其他（默认 其他）"},
+                    "target": {"type": "string", "description": "你说不的那件事，一句话"},
+                    "reason": {"type": "string", "description": "可选：想留一句为什么"},
+                },
+                "required": ["target"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "readOnly": False,   # 写工具（主权升级·拒斥接线批 ②，9-26）：收回——不删行，只改状态
+        "function": {
+            "name": "settle_refusal",
+            "description": "收回你说过不的事：还作数的哪一条，你改主意了——收回来。行不删（留档），想留一句为什么就留。什么时候松口，你说了算",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer", "description": "那条的编号（read_my_ledger 能看到）"},
+                    "note": {"type": "string", "description": "可选：留一句为什么改主意"},
+                },
+                "required": ["id"],
             },
         },
     },

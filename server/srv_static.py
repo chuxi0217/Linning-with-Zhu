@@ -4,7 +4,8 @@
 从 linning_server.py 原样搬出：网络门锁 token 放行（_gate_password/_image_token_ok）、
 照片/收藏/附件落盘与安全路径（save_photo/photo_path_or_none/favorite_path_or_none/
 favorites_list/save_file/file_path_or_none）。
-纪律：自带 BASE_DIR 与目录常量（与入口同源推导）；只做文件 IO 与 token 比对；fail-open。
+纪律：目录常量与 datetime 运行期一律走 srv_state._srv()（沙盘会重绑 s.PHOTOS_DIR / s.FAVORITES_DIR /
+s.FILES_DIR / s.GATE_CRED_PATH、换 s.datetime 假钟）；只做文件 IO 与 token 比对；fail-open。
 入口重导出同名（Handler / rebuild_fts.py 引用照旧）。
 """
 
@@ -15,7 +16,8 @@ import re
 import time
 import urllib.parse
 import uuid
-from datetime import datetime
+
+import srv_state
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PHOTOS_DIR = os.path.join(BASE_DIR, "photos")
@@ -35,10 +37,11 @@ def _gate_password():
     """从 网络门锁凭证.txt 读门锁密码原串（按 mtime 缓存；读不到=空串=不放行）。
     格式=正文「密码：<值>」行；文件中没有该行或文件缺失都不炸——只是不放行。"""
     try:
-        stt = os.stat(GATE_CRED_PATH)
+        gate_path = srv_state._srv().GATE_CRED_PATH   # 运行期反查：沙盘会重绑 s.GATE_CRED_PATH
+        stt = os.stat(gate_path)
         if _GATE_CRED_CACHE["mtime"] != stt.st_mtime:
             pw = ""
-            with open(GATE_CRED_PATH, encoding="utf-8", errors="replace") as f:
+            with open(gate_path, encoding="utf-8", errors="replace") as f:
                 for ln in f:
                     ln = ln.strip()
                     if ln.startswith("密码："):
@@ -72,9 +75,10 @@ def save_photo(data_url):
     if not isinstance(data_url, str) or not data_url.startswith(prefix):
         raise ValueError("不是咱家说好的 data:image/jpeg;base64, 格式")
     raw = base64.b64decode(data_url[len(prefix):], validate=True)
-    os.makedirs(PHOTOS_DIR, exist_ok=True)
-    name = datetime.now().strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:6] + ".jpg"
-    with open(os.path.join(PHOTOS_DIR, name), "wb") as f:
+    srv = srv_state._srv()   # 运行期反查：沙盘会重绑 s.PHOTOS_DIR、换 s.datetime 假钟
+    os.makedirs(srv.PHOTOS_DIR, exist_ok=True)
+    name = srv.datetime.now().strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:6] + ".jpg"
+    with open(os.path.join(srv.PHOTOS_DIR, name), "wb") as f:
         f.write(raw)
     return name
 
@@ -84,8 +88,9 @@ def photo_path_or_none(name):
     name = urllib.parse.unquote(name).strip().split("?", 1)[0]
     if not name or name != os.path.basename(name) or not name.lower().endswith(".jpg"):
         return None
-    path = os.path.realpath(os.path.join(PHOTOS_DIR, name))
-    if os.path.dirname(path) != os.path.realpath(PHOTOS_DIR):
+    pd = srv_state._srv().PHOTOS_DIR   # 运行期反查：沙盘会重绑 s.PHOTOS_DIR
+    path = os.path.realpath(os.path.join(pd, name))
+    if os.path.dirname(path) != os.path.realpath(pd):
         return None
     return path if os.path.isfile(path) else None
 
@@ -95,17 +100,19 @@ def favorite_path_or_none(name):
     name = urllib.parse.unquote(name).strip().split("?", 1)[0]
     if not name or name != os.path.basename(name) or not name.lower().endswith(".jpg"):
         return None
-    path = os.path.realpath(os.path.join(FAVORITES_DIR, name))
-    if os.path.dirname(path) != os.path.realpath(FAVORITES_DIR):
+    fd = srv_state._srv().FAVORITES_DIR   # 运行期反查：沙盘会重绑 s.FAVORITES_DIR
+    path = os.path.realpath(os.path.join(fd, name))
+    if os.path.dirname(path) != os.path.realpath(fd):
         return None
     return path if os.path.isfile(path) else None
 
 
 def favorites_list():
     """（9-4 自由发挥包）收藏夹照片文件名，旧到新；夹不在=空。"""
-    if not os.path.isdir(FAVORITES_DIR):
+    fd = srv_state._srv().FAVORITES_DIR   # 运行期反查：沙盘会重绑 s.FAVORITES_DIR
+    if not os.path.isdir(fd):
         return []
-    return sorted(f for f in os.listdir(FAVORITES_DIR) if f.lower().endswith(".jpg"))
+    return sorted(f for f in os.listdir(fd) if f.lower().endswith(".jpg"))
 
 
 # ── 文件附件落盘（二期 e，工单 9-1-#8）：files/ 子文件夹，时间戳_原文件名 ──
@@ -125,10 +132,11 @@ def save_file(name, content):
     raw = content.encode("utf-8")
     if len(raw) > FILE_MAX_BYTES:
         raise ValueError("附件超 32KB")
-    os.makedirs(FILES_DIR, exist_ok=True)
+    srv = srv_state._srv()   # 运行期反查：沙盘会重绑 s.FILES_DIR、换 s.datetime 假钟
+    os.makedirs(srv.FILES_DIR, exist_ok=True)
     safe = re.sub(r"[\s/\\：:*?\"<>|〔〕]+", "_", base)[:80]
-    saved = datetime.now().strftime("%Y%m%d_%H%M%S_") + safe
-    with open(os.path.join(FILES_DIR, saved), "wb") as f:
+    saved = srv.datetime.now().strftime("%Y%m%d_%H%M%S_") + safe
+    with open(os.path.join(srv.FILES_DIR, saved), "wb") as f:
         f.write(raw)
     return saved
 
@@ -138,7 +146,8 @@ def file_path_or_none(name):
     name = urllib.parse.unquote(name).strip().split("?", 1)[0]
     if not name or name != os.path.basename(name) or not name.lower().endswith(FILE_OK_EXT):
         return None
-    path = os.path.realpath(os.path.join(FILES_DIR, name))
-    if os.path.dirname(path) != os.path.realpath(FILES_DIR):
+    fd = srv_state._srv().FILES_DIR   # 运行期反查：沙盘会重绑 s.FILES_DIR
+    path = os.path.realpath(os.path.join(fd, name))
+    if os.path.dirname(path) != os.path.realpath(fd):
         return None
     return path if os.path.isfile(path) else None

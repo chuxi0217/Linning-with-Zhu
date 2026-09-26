@@ -16,7 +16,7 @@ import json
 import os
 import random
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
@@ -128,53 +128,70 @@ def tick_and_shadow(now=None):
 
 
 STATE = os.path.expanduser("~/.zanjia_desire_state.json")
+_TAKEN_KEEP = 50          # state 里已递事件 id 只留最近 50 条（防膨胀）
 
 
 def _load_state():
     try:
         with open(STATE, encoding="utf-8") as f:
-            return json.load(f)
+            st = json.load(f)
+        return st if isinstance(st, dict) else {}
     except Exception:
         return {}
 
 
 def _save_state(st):
+    """写 state，**返回是否写成功**——写失败调用方必须知道（宁可不递，不许重复递）。"""
     try:
         with open(STATE, "w", encoding="utf-8") as f:
             json.dump(st, f, ensure_ascii=False)
+        return True
     except Exception:
-        pass
+        return False
 
 
 def take_desire(now=None):
     """上岗口（9-26 家主令「她想要也可以主动找我」·注入版）：③出口命中（深夜+D高+他不在场）
     → 递一句话头到开场，**让她自己决定说不说、怎么说**（不代写腔调、不主动发消息）。
-    取走即记账（STATE 存已递的命中时刻），同一命中只递一次；窗口默认 12h（隔夜的「想要」不翻旧账）。
+    取走即记账（STATE 存已递事件 id，只留最近 50 条）：**12h 窗口内取最早的一条未递③**，
+    同一命中只递一次；state 写不进去 → 返回 None（宁可不给，不许重复给）。
+    9-26 修：旧版只记「最新一条 ts」——取了新③，窗口内更早的老③永远取不出；
+    且 state 写失败时同一③每次开场重递。旧 state 的 taken_ts 自动迁进 taken_ids。
     开关 desire_engine_inject（默认关）——关掉＝回到只算不递。返回 dict|None；fail-open。"""
     now = now or datetime.now()
     try:
         if not _cfg("desire_engine_inject", False):
             return None
+        win_h = float(_cfg("desire_inject_window_h", 12))
+        cutoff = (now - timedelta(hours=win_h)).strftime("%Y-%m-%d %H:%M:%S")
         con = _conn()
-        row = con.execute(
-            "SELECT ts, payload FROM events WHERE kind='desire.tick' AND payload LIKE '%③表达%' "
-            "ORDER BY id DESC LIMIT 1").fetchone()
+        rows = con.execute(
+            "SELECT id, ts, payload FROM events WHERE kind='desire.tick' AND payload LIKE '%③表达%' "
+            "AND ts >= ? ORDER BY id ASC", (cutoff,)).fetchall()
         con.close()
-        if not row:
+        if not rows:
             return None
-        ts, payload = row
         st = _load_state()
-        if st.get("taken_ts") == ts:
-            return None                      # 这次命中已递过，不重复顶
-        try:
-            age_h = (now - datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")).total_seconds() / 3600
-        except Exception:
-            return None
-        if not (0 <= age_h <= float(_cfg("desire_inject_window_h", 12))):
-            return None
-        st["taken_ts"] = ts
-        _save_state(st)
-        return {"ts": ts, "d": (json.loads(payload or "{}").get("d"))}
+        taken = [x for x in (st.get("taken_ids") or []) if isinstance(x, int)]
+        legacy_ts = st.get("taken_ts")
+        if legacy_ts and not taken:
+            # 旧 state 只记了「最后递出的 ts」：迁成 id 集合（同一秒全算已递，宁缺勿重）
+            taken = [eid for eid, ts, _ in rows if ts == legacy_ts]
+        for eid, ts, payload in rows:
+            if eid in taken:
+                continue                     # 已递过，看下一条——不再被最新一条堵死
+            try:
+                age_h = (now - datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")).total_seconds() / 3600
+            except Exception:
+                continue
+            if not (0 <= age_h <= win_h):
+                continue                     # 窗外（或时钟怪）的不递，不翻旧账
+            st["taken_ids"] = (taken + [eid])[-_TAKEN_KEEP:]
+            st["taken_ts"] = ts              # 兼容旧格式读者
+            if not _save_state(st):
+                return None                  # 记不上账＝不敢递（宁可漏一条，不许重复顶）
+            return {"ts": ts, "d": (json.loads(payload or "{}").get("d"))}
+        return None
     except Exception:
         return None
 

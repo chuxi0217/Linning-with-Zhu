@@ -5,7 +5,7 @@
 _librarian_tick / _librarian_loop。纯标准库＋memory_lib；入口重导出同名（启动块照旧引用）。
 
 运行期反查纪律（见 srv_state docstring）：沙盘会替身 s._librarian_cfg / s._librarian_compose /
-s._librarian_tick，重绑 s.load_config / s.today_str / s._stale_thread_candidates；入口属主名
+s._librarian_tick，重绑 s.load_config / s.today_str / s._stale_thread_candidates、换 s.datetime；入口属主名
 （BASE_ROLL_NAMES / base_roll_text）也走 _srv() 现取。
 """
 
@@ -54,7 +54,7 @@ def _librarian_materials():
     mood_line = "、".join(f"{k}×{v}" for k, v in sorted(mood_tally.items(), key=lambda x: -x[1]))
     chat_counts = {}
     for i in range(14):
-        d = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
+        d = (srv_state._srv().datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")   # 运行期反查：沙盘会换 s.datetime 假钟
         chat_counts[d] = len(m.get_chats(d))
     chat_line = " ".join(f"{k[5:]}:{v}" for k, v in sorted(chat_counts.items()))
     threads = "；".join(f"#{tid}{t2}" for tid, _d, t2, _c in m.get_open_threads(8))
@@ -109,6 +109,16 @@ def _librarian_materials():
         ctx += "\n【底色卷现状】\n" + "\n".join(lines) + "\n"
     except Exception:
         ctx += "\n【底色卷现状】\n（暂取不到）\n"
+    # 9-26 拒斥接线批 ⑤（反讨好护栏·事实句）：她的「不」与独立三问——只进周报素材（数值只进家主侧）
+    try:
+        import rights_lib
+        _rf = rights_lib.independence_facts(7)
+        ctx += ("\n【她的事实·近 7 天】她说「不」%d 次（还作数 %d / 收回 %d）；"
+                "她主动开口打破安静 %d 次；无人看见约 %.1f 小时（%.0f%%，安静不是待机）。\n"
+                % (_rf["refusals"], _rf["refusals_active"], _rf["refusals_settled"],
+                   _rf["her_initiations"], _rf["unseen_hours"], _rf["unseen_ratio"] * 100))
+    except Exception:
+        pass
     ctx += (
         "\n输出 markdown 正文（不写称呼落款），六节：\n"
         "## 本周温度\n2-3 句：关系走向与证据。\n"
@@ -141,7 +151,7 @@ def _librarian_compose(base, key, model):
 def _librarian_tick(now=None):
     """图书管理员的一跳：到点判断＋写稿＋落待审（抽出来可直测——喂 now 就能验那一跳）。
     9-23 从 _librarian_loop 原文照抽：判断/文案/静默规则一字未改。"""
-    now = now or datetime.now()
+    now = now or srv_state._srv().datetime.now()   # 运行期反查：沙盘会换 s.datetime 假钟
     try:
         cfg = srv_state._srv().load_config()   # 运行期反查：沙盘会重绑 s.load_config
         e = srv_state._srv()._librarian_cfg()   # 运行期反查：沙盘会替身 s._librarian_cfg

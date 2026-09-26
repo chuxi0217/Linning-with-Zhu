@@ -8719,7 +8719,10 @@ struct Index {
         return;
       }
       const req = http.createHttp();
+      console.info('[ZJ-SSE] v4 流式发送开始');   // 9-27 v4：版本标记（确认新包在跑）
       let silenceTimer: number = -1;   // 9-26 流式卡住修：静默看门狗计时器（声明在 try 外，finally 要清）
+      let hardTimer: number = -1;      // 9-27 v4：总时限硬闸（防「数据一直来但事件出不来」把看门狗饿死）
+      let lastWdogLog: number = 0;     // 9-27 v4：看门狗静默播报节流
       try {
         // 9-4 自由发挥包：SSE 流式——思考+正文打字机。字节级攒 buffer 按 \n\n 切事件
         //（UTF-8 多字节高位都 ≥0x80，0x0A0A 不会出现在汉字里，字节切割安全）。
@@ -8745,6 +8748,7 @@ struct Index {
             return;   // 先到者说了算
           }
           settled = true;
+          console.info(`[ZJ-SSE] settle（${err ? '异常→' + err.message : '正常 code=' + code}）`);   // 9-27 v4 诊断
           if (err) {
             settleReject(err);   // 走 await 抛错 → catch → 对账
           } else {
@@ -8754,10 +8758,18 @@ struct Index {
         silenceTimer = setInterval(() => {
           // 120s 一个事件都没来 → 当断尾：抛错走 catch→对账（server 侧回复通常已落库）。
           // 阈值须大于一次模型调用可能的静默期（config api_timeout=300s；60s 会误杀慢思考轮）。
-          if (Date.now() - lastDataAt > 120000) {
+          const silentMs = Date.now() - lastDataAt;
+          if (silentMs > 120000) {
             settle(-1, new Error('流式静默断尾（120s 无事件）'));
+          } else if (silentMs > 30000 && Date.now() - lastWdogLog > 30000) {
+            lastWdogLog = Date.now();   // 9-27 v4 诊断：静默 >30s 才播报，且 30s 一次
+            console.info(`[ZJ-SSE] 看门狗：已静默 ${Math.floor(silentMs / 1000)}s（连接还在等）`);
           }
         }, 5000);
+        hardTimer = setTimeout(() => {
+          // 9-27 v4：总时限硬闸——240s 还没收尾就强制结算（防异常风暴把 lastDataAt 喂饱、看门狗饿死）。
+          settle(-1, new Error('流式总时限到（240s 未收尾）'));
+        }, 240000);
         req.on('dataEnd', () => {
           if (sawSse) {
             settle(200);   // 传输层收尾（promise 万一悬死时的第二结算线）
@@ -8842,6 +8854,7 @@ struct Index {
           } else if (obj.type === 'done') {
             sealThink();
             doneEv = obj;
+            console.info('[ZJ-SSE] 收到 done');   // 9-27 v4 诊断
             settle(200);   // 9-26：协议级收尾——done 一到立刻放行，尾包/连接尾巴丢了也不冻
           } else if (obj.type === 'error') {
             throw new Error(obj.text ?? '流式中断');
@@ -8849,29 +8862,43 @@ struct Index {
         };
         req.on('dataReceive', (data: ArrayBuffer) => {
           lastDataAt = Date.now();   // 9-26：有数据就喂看门狗（慢流不误杀，断流才收网）
-          // 9-25：整份原文按字节攒——事后一次解码（逐帧解码会在多字节汉字切分处出乱码）
-          const inb = new Uint8Array(data);
-          const rb = new Uint8Array(rawBuf.length + inb.length);
-          rb.set(rawBuf, 0);
-          rb.set(inb, rawBuf.length);
-          rawBuf = rb;
-          const merged = new Uint8Array(sseRest.length + data.byteLength);
-          merged.set(sseRest, 0);
-          merged.set(new Uint8Array(data), sseRest.length);
-          let start = 0;
-          for (let i = 0; i + 1 < merged.length; i++) {
-            if (merged[i] === 10 && merged[i + 1] === 10) {   // \n\n 事件界
-              const block = util.TextDecoder.create('utf-8').decodeToString(merged.slice(start, i + 1));
-              for (const line of block.split('\n')) {
-                if (line.startsWith('data: ')) {
-                  sawSse = true;   // 9-26：确认这是 SSE 流（dataEnd 结算只对 SSE 生效）
-                  onEvent(JSON.parse(line.substring(6)) as StreamEvent);
+          // 9-27 v4 加固：逐帧/逐事件 try 隔离——任一帧或任一事件的异常只跳过它自己，
+          // 绝不中断回调、绝不让 sseRest 停摆（旧版异常会级联：同一坏帧反复抛、done 永远到不了）。
+          try {
+            // 9-25：整份原文按字节攒——事后一次解码（逐帧解码会在多字节汉字切分处出乱码）
+            const inb = new Uint8Array(data);
+            const rb = new Uint8Array(rawBuf.length + inb.length);
+            rb.set(rawBuf, 0);
+            rb.set(inb, rawBuf.length);
+            rawBuf = rb;
+            const merged = new Uint8Array(sseRest.length + data.byteLength);
+            merged.set(sseRest, 0);
+            merged.set(new Uint8Array(data), sseRest.length);
+            let start = 0;
+            for (let i = 0; i + 1 < merged.length; i++) {
+              if (merged[i] === 10 && merged[i + 1] === 10) {   // \n\n 事件界
+                try {
+                  const block = util.TextDecoder.create('utf-8').decodeToString(merged.slice(start, i + 1));
+                  for (const line of block.split('\n')) {
+                    if (line.startsWith('data: ')) {
+                      sawSse = true;   // 9-26：确认这是 SSE 流（dataEnd 结算只对 SSE 生效）
+                      try {
+                        onEvent(JSON.parse(line.substring(6)) as StreamEvent);
+                      } catch (eEv) {
+                        console.error(`[ZJ-SSE] 事件处理异常（跳过该帧）：${eEv}`);   // 9-27 v4 诊断
+                      }
+                    }
+                  }
+                } catch (eFr) {
+                  console.error(`[ZJ-SSE] 帧解析异常（跳过该帧）：${eFr}`);   // 9-27 v4 诊断
                 }
+                start = i + 2;   // 无论成败边界必推进：坏帧只丢它自己
               }
-              start = i + 2;
             }
+            sseRest = merged.slice(start);
+          } catch (eCb) {
+            console.error(`[ZJ-SSE] dataReceive 回调异常（保底兜住，不逸出）：${eCb}`);   // 9-27 v4 诊断
           }
-          sseRest = merged.slice(start);
         });
         // 9-25 修：打字机的真开关——本 SDK 里 requestInStream 是**方法**不是选项（写成选项编译期
         // 报「未知属性」）。此前调 request()：响应被整体缓冲、dataReceive 不逐段触发，思考卡与正文
@@ -8980,11 +9007,13 @@ struct Index {
         }
       } finally {
         clearInterval(silenceTimer);   // 9-26：看门狗收工
+        clearTimeout(hardTimer);       // 9-27 v4：总时限硬闸收工
         req.off('dataReceive');
         req.off('dataEnd');
         req.destroy();
       }
     } catch (err) {
+      console.error(`[ZJ-SSE] 进入对账：${errMsg(err)}`);   // 9-27 v4 诊断：settle 异常/收敛都到这
       // 9-18 修复批八（APP2-02）：先收思考卡再对账——对账要等网络，别让未封口的卡多挂几秒
       this.endThinking();
       // FE3-04（9-23）：流没收 done 时正文可能已流出半截——先摘掉这半截气泡再对账追加完整回复，
@@ -8996,6 +9025,7 @@ struct Index {
       // 超时/断线先别报错：等几秒拉 history 对账，消息和回复已入库就直接显示；
       // 真没到才提示重发——绝不盲目自动重发，防库存双份
       const settled = await this.reconcile(text, sentAtMs);
+      console.info(`[ZJ-SSE] 对账结果：${settled === null ? '空手' : '拿到全文'}`);   // 9-27 v4 诊断
       if (settled !== null) {
         if (imageToSend) {
           this.pendingImage = '';

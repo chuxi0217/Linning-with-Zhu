@@ -10,7 +10,8 @@ _garden_tools_payload / _garden_wake_with_tools / _garden_receipt_err / _garden_
 _garden_exec）。纯标准库＋memory_lib；入口重导出同名（心跳/状态页/工具分发/启动块照旧引用）。
 
 运行期反查纪律（见 srv_state docstring）：
-- 沙盘重绑：s.GARDEN_MCP_URL / s._GARDEN_MCP_MOD / s._garden_mcp_module / s._garden_token；
+- 沙盘重绑：s.GARDEN_MCP_URL / s._GARDEN_MCP_MOD / s._garden_mcp_module / s._garden_token /
+  s.GARDEN_TOKEN_PATH；
 - 沙盘替身：s.load_config / s.call_deepseek(_with_tools) / s.exec_library_tool /
   s.notify_letter / s._he_present / s._silent_window / s._day_window_start；
 - 时间伪装：s.datetime 会被换成 FakeDT——块内一律走 _dt() 现取。
@@ -130,6 +131,8 @@ def _garden_settle(eid, raw):
     # 9-25 在场感知：他在场就压成独处——想说的先记心里（他离开后/下轮再来说）
     if srv_state._srv()._he_present():   # 运行期反查：沙盘会重绑 s._he_present
         degrade = "他在场，压成独处"
+    elif _busy_garden_enforce():
+        degrade = "他在忙（报备过），压成独处"
     elif m.count_outbox_today("🌱") >= cap:
         degrade = "超上限压成独处"
     else:
@@ -151,6 +154,15 @@ def _garden_settle(eid, raw):
     m.consume_world_event(eid)
     print(f"  [Garden] 来找他：{message[:30]}")
     return "message"
+
+
+def _busy_garden_enforce():
+    """9-26 忙窗影子（④-A）：他报备过在忙——影子期只记「若拦」，enforce 才真压成独处。
+    fail-open 回 False。"""
+    try:
+        return bool(srv_state._srv()._busy_note("园子🌱"))
+    except Exception:
+        return False
 
 
 def _garden_wake_once():
@@ -317,7 +329,7 @@ def _ensure_bridge():
     if time.time() < _BRIDGE_FAIL_UNTIL[0]:
         return False
     try:
-        token = open(GARDEN_TOKEN_PATH).read().strip()
+        token = open(srv_state._srv().GARDEN_TOKEN_PATH).read().strip()   # 运行期反查：沙盘会重绑 s.GARDEN_TOKEN_PATH
     except Exception:
         token = ""
     if not token:
@@ -468,7 +480,7 @@ def _garden_mcp_module():
 def _garden_token():
     """读 garden_token.txt 首行。缺/空 → None（园门诚实缺席）。"""
     try:
-        with open(GARDEN_TOKEN_PATH, "r", encoding="utf-8") as f:
+        with open(srv_state._srv().GARDEN_TOKEN_PATH, "r", encoding="utf-8") as f:   # 运行期反查：沙盘会重绑 s.GARDEN_TOKEN_PATH
             tok = f.readline().strip()
         return tok or None
     except OSError:

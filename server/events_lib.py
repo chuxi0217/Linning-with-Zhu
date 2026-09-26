@@ -174,6 +174,23 @@ def ledger_from_usage(scene, model, usage, latency_ms=None, ok=1,
         return None
 
 
+def last_event(kind):
+    """最近一条某类事件 (ts, payload 原文) —— 只读小助手（9-26：放电投影等用）。
+    fail-open 回 None。"""
+    try:
+        con = _conn()
+        try:
+            _ensure(con)
+            row = con.execute(
+                "SELECT ts, payload FROM events WHERE kind=? ORDER BY id DESC LIMIT 1",
+                (str(kind),)).fetchone()
+            return row if row else None
+        finally:
+            con.close()
+    except Exception:
+        return None
+
+
 if __name__ == "__main__":
     print("events_lib 自检……")
     n1 = record("selftest", "engine", "selftest", {"ok": True})

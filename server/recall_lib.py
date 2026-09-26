@@ -14,6 +14,13 @@
 纪律：影子期只算只记（~/recall_shadow.log + events 账 recall.walk），不注入。
 开关：recall_shadow（总闸·默认 true）/ recall_inject（注入闸·默认 false·转正才开）
       / recall_chance（每跳概率·默认 0.05；心跳 30 分钟一跳 → 约 2~3 次/天）
+9-26 修（注入结构性失效）：候选从「只活内存 · 30 分钟过期」改为**落盘持久化**
+（~/.zanjia_recall_state.json 的 cand/cand_at 键，跨进程/重启可读）+ 窗口放宽到 12 小时
+（INJECT_WINDOW_S）——walk 与建 Session 时间几乎永远错开 30 分钟窗，不落盘/不放宽＝注入到不了眼前；
+take 后消费清除协议不变。
+9-26 修②（残留双投）：take 真取走时把候选 key 记入 state 的**已递集合**（delivered_keys，留最近
+50 个）——旧 walk 事件已递到她眼前，话头簿 collect 重扫时必须跳过（不然日后经【想跟你说的】再提
+一遍同一件事）；只读口 delivered_keys() 供 huatou_lib 查。
 fail-open：任何异常吞掉，绝不拦心跳。
 """
 
@@ -42,23 +49,79 @@ _TAG = {"calendar": "日历锚", "random": "翻旧日记", "topic": "话题第�
 
 # ── 9-25 上岗：注入取用口（取走即清）──
 # 影子期只记日志；转正后 server 开场来取一次，取走就清——一次走神只提一次，不车轱辘反复念。
+# 9-26 修（注入结构性失效）：候选**落盘持久化**（同一 state 文件里 cand / cand_at 两键，与 recent
+# 共存；磁盘为准＝跨进程/重启可读），窗口 30 分钟 → 12 小时。_LAST 保留为进程内镜像（兼容）。
+INJECT_WINDOW_S = 12 * 3600      # 12 小时：隔夜的走神不翻旧账
+DELIVERED_KEEP = 50              # 已递集合保留最近 N 个（防状态文件膨胀；够覆盖话头簿重扫窗）
 _LAST = {"cand": None, "at": 0.0}
 
 
-def take_recall(max_age_s=1800):
+def take_recall(max_age_s=None):
     """取最近一次走神结果给开场注入；**取走即清**（同一次不走第二遍）。
+    9-26 修：读落盘候选、窗口默认 12h（INJECT_WINDOW_S）——walk 与建 Session 常错开 30 分钟窗，
+    不落盘/不放宽＝注入到不了眼前；超窗不注入并顺手清掉（隔夜不翻旧账）。显式传 max_age_s 仍照旧生效。
+    9-26 修②：真取走时把 key 记入「已递」（delivered_keys）——话头簿重扫旧事件时跳过，不重提。
     注入闸关 / 没有 / 过期 → None（fail-open，绝不拦开场）。"""
     try:
         if not _cfg("recall_inject", False):
             return None
-        if _LAST.get("cand") is None:
+        c, at = _load_cand()
+        if not c:
             return None
-        if time.time() - float(_LAST.get("at") or 0) > max_age_s:
+        win = INJECT_WINDOW_S if max_age_s is None else max_age_s
+        if time.time() - float(at or 0) > float(win):
+            _clear_cand()   # 超窗：不注入，也不留在盘上日后翻出来（没到她眼前，不算已递）
             return None
-        c = _LAST.get("cand")
-        _LAST["cand"] = None
-        _LAST["at"] = 0.0
+        _mark_delivered(c.get("key"))   # 9-26 修②：真取走 → 记「已递」，话头簿不再捡这条旧走神
+        _clear_cand()       # 取走即清——一次走神只提一次
         return c
+    except Exception:
+        return None
+
+
+def delivered_keys():
+    """只读：「最近已递」的候选 key 集合——被 take 真取走、递到她眼前过的走神。
+    huatou collect 据此跳过已递过的旧 recall.walk 事件（事件还在库里，重扫时不能再收进簿子
+    日后经【想跟你说的】再提一遍）。老状态文件没这个键 → 空集；读不到/坏文件 → 空集。fail-open。"""
+    try:
+        keys = _load_state().get("delivered_keys") or []
+        return {str(k) for k in keys if k}
+    except Exception:
+        return set()
+
+
+def _mark_delivered(key):
+    """take 真取走候选时记一笔「已递」：state 文件 delivered_keys（去重、只留最近 DELIVERED_KEEP 个）。
+    与 recent/cand 同住 state 文件、保留其它键；fail-open，绝不拦 take。9-26 修②。"""
+    try:
+        key = str(key or "")
+        if not key:
+            return
+        st = _load_state()
+        keys = [str(k) for k in (st.get("delivered_keys") or []) if k]
+        if key in keys:
+            keys.remove(key)
+        keys.append(key)
+        st["delivered_keys"] = keys[-DELIVERED_KEEP:]
+        with open(STATE_PATH, "w", encoding="utf-8") as f:
+            json.dump(st, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def current_cand_key(max_age_s=None):
+    """只读：当前走神候选的 key（不消费、不清）——话头簿 collect 据此跳过同一次走神（9-26 修双投）。
+    注入闸关 → None（走神不会递出，话头该照常收，不能把这条记忆憋死）；超窗 → None。fail-open。"""
+    try:
+        if not _cfg("recall_inject", False):
+            return None
+        c, at = _load_cand()
+        if not c:
+            return None
+        win = INJECT_WINDOW_S if max_age_s is None else max_age_s
+        if time.time() - float(at or 0) > float(win):
+            return None
+        return str(c.get("key") or "") or None
     except Exception:
         return None
 
@@ -89,6 +152,55 @@ def _load_state():
             return json.load(f)
     except Exception:
         return {}
+
+
+# ── 9-26 修：走神候选落盘（注入结构性失效）——cand / cand_at 与 recent 同住 state 文件 ──
+
+def _save_cand(cand):
+    """候选落盘 + 进程内镜像。保留 state 其它键（recent 等）。fail-open。9-26 修。"""
+    at = time.time()
+    try:
+        _LAST["cand"], _LAST["at"] = cand, at
+    except Exception:
+        pass
+    try:
+        st = _load_state()
+        st["cand"] = cand
+        st["cand_at"] = at
+        with open(STATE_PATH, "w", encoding="utf-8") as f:
+            json.dump(st, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def _load_cand():
+    """读候选 (cand, at)——**磁盘为准**（跨进程/重启可读）。读不到 → (None, 0.0)。fail-open。9-26 修。"""
+    try:
+        with open(STATE_PATH, encoding="utf-8") as f:
+            st = json.load(f)
+        c = st.get("cand")
+        if isinstance(c, dict) and c.get("key"):
+            return c, float(st.get("cand_at") or 0)
+    except Exception:
+        pass
+    return None, 0.0
+
+
+def _clear_cand():
+    """消费/超窗后清除候选（磁盘 + 镜像）；保留 recent 等其它键。fail-open。9-26 修。"""
+    try:
+        _LAST["cand"], _LAST["at"] = None, 0.0
+    except Exception:
+        pass
+    try:
+        st = _load_state()
+        if "cand" in st or "cand_at" in st:
+            st.pop("cand", None)
+            st.pop("cand_at", None)
+            with open(STATE_PATH, "w", encoding="utf-8") as f:
+                json.dump(st, f, ensure_ascii=False)
+    except Exception:
+        pass
 
 
 def _remember(key):
@@ -256,8 +368,7 @@ def tick_and_shadow(now=None):
         _log(f"[{now.strftime('%F %T')}] 走神·{_TAG[kind]} ｜ 种子={cand['why']}\n"
              f"    → {cand['ref']}：\"{cand['text']}\"")
         _remember(cand["key"])
-        _LAST["cand"] = cand          # 9-25：留一份给开场注入（取走即清）
-        _LAST["at"] = time.time()
+        _save_cand(cand)              # 9-26 修：落盘持久化（跨进程/重启可读；take 后消费清除）
         try:
             import events_lib
             events_lib.record("recall.walk", "linning", "heartbeat",

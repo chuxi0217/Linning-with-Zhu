@@ -6,9 +6,9 @@
 _week_roll_pack）＋ 卡片馆只读扫描（CARDS_DIR/_CARDS_GROUPS/_cards_scan）。纯标准库＋memory_lib；
 入口重导出同名（心跳循环 / 主入口 / Handler 照旧引用）。
 
-运行期反查纪律（见 srv_state docstring）：沙盘套件会重绑入口上的 s.WROLL_DIR / s.CARDS_DIR /
-s._week_roll_adopt——凡此类「会被替身重绑」的名，函数内一律走 srv_state._srv().X 现取现用，
-绝不在模块里存快照。
+运行期反查纪律（见 srv_state docstring）：凡入口属主名（s.WROLL_DIR / s.CARDS_DIR / s._week_roll_adopt /
+s.SNAPSHOT_DIR / s.SNAPSHOT_KEEP / s.datetime）——函数内一律走 srv_state._srv().X 现取现用，
+绝不在模块里存快照（假钟与常量重绑才对沙盘生效）。
 """
 
 import os
@@ -28,9 +28,10 @@ _SNAP_STATE = {"day": None}
 
 
 def _snap_done_today():
-    pre = "咱家的家_自动备份_" + datetime.now().strftime("%Y%m%d")
+    srv = srv_state._srv()   # 运行期反查：沙盘换假钟 / 重绑 s.SNAPSHOT_DIR 才对这里生效
+    pre = "咱家的家_自动备份_" + srv.datetime.now().strftime("%Y%m%d")
     try:
-        return any(f.startswith(pre) for f in os.listdir(SNAPSHOT_DIR))
+        return any(f.startswith(pre) for f in os.listdir(srv.SNAPSHOT_DIR))
     except OSError:
         return False
 
@@ -59,18 +60,19 @@ def auto_snapshot(tag=""):
     try:
         if _snap_done_today():
             return
-        os.makedirs(SNAPSHOT_DIR, exist_ok=True)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        dst = os.path.join(SNAPSHOT_DIR, f"咱家的家_自动备份_{ts}_{tag}.db")
+        srv = srv_state._srv()   # 运行期反查：沙盘换假钟 / 重绑 s.SNAPSHOT_DIR / s.SNAPSHOT_KEEP 才对这里生效
+        os.makedirs(srv.SNAPSHOT_DIR, exist_ok=True)
+        ts = srv.datetime.now().strftime("%Y%m%d_%H%M%S")
+        dst = os.path.join(srv.SNAPSHOT_DIR, f"咱家的家_自动备份_{ts}_{tag}.db")
         _snapshot_db(os.path.join(BASE_DIR, "咱家的家.db"), dst)   # 9-18 后院深搜修：换 sqlite 备份 API（开机/跨天同一张手）
-        snaps = sorted(f for f in os.listdir(SNAPSHOT_DIR) if f.startswith("咱家的家_自动备份_"))
-        for old in snaps[:-SNAPSHOT_KEEP]:
+        snaps = sorted(f for f in os.listdir(srv.SNAPSHOT_DIR) if f.startswith("咱家的家_自动备份_"))
+        for old in snaps[:-srv.SNAPSHOT_KEEP]:
             try:
-                os.remove(os.path.join(SNAPSHOT_DIR, old))
+                os.remove(os.path.join(srv.SNAPSHOT_DIR, old))
             except OSError:
                 pass   # 删不掉就留着，下一轮再说
-        _SNAP_STATE["day"] = datetime.now().strftime("%Y%m%d")
-        print(f"  [备份] 已拍：{os.path.basename(dst)}（自动备份在馆 {min(len(snaps), SNAPSHOT_KEEP)} 张）")
+        _SNAP_STATE["day"] = srv.datetime.now().strftime("%Y%m%d")
+        print(f"  [备份] 已拍：{os.path.basename(dst)}（自动备份在馆 {min(len(snaps), srv.SNAPSHOT_KEEP)} 张）")
     except Exception as e:
         print(f"  [备份] 这张没拍上：{e}")
 
@@ -83,7 +85,7 @@ def _weekly_db_check(now=None):
     """每周一第一次心跳顺手验一次家底：PRAGMA quick_check（只读）+ days/chats 两张计数，
     结果落 obs_bump（db_check_ok / db_check_fail），日志一行。任何异常只打日志，绝不拦路。"""
     try:
-        now = now or datetime.now()
+        now = now or srv_state._srv().datetime.now()   # 运行期反查：沙盘换假钟才对这里生效
         if now.weekday() != 0 or _DBCK_STATE.get("day") == now.strftime("%Y%m%d"):
             return
         _DBCK_STATE["day"] = now.strftime("%Y%m%d")   # 先置再跑：验炸了也不当日重跑
@@ -165,7 +167,7 @@ def _week_roll_pack(now=None):
     7 天无日记不落档（诚实缺席）；落新卷前先把到期草稿归卷（9-18 优化批七·#5 后半）；
     任何异常只打日志，绝不拦路。"""
     try:
-        now = now or datetime.now()
+        now = now or srv_state._srv().datetime.now()   # 运行期反查：沙盘换假钟才对这里生效
         # BE3-04（9-23 修复批）：时点判据从「自然星期」改「咱家日的周一」——原判据下
         # 周一 03:xx（house 还是周日）会按周日算窗（9-13→9-19），4 点后再跑一次又出一份
         # 移窗卷（9-14→9-20，重叠 6 天；9-21 实案）。改后 4 点前不跑、4 点后只有一个窗，

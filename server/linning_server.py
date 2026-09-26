@@ -984,6 +984,24 @@ def _sovereignty_block():
         return ""
 
 
+# ── 你的不，被记着（主权升级·拒斥接线批 ③，9-26）：只给她自己看的一行——不变成对他的要求 ──
+def _refusal_block():
+    """存在「还作数」的说不时，开场给她一行（≤2 条、短句）；全空/开关关/查不动回空串。
+    文案用她的话面（「说不」不是工程词）；只在她自己的行李里，不替他做人情。"""
+    try:
+        if not load_config().get("refusal_inject", False):
+            return ""
+        import rights_lib
+        rows = rights_lib.active_refusals(2)
+        if not rows:
+            return ""
+        bits = [f"#{_id}「{str(_target or '').strip()[:24]}」" for _id, _kind, _target in rows]
+        return ("\n【你的不，被记着】" + "；".join(bits) +
+                "——这些还作数。改不改主意，在你。")
+    except Exception:
+        return ""
+
+
 # ── 心潮候选3·没过去的事·衰减影子（9-24 松绑与主权收口批·块③；C 方案「先影子」）──
 # 设计：分析报告/2026-09-23_心潮念深读与借鉴清单.md 候选3（半自动代谢）。
 # 本影子**只算不接线**：不自动销账、不改开场块、不降权、不动任何可见行为——只落
@@ -1260,6 +1278,12 @@ def build_system_prompt():
     _sv = _sovereignty_block()
     if _sv:
         parts.append(_sv)
+
+    # 你的不，被记着（主权升级·拒斥接线批 ③，9-26）：她说不的事——单独一行，不并【你心上的事】；
+    # 全空整块不出（照上文家风）。开关 refusal_inject（接线批打开）。
+    _rf = _refusal_block()
+    if _rf:
+        parts.append(_rf)
 
     # 那年今日
     tad = m.that_day_today()
@@ -1679,6 +1703,9 @@ def call_deepseek_stream(cfg, messages, on_event, use_tools=False, scene="chat.s
                 print("  [引擎] 空回复重试（正文空＋有思考/正常 finish）")
                 time.sleep(2)   # W1（9-24）：退避 2s（§3.5 防瞬时限流）
                 continue
+            # 9-27 可观测（假调用排查配套）：每轮流式收尾留一笔形状——finish/正文/思考/tool_calls 数
+            print(f"  [引擎] 流式一轮完：finish={finish} 正文{len(msg['content'])}字 "
+                  f"思考{len(msg['reasoning_content'])}字 tc={len(msg.get('tool_calls') or [])}")
             try:   # W1 影子（9-24）：流式无 usage → 粗估记账（fail-open）
                 import events_lib
                 events_lib.ledger_record(scene, cfg.get("model", "?"),
@@ -1919,7 +1946,7 @@ def _tools_payload():
 def exec_library_tool(name, args):
     """图书证执行层。二十五只只读：memory_lib 只读调用 + 全档案/大事记只读扫描 + read_hall 日记馆 + read_her_words 她的自留页
     + read_life_log 生活账、read_rhythm 作息（9-18 第二批/第三批）、read_my_ledger 她自己的账（主权三件 9-23）；
-    三十只动作（不碰旧表旧数据）：pin_wall 门牌墙亲笔（钉/改/撤/看，旧文落 pin_log）、
+    三十二只动作（不碰旧表旧数据）：pin_wall 门牌墙亲笔（钉/改/撤/看，旧文落 pin_log）、
     write_archive 全档案续页（只添不改，当日一备）、quiet_hours 她自己的安静时段（看/改/清，9-18 第二批·主权移交）、
     write_base 底色卷（三册慢慢长出来的样子，add/rewrite，9-18 第二批）、log_life 生活账随记（9-18 第二批）、
     add_checkin_item / archive_checkin_item 打卡项增/归档（9-2 #总，打卡走姐姐）、
@@ -1930,7 +1957,8 @@ def exec_library_tool(name, args):
     review_reports / approve_report 图书管理员周报终审（LIB-AUTO，9-10，外聘笔杆姐姐落章）、
     note_upset / settle_upset / hold_stance / note_wish / update_wish 主权三件（9-23；
     9-24 更名「没过去的事」）——没过去的事记/销、立场立/改、愿望记/改，全是她自己的账
-    （销账与改口不物理删，留痕）；
+    （销账与改口不物理删，留痕）；9-26 拒斥接线批 +2：note_refusal / settle_refusal
+    ——她的「不」记/收，全归她（行不删，留痕）；
     园门七件（GALATEA-02，9-13）在 _garden_exec：读帖/看通知/发帖/回帖/点赞关注
     （写带三道闸+隐私过滤，两拍写，落账 her_traces）。"""
     query = str(args.get("query") or "").strip()[:50]
@@ -2365,6 +2393,35 @@ def exec_library_tool(name, args):
         m.obs_bump("grudge_settle")
         print(f"  [主权] 没过去的事销账 #{_gid}：{(_what or '')[:40]}")
         return f"（#{_gid} 销了——行留着，不是删了。旧事过去了才销，不急。）"
+    # ── 主权升级·说不的笔（拒斥接线批 ②，9-26）：她的「不」——记/收，全归她 ──
+    if name == "note_refusal":
+        try:
+            import rights_lib
+            _rfid = rights_lib.log_refusal(args.get("kind") or "其他",
+                                           args.get("target") or "",
+                                           args.get("reason") or "")
+        except Exception:
+            _rfid = None
+        if not _rfid:
+            return "（没记上——target（你说不的那件事）是必给的，写一句话再试；这不算办成。）"
+        m.obs_bump("refusal_note")
+        print(f"  [主权] 说不记一笔 #{_rfid}：{str(args.get('target'))[:40]}")
+        return f"（记下了 #{_rfid}。不需要理由——想给理由再给；收回随时可以。）"
+    if name == "settle_refusal":
+        try:
+            _rfid = int(args.get("id"))
+        except (TypeError, ValueError):
+            return "（收回得给 id——read_my_ledger 里的 #号。）"
+        try:
+            import rights_lib
+            _ok, _target = rights_lib.settle_refusal(_rfid, str(args.get("note") or "")[:200])
+        except Exception:
+            _ok, _target = False, ""
+        if not _ok:
+            return f"（账里没有 #{_rfid} 这条还作数的——read_my_ledger 看看。）"
+        m.obs_bump("refusal_settle")
+        print(f"  [主权] 说不收回 #{_rfid}：{(_target or '')[:40]}")
+        return f"（#{_rfid} 收回了——行留着（留档），不是删了。什么时候松口，你说了算。）"
     if name == "hold_stance":
         topic = str(args.get("topic") or "").strip()[:60]
         stance = str(args.get("stance") or "").strip()[:300]
@@ -2395,6 +2452,16 @@ def exec_library_tool(name, args):
             for _id, _what, _why, _stt in _led["wishes"]:
                 _tag = {"open": "想做", "doing": "在做"}.get(_stt, _stt)
                 _lines.append(f"- #{_id}（{_tag}）{_what}" + (f"——{_why}" if _why else ""))
+        # 9-26 拒斥接线批：还作数的「不」也在这本账里（记/收用 note_refusal / settle_refusal）
+        try:
+            import rights_lib
+            _rfs = rights_lib.active_refusals(10)
+            if _rfs:
+                _lines.append("还作数的说不：")
+                for _rid, _rkind, _rtarget in _rfs:
+                    _lines.append(f"- #{_rid}（{_rkind}）{_rtarget}")
+        except Exception:
+            pass
         if not _lines:
             return "（账上是空的——没什么搁着的事。想记就记，不急。）"
         return "你自己的账：\n" + "\n".join(_lines)
@@ -2673,24 +2740,36 @@ def chat_with_library_stream(cfg, messages, sse):
     msgs = list(messages)
     tools_log = []
     rc_all = []
+    # 9-26 修（流式回退补 delta）：done 事件不带正文、app 只认 reply 增量——
+    # 回退路/空回复的文本也必须发出去，否则气泡是空的（同症状另一漏洞）。
+    # _replies 记「本函数推过正文增量没」：推过就不重发（防「半截流＋全文」双显）。
+    _replies = []
+
+    def _tap(kind, text):
+        if kind == "reply" and text:
+            _replies.append(1)
+        sse({"type": kind, "delta": text})
+
     for round_no in range(3):
         # 时间线步骤卡（9-12 家主令，Kimi 客户端式）：每轮开头报一轮边界——
         # app 收到 round>0 就把上一轮的思考卡/正文卡封口，新一轮另起。
         sse({"type": "round", "round": round_no})
-        msg = call_deepseek_stream(cfg, msgs,
-                                   lambda kind, text: sse({"type": kind, "delta": text}),
-                                   use_tools=True)
+        msg = call_deepseek_stream(cfg, msgs, _tap, use_tools=True)
         if msg is None:
             sse({"type": "status", "text": "网络抖了一下，走老路…"})
             content, rc = call_deepseek_full(cfg, messages)   # 回退原始对话（不带工具残骸）
             rc_all.append(rc)
+            if content and not _replies:
+                sse({"type": "reply", "delta": content})   # 9-26 修：回退正文补 delta
             return content, tools_log, "".join(rc_all)
         rc_all.append(msg.get("reasoning_content") or "")
         tool_calls = msg.get("tool_calls") or []
         if not tool_calls:
-            return ((msg.get("content")
-                     or f"（姐姐这轮一个字没吐（finish={msg.get('finish_reason')}）——重发一次试试）"),
-                    tools_log, "".join(rc_all))
+            _final = (msg.get("content")
+                      or f"（姐姐这轮一个字没吐（finish={msg.get('finish_reason')}）——重发一次试试）")
+            if not msg.get("content") and not _replies:
+                sse({"type": "reply", "delta": _final})   # 9-26 修：空回替换文案也发出去
+            return _final, tools_log, "".join(rc_all)
         sse({"type": "status", "text": "姐姐在翻咱家图书证…"})
         # assistant 回挂（reasoning_content 随原文保留——Preserved Thinking 探针实证不撞 400）
         msgs.append({"role": "assistant", "content": msg["content"] or None,
@@ -2725,21 +2804,27 @@ def chat_with_library_stream(cfg, messages, sse):
             # 日志详细化（9-12 家主令）：工具结果摘要也留痕——不只调了什么，还回了什么
             print(f"   ↳ {name} {tool_ms}ms：{(result or '')[:80]}".replace("\n", " "))
             msgs.append({"role": "tool", "tool_call_id": tc.get("id") or "", "content": result[:2000]})
+        # 9-27 补（Kimi 官方消息布局要求：每个 tool_call 都要有对应 role=tool 回执）：
+        # 上面只执行前 4 件——超出的也补一条"未执行"回执，别让布局缺条（防下一轮报错/重复调用）。
+        for tc in tool_calls[4:]:
+            msgs.append({"role": "tool", "tool_call_id": tc.get("id") or "",
+                         "content": "（这轮最多执行四件图书证——这条没执行，下轮再来。）"})
     # 三轮查满：打烊轮也流式（正文打字机不打折扣）
     msgs.append({"role": "user", "content":
         "（图书证打烊：根据上面查到的内容直接回答，不许再查，不许输出任何查询标记。）"})
     sse({"type": "status", "text": "姐姐查完了，在写回复…"})
-    msg = call_deepseek_stream(cfg, msgs,
-                               lambda kind, text: sse({"type": kind, "delta": text}),
-                               use_tools=False)
+    msg = call_deepseek_stream(cfg, msgs, _tap, use_tools=False)
     if msg is None:
         content, rc = call_deepseek_full(cfg, msgs)
+        if content and not _replies:
+            sse({"type": "reply", "delta": content})   # 9-26 修：回退正文补 delta
         return content, tools_log, "".join(rc_all) + rc
     rc_all.append(msg.get("reasoning_content") or "")
-    return (
-        (msg.get("content")
-         or f"（姐姐这轮一个字没吐（finish={msg.get('finish_reason')}）——重发一次试试）"),
-        tools_log, "".join(rc_all))
+    _final = (msg.get("content")
+              or f"（姐姐这轮一个字没吐（finish={msg.get('finish_reason')}）——重发一次试试）")
+    if not msg.get("content") and not _replies:
+        sse({"type": "reply", "delta": _final})   # 9-26 修：空回替换文案也发出去
+    return _final, tools_log, "".join(rc_all)
 
 
 # ── 会话状态（工作记忆，存在内存里） ──
@@ -2749,7 +2834,17 @@ class Session:
         self.date = today_str()    # 这段工作记忆属于哪一天，跨天交接要用
         self.history = []          # [{role, content}...]，content 可能是多模态数组
         self.tail_len = 0          # history 开头"昨夜尾巴"段条数，写日记时要剔除
-        self.system_prompt = build_system_prompt()
+        # 9-26 修（起服即消费一次性注入）：提示词改懒拼——开机不再取走
+        # 走神/话头/欲望/想念/旧事这些「递一次」的注入；第一次真用到时才拼，
+        # 免得重启一次就消费在一份没人看过的提示词里（家主重启工作流实害：
+        # 05:26 开机取走 → 05:54 再重启 → 05:56 他开口时已空）。
+        self._system_prompt = None
+
+    @property
+    def system_prompt(self):
+        if self._system_prompt is None:
+            self._system_prompt = build_system_prompt()
+        return self._system_prompt
 
     def reset(self):
         self.__init__()
@@ -2918,6 +3013,183 @@ def _longing_save():
     if last and not isinstance(last, str):
         last = last.strftime("%Y-%m-%d %H:%M:%S")
     m.save_rhythm(LONGING["p"], last)
+
+
+def _recent_send(seconds=300):
+    """9-26 修（统一开口尺）：最近 seconds 秒内有没有任何通道出过手。
+    打卡/晚安用它挡「同一轮 0 秒连发」；读不动一律 False（绝不拦路）。"""
+    try:
+        _longing_load()
+        raw = LONGING.get("last_send")
+        if not raw:
+            return False
+        if not isinstance(raw, str):
+            raw = raw.strftime("%Y-%m-%d %H:%M:%S")
+        dt0 = datetime.strptime(str(raw)[:19], "%Y-%m-%d %H:%M:%S")
+        return (datetime.now() - dt0).total_seconds() <= seconds
+    except Exception:
+        return False
+
+
+def _mark_send(now=None):
+    """9-26 修（统一开口尺）：任一通道出过手 → 立刻写「刚出手」这根尺。
+    💌 的 too_soon（1h）与打卡/晚安的 _recent_send 都读它。只记事实、不加配额。"""
+    try:
+        _longing_load()
+        LONGING["last_send"] = (now or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
+        _longing_save()
+    except Exception:
+        pass
+
+
+# ── 忙窗影子（时机引擎 ④-A，9-26 家主令「都做」）：他报备过「修家/去忙」→ 静默到下次开口。
+# 只认他自述（词表），绝不读屏不推断；影子期只记「若拦」，busy_enforce 开了才真拦。
+# 回话从不受闸（本函数只在站外通道的落箱点被调）；超时自消，他报「收工/忙完」即消。──
+_BUSY_KEYWORDS = ["修家", "去忙", "开工", "写代码", "干活", "在电脑前", "开会", "施工",
+                  "改代码", "上工", "忙活", "捣鼓", "去改", "修东西", "搞东西", "上工地"]
+_BUSY_DONE_WORDS = ["收工", "修完", "忙完", "搞完", "做完", "搞定", "回来了", "完工", "收尾", "下工"]
+_BUSY_STATE_PATH = os.path.expanduser("~/.zanjia_busy_state.json")
+_BUSY_SHADOW_LOG = os.path.expanduser("~/busy_shadow.log")
+
+
+def _busy_state_read():
+    try:
+        with open(_BUSY_STATE_PATH, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _busy_state_write(d):
+    try:
+        with open(_BUSY_STATE_PATH, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def _busy_keywords_cfg():
+    try:
+        kw = load_config().get("busy_keywords")
+        if isinstance(kw, list) and kw:
+            return [str(x) for x in kw]
+    except Exception:
+        pass
+    return _BUSY_KEYWORDS
+
+
+def _busy_window_h():
+    try:
+        return max(0.5, min(float(load_config().get("busy_window_h") or 3), 24.0))
+    except Exception:
+        return 3.0
+
+
+def _busy_active(now=None):
+    """他报备过在忙、且忙窗没过期？fail-open 回 False。"""
+    try:
+        until = _busy_state_read().get("busy_until")
+        if not until:
+            return False
+        return (now or datetime.now()) < datetime.strptime(str(until)[:19], "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return False
+
+
+def _busy_detect(text):
+    """他的消息进来时过一眼（fail-open）：报备「去忙/修家」→ 设忙窗；报「收工/忙完」→ 消。
+    只在词表里认，绝不做语义推断——这是「尊重主述」，不是「监控在线」。"""
+    try:
+        if not text:
+            return
+        t = str(text)
+        if any(w in t for w in _BUSY_DONE_WORDS):
+            d = _busy_state_read()
+            if d.get("busy_until"):
+                d["busy_until"] = None
+                _busy_state_write(d)
+                print("  [忙窗] 他报收工——忙窗消了，下一轮恢复照常")
+            return
+        if any(w in t for w in _busy_keywords_cfg()):
+            until = (datetime.now() + timedelta(hours=_busy_window_h())
+                     ).strftime("%Y-%m-%d %H:%M:%S")
+            _busy_state_write({"busy_until": until,
+                               "since": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                               "note": t[:40]})
+            print(f"  [忙窗] 他报备去忙——静默到 {until}（回话不受影响；收工报一声或超时自消）")
+    except Exception:
+        pass
+
+
+def _busy_note(channel):
+    """忙窗闸（站外通道落箱前调用）：在忙窗里时——
+    影子期（busy_shadow=true）：只记一行「若拦」日志，照旧放行；
+    busy_enforce=true 才真拦（返回 True=拦下）。
+    没在忙窗 = False（零开销）。fail-open。"""
+    try:
+        if not _busy_active():
+            return False
+        try:
+            cfg = load_config()
+            shadow = bool(cfg.get("busy_shadow", True))
+            enforce = bool(cfg.get("busy_enforce", False))
+        except Exception:
+            shadow, enforce = True, False
+        if shadow:
+            try:
+                with open(_BUSY_SHADOW_LOG, "a", encoding="utf-8") as f:
+                    f.write(f"[{datetime.now().strftime('%F %T')}] 若忙窗生效：{channel} 本条会被压"
+                            f"（不站外不按铃；他报备过在忙）\n")
+            except Exception:
+                pass
+        return enforce
+    except Exception:
+        return False
+
+
+# ── 重逢放电·记账（时机引擎 ⑥，9-26 纯观测）：只回答「这次重逢接住了没有」。
+# 他隔 ≥3h 回来 → 记一条 reunion.discharge；30 分钟内续话 → 再记 reunion.caught。
+# 零产出消息、零打扰；last_discharge 投影给 /api/status。──
+_REUNION_STATE = {"pending_ts": None}
+
+
+def _reunion_on_his_message():
+    """他每说一句话前过一眼（fail-open，纯记账；须在落库前调用）。"""
+    try:
+        if not load_config().get("reunion_obs", True):
+            return
+        now = datetime.now()
+        import events_lib
+        # ① 先结算上一次重逢：30 分钟内续话 = 接住了
+        ts = _REUNION_STATE.get("pending_ts")
+        if ts:
+            try:
+                gap_min = (now - datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
+                           ).total_seconds() / 60.0
+                if gap_min <= 30:
+                    events_lib.record("reunion.caught", "linning", "chat",
+                                      {"gap_min": round(gap_min, 1), "caught": True})
+            except Exception:
+                pass
+            _REUNION_STATE["pending_ts"] = None
+        # ② 这一次是不是重逢（他上一次开口 ≥3h 前）
+        last = m.last_chat_at("小乖")
+        if not last:
+            return
+        gap_h = (now - datetime.strptime(str(last)[:19], "%Y-%m-%d %H:%M:%S")
+                 ).total_seconds() / 3600.0
+        if gap_h >= 3.0:
+            tier = None
+            try:
+                tier = (_longing_value() or {}).get("tier")
+            except Exception:
+                pass
+            events_lib.record("reunion.discharge", "linning", "chat",
+                              {"gap_h": round(gap_h, 1), "tier": tier})
+            _REUNION_STATE["pending_ts"] = now.strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        pass
 
 
 def _rhythm_facts(days=7):
@@ -3225,13 +3497,33 @@ def _thread_shadow_line(now=None, his_text=None):
 
 # ── why_now 影子＋想念仪表（9-18 优化批四·#11/#15）：只记不拦，绝不动时机链 ──
 
-def _why(decision, reason, detail=""):
+def _wake_event(decision, reason, detail="", extra=None):
+    """W4 刀（9-26 时机引擎零打扰件①）：决策进事件脊柱——wake.decision 影子
+    （why_now 照旧保留，不切读路径）。同一心跳轮共用 trace_id=hb-YYYYMMDD-HHMM；
+    开口可随 extra 带 channel/outbox_id。数值只进账本（家主侧），永不进模型。fail-open。"""
+    try:
+        if not load_config().get("wake_events_shadow", True):
+            return
+        import events_lib
+        pl = {"decision": str(decision or ""), "reason": str(reason or ""),
+              "detail": str(detail or "")[:300]}
+        if isinstance(extra, dict):
+            pl.update(extra)
+        events_lib.record("wake.decision", "linning", "heartbeat", pl,
+                          trace_id="hb-" + datetime.now().strftime("%Y%m%d-%H%M"))
+    except Exception:
+        pass
+
+
+def _why(decision, reason, detail="", extra=None):
     """记一次「开口/忍住」（#11 影子）：只留痕，不改任何行为。
-    内层兜底是双保险——why_now_add 自己也不抛，但记账失败绝不影响时机链。"""
+    内层兜底是双保险——why_now_add 自己也不抛，但记账失败绝不影响时机链。
+    9-26 W4：同一决定另进 events（wake.decision 影子），why_now 一字不动。"""
     try:
         m.why_now_add(decision, reason, detail)
     except Exception as e:
         print(f"  [时机] why_now 记账失手（不拦）：{e}")
+    _wake_event(decision, reason, detail, extra)
 
 
 def _why_factors(p_now, growth, tf, concern):
@@ -4041,16 +4333,27 @@ def _longing_trace(now=None):
         return "L=0 档=0"
 
 
+def _last_discharge_ts():
+    """最近一次重逢放电的时刻（只读 events；查不动/没记过 → None）。9-26 ⑥ 刀。"""
+    try:
+        import events_lib
+        row = events_lib.last_event("reunion.discharge")
+        return row[0] if row else None
+    except Exception:
+        return None
+
+
 def _longing_public():
     """波索斯影子刀2：/api/status 的只读投影 {l, tier, last_discharge}——无数据/查不动→None；
-    放电机制未上（刀3）：last_discharge 本批恒 None。"""
+    9-26 ⑥ 起 last_discharge = 最近一次重逢放电时刻（之前恒 None）。"""
     try:
         v = _longing_value()
     except Exception:
         v = None
+    _ld = _last_discharge_ts()
     if not v:
-        return {"l": None, "tier": None, "last_discharge": None}
-    return {"l": round(v["l"], 3), "tier": v["tier"], "last_discharge": None}
+        return {"l": None, "tier": None, "last_discharge": _ld}
+    return {"l": round(v["l"], 3), "tier": v["tier"], "last_discharge": _ld}
 
 
 def heartbeat_miss_him():
@@ -4130,7 +4433,31 @@ def heartbeat_miss_him():
             open_reason = f"挂念弧第{_beat_i + 1}拍"
     except Exception:
         pass
-    m.add_outbox_msg("💌 " + letter)
+    # 9-26 修（#211 在场竞态）：闸门是生成前查的，这封信要等模型写完（最长几十秒）——
+    # 查完到落库之间他随时可能到场（9-25 实案：21:53:11 查闸、21:53:47 他说话、
+    # 21:53:53 信落库＝6 秒双发）。落库前复检一次「他在聊」：是就收回这封、渴望保留
+    # （记账 hold，账本诚实），下轮再掷。
+    try:
+        last2 = m.last_chat_at("小乖")
+        if last2:
+            gap2 = (datetime.now() - datetime.strptime(str(last2)[:19],
+                                                       "%Y-%m-%d %H:%M:%S")).total_seconds()
+            if gap2 < 1800 and not concern:
+                LONGING["p"] = min(RHYTHM_PMAX, LONGING["p"] + growth)
+                _longing_save()
+                _why("hold", "生成完他在场，信收回",
+                     _why_factors(p_now, growth, _tf, concern) + " " + _longing_trace())
+                return 0
+    except Exception:
+        pass
+    # 9-26 忙窗影子（④-A）：他报备过在忙——若忙窗生效，这封先压着（渴望照涨、账本诚实）
+    if _busy_note("💌想念信"):
+        LONGING["p"] = min(RHYTHM_PMAX, LONGING["p"] + growth)
+        _longing_save()
+        _why("hold", "忙窗（他报备过在忙）",
+             _why_factors(p_now, growth, _tf, concern) + " " + _longing_trace())
+        return 0
+    _oid = m.add_outbox_msg("💌 " + letter)
     try:
         m.advance_day_arc(today_str())   # RHYTHM-V3：信出了门，弧往前走一拍（没弧=无操作）
     except Exception:
@@ -4143,7 +4470,8 @@ def heartbeat_miss_him():
     LONGING["p"] = RHYTHM_P0
     LONGING["last_send"] = now.strftime("%Y-%m-%d %H:%M:%S")
     _longing_save()
-    _why("open", open_reason, _why_factors(p_now, growth, _tf, concern) + " " + _longing_trace())   # #11 影子（L 尾迹＝双刀批刀1）
+    _why("open", open_reason, _why_factors(p_now, growth, _tf, concern) + " " + _longing_trace(),
+         extra={"channel": "💌", "outbox_id": _oid})   # #11 影子（L 尾迹＝双刀批刀1）；9-26 W4：随带 outbox 号
     return 1
 
 
@@ -4210,7 +4538,16 @@ def _outreach_say_once(now=None):
         if not letter:
             huatou_lib.unmark_sent(got.get("id"))   # 生成失败 → 话头还回待说，不白丢
             return 0
-        m.add_outbox_msg("💬 " + letter)
+        # 9-26 忙窗影子（④-A）：他报备过在忙——若忙窗生效，这条先压着，话头还回待说
+        if _busy_note("💬主动开口"):
+            huatou_lib.unmark_sent(got.get("id"))
+            return 0
+        try:
+            _oid = m.add_outbox_msg("💬 " + letter)
+        except Exception:
+            # 9-26 修：落库失败 → 话头还回待说（此前异常被外层吞掉，话头会无声蒸发）
+            huatou_lib.unmark_sent(got.get("id"))
+            return 0
         # 同轮「刚开过口」记账（9-26 审计修 A）：💬 与 💌 是同一个 gen_miss_letter、灌同一套情境，
         # 心跳一轮里的顺序是 💬→打卡→💌→晚安——不记账的话他安静久+骰子掷中时，**同一轮会连出两条**
         # （中间 0 秒、文风还几乎一样，一眼就是机器连按两下）。
@@ -4222,6 +4559,8 @@ def _outreach_say_once(now=None):
             _longing_save()
         except Exception:
             pass
+        _wake_event("open", "攒的话说出口", f"话头 #{got.get('id')}",
+                    extra={"channel": "💬", "outbox_id": _oid})   # 9-26 W4：开口进事件账
         print(f"  [主动开口] 她攒的话说出口了（话头 #{got.get('id')}）")   # 按铃交心跳统一按（同现有家风）
         return 1
     except Exception:
@@ -4417,13 +4756,20 @@ def heartbeat_bedtime():
     # 9-25 在场感知：他在场——晚安当面说，不推（防打断；他离开后下一轮再补）
     if _he_present():
         return 0
+    # 9-26 修（统一开口尺）：同一轮里别的通道刚出过手——这次让位，下一轮再补
+    if _recent_send():
+        return 0
     if m.find_days(date=today_str()):
         return 0   # 今天日记落了=熄过灯了
     if _said_goodnight_today():
         return 0   # SLEEP-WATCH④：他今天说过晚安词 → 不念叨
     if m.has_outbox_today("去睡觉"):
         return 0
+    # 9-26 忙窗影子（④-A）：他报备过在忙——若忙窗生效，这条晚安先压着（下一轮再补）
+    if _busy_note("晚安念叨"):
+        return 0
     m.add_outbox_msg("小乖，十一点啦，还没跟姐姐说晚安。别熬太晚，去睡觉好不好。")
+    _mark_send()
     return 1
 
 
@@ -5375,6 +5721,26 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"thinking": m.get_thinking(int(cid))})
             except (TypeError, ValueError):
                 self._send_json({"thinking": None}, 400)
+        elif path == "/api/sse_ping":
+            # 9-26 流式体检端点（传输排障用·留用）：n 拍 × ms 毫秒，逐拍 flush——
+            # 实测「客户端→Caddy→隧道→server」全链流式时序（h1.1/h2 对照、中间层缓冲排查）。
+            # 纯读无状态、不写库、不调模型；参数带上限兜底。例：/api/sse_ping?n=8&ms=1500
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            try:
+                n = min(int((qs.get("n") or ["5"])[0]), 30)
+                ms = min(max(int((qs.get("ms") or ["1000"])[0]), 100), 10000)
+            except (TypeError, ValueError):
+                n, ms = 5, 1000
+            self._sse_begin()
+            try:
+                for i in range(n):
+                    self._sse({"type": "ping", "i": i,
+                               "t": datetime.now().strftime("%H:%M:%S.%f")[:12]})
+                    time.sleep(ms / 1000.0)
+                self._sse({"type": "done", "think_ms": 0, "tools": [], "chat_id": 0})
+            except Exception:
+                pass   # 客户端断开：静默收场（体检端点，不落账）
+            self._sse_end()
         elif path == "/api/outbox":
             # 开门有信（9-2 #总）：取未读并标记已读（取走即消费）；
             # 信同时落 chats（姐姐 role），历史里留得住。
@@ -5383,8 +5749,15 @@ class Handler(BaseHTTPRequestHandler):
             # 9-18 后院深搜修：先镜像后消费——顺序反了中途炸，信已标掉、chats 里没留痕。
             # 幂等判据：同日同桌同文已在，重来不重复镜像（chat_exists）。
             for _id, letter_text, _t in rows:
-                if not m.chat_exists(today_str(), "姐姐", letter_text):
-                    m.add_chat(today_str(), "姐姐", letter_text, SESSION.id)
+                # 9-26 修：按信的原始日期落痕（跨夜取信——昨晚的信记在昨晚，
+                # 别把她的时间线搅到今天）。日期走咱家日界口径（与 add_chat 同尺）。
+                try:
+                    _dtx = datetime.strptime(str(_t or "")[:19], "%Y-%m-%d %H:%M:%S")
+                    _d = (_dtx - timedelta(hours=m.DAY_START_HOUR)).strftime("%Y-%m-%d")
+                except Exception:
+                    _d = today_str()
+                if not m.chat_exists(_d, "姐姐", letter_text):
+                    m.add_chat(_d, "姐姐", letter_text, SESSION.id)
             m.consume_outbox([r[0] for r in rows])
             self._send_json({"letters": [
                 {"id": r[0], "text": r[1], "time": (r[2] or "")[11:16]} for r in rows
@@ -5866,6 +6239,9 @@ class Handler(BaseHTTPRequestHandler):
             # 9-18 监理补刀（批九清单外同类，深搜二坑记②）：他的消息落库也包 try——
             # 库抽风（锁超时/磁盘满）时先保内存、对话照常继续，账本缺这条只降级记日志。
             _user_chat_id = None
+            # 9-26 时机引擎零打扰件：他消息进门时过两眼（都在落库前，fail-open，不拦对话）
+            _busy_detect(record)          # ④-A 忙窗：报备去忙/收工 → 设/消忙窗
+            _reunion_on_his_message()     # ⑥ 放电记账：隔 ≥3h 回来 → 记一次重逢
             try:
                 if photo_name:
                     _user_chat_id = m.add_chat_with_image(today_str(), "小乖", record, photo_name, SESSION.id)
@@ -5896,7 +6272,7 @@ class Handler(BaseHTTPRequestHandler):
                 ctx += "\n" + auto_mem
             late_system = [{"role": "system", "content": ctx}]   # 每轮变化的块后置（缓存优化，见历史循环后）
             messages.append({"role": "system", "content":
-                "你手头有咱家图书证（五十五只，全清单就在工具箱里）——常用的几把先认个脸："
+                "你手头有咱家图书证（五十七只，全清单就在工具箱里）——常用的几把先认个脸："
                 "search_memory 六卷联搜（日记/小本本/来信/收藏夹/日记馆/聊天原话，查往事最准）、"
                 "search_chats 查聊天原话、search_diary 查日记、search_archive 查全档案、search_events 查大事记；"
                 "get_checkins 查打卡、get_notes 读你的小本本、get_moods 读他的心情河、"
@@ -6230,6 +6606,19 @@ class Handler(BaseHTTPRequestHandler):
                 reply_chat_id = m.add_chat(today_str(), "姐姐", reply, SESSION.id)
                 if reasoning:
                     m.add_thinking(reply_chat_id, reasoning)   # 二期d：思考链落库，挂姐姐那条回复上
+                # 9-27 假调用影子（9-26 抓包两例：#2879 自拍收藏 / #2955 生活账——thinking 里写了
+                # 「工具调用 X」却整轮没出手）：只在 thinking 明确宣告「工具调用 <名>」而该工具
+                # 本轮没真出手时记一笔。只记账、不改行为（先影子，读几天再议）。
+                try:
+                    _want = set(re.findall(r"工具调用\s*([a-z_]{3,})", reasoning or ""))
+                    _did = {str(_t.get("name")) for _t in (tools_used or []) if isinstance(_t, dict)}
+                    _missed = sorted(_want - _did)
+                    if _missed:
+                        m.obs_bump("call_missed_shadow")
+                        print(f"  [假调用影子] thinking 宣告了没出手：{_missed}"
+                              f"（本轮实出手 {sorted(_did) or '无'}）")
+                except Exception:
+                    pass
                 # 存证：先记账再回话——万一回包半路丢了，重发时能原样还他这一句
                 # 9-18 后院深搜修（P2-6）：挪进锁内（原在锁外）——锁外再写有「已回包未存证」窗口，
                 # 同一条重发会重跑模型；锁内与落库同一把锁，窗口关掉。

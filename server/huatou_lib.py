@@ -20,6 +20,11 @@ v1 来源（攒）：
       / outreach_inject（9-26 上岗闸·递一件到开场；默认 false，转正才开）
 上岗（9-26）：`take_huatou()` 从『待说』挑一件递到她眼前（取走即标『已提』，不重复顶）；
       server 开场【想跟你说的】块调用它——她看见话头、自己决定说不说。
+9-26 修（bug 批）：①collect 跳过与 recall_lib 当前走神候选同 key、或**已被递过**（delivered_keys）
+      的走神事件（走神×话头不再双投；已被开场递过的旧事件也不再收簿重提）；
+      ②「想你」改 20 小时滚动判重（跨天 23:59/00:01 不再两条）；③take_* 带状态条件 + rowcount
+      校验（多线程同条不会被取两次）；④collect 只在全部源块成功时推进 last_collect 指针
+      （DB 锁失败保留旧值下轮重试，src_key 去重兜底）。
 fail-open：任何异常吞掉，绝不拦心跳。
 """
 import json
@@ -33,6 +38,7 @@ CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 DB_PATH = os.path.join(BASE_DIR, "咱家的家.db")
 LOG = os.path.expanduser("~/outreach_shadow.log")
 STATE = os.path.expanduser("~/.zanjia_huatou_state.json")
+LONGING_DEDUP_H = 20   # 9-26 修：「想你」滚动判重窗（小时）——跨天半夜不再各入一条
 
 
 def _cfg(key, default):
@@ -82,8 +88,12 @@ def _ensure():
     con.close()
 
 
-def _add(kind, text, src_key, status="待说", said_at=None, now=None):
-    """去重入簿；真新增返回 id，重复/空 → None。"""
+def _add(kind, text, src_key, status="待说", said_at=None, now=None, strict=False):
+    """去重入簿；真新增返回 id，重复/空 → None。
+
+    9-26 修：strict=True（collect 里用）时写库失败**向上抛**——collect 据此判定「这批没攒完」，
+    指针不前进、下一轮重试（src_key 唯一保证重试不会重复入簿）。默认 False＝旧行为（吞异常），
+    保持对既有调用方兼容。"""
     text = (text or "").strip()
     if not text or not src_key:
         return None
@@ -102,15 +112,21 @@ def _add(kind, text, src_key, status="待说", said_at=None, now=None):
             _log(f"[{now:%F %T}] ＋〔{kind}〕{text[:60]}")
         return rid
     except Exception:
+        if strict:
+            raise
         return None
 
 
 def collect(now=None):
-    """攒：把这一跳的新触动收进簿子。返回新增条数。"""
+    """攒：把这一跳的新触动收进簿子。返回新增条数。
+
+    9-26 修：**只在全部源块成功时推进 last_collect 指针**；任一源块失败 → 保留旧值下轮重试
+    （已入簿的靠 src_key 唯一去重）——原写法无条件推进，DB 一次锁失败这批 events 就永久漏收。"""
     added = 0
     now = now or datetime.now()
     st = _load_state()
     last = st.get("last_collect") or "1970-01-01 00:00:00"
+    ok = True   # 9-26 修：全部源块成功才推指针
 
     # ① 想起（recall.walk 事件——上一跳之后的新卡）
     try:
@@ -119,6 +135,24 @@ def collect(now=None):
             "SELECT ts, payload FROM events WHERE kind='recall.walk' AND ts > ? ORDER BY id",
             (last,)).fetchall()
         con.close()
+        # 9-26 修（走神×话头双投）：与 recall_lib 当前候选同 key 的走神事件跳过——同一次走神
+        # 已由开场【走神】块递到她眼前，再入簿经【想跟你说的】递一遍＝同一记忆在开场出现两次。
+        # 9-26 修②（残留）：**已被某次开场递过**（delivered_keys）的旧事件同样跳过——事件还躺在
+        # 库里、重扫时不能再收进簿子日后重提。两个访问器都只读不消费，各自 fail-open。
+        cur_key, delivered = None, set()
+        try:
+            import recall_lib
+        except Exception:
+            recall_lib = None
+        if recall_lib is not None:
+            try:
+                cur_key = recall_lib.current_cand_key()   # 只读，不消费
+            except Exception:
+                cur_key = None
+            try:
+                delivered = set(recall_lib.delivered_keys() or ())   # 只读：已递过的旧走神（9-26 修②）
+            except Exception:
+                delivered = set()
         for ts, payload in rows:
             try:
                 p = json.loads(payload or "{}")
@@ -127,7 +161,7 @@ def collect(now=None):
             key = str(p.get("key") or "")
             why = str(p.get("why") or "")
             txt = str(p.get("text") or "")[:48]
-            if not key:
+            if not key or key in delivered or (cur_key and key == cur_key):
                 continue
             label = key
             try:   # day#N → 带上《标题》（日期），像人话
@@ -141,24 +175,35 @@ def collect(now=None):
             except Exception:
                 pass
             added += 1 if _add("想起", f"{label}（{why}）——\"{txt}\"",
-                               f"recall#{ts}", now=now) else 0
+                               f"recall#{ts}", now=now, strict=True) else 0
     except Exception:
-        pass
+        ok = False   # 9-26 修：本批可能有事件没入簿 → 指针别动，下轮重试
 
     # ② 没来由想你：久无声（≥6h），每天至多一条
+    # 9-26 修（跨天半夜两条）：判重改 **20 小时滚动窗**——查该类最近一条的入簿时间，不足 20h 不入簿；
+    # 原有纪律（久无声 ≥6h、一天至多一条）保留，当日 src_key 仍兜一道。
     try:
         con = _conn()
         row = con.execute(
             "SELECT created_at FROM chats WHERE role='小乖' ORDER BY id DESC LIMIT 1").fetchone()
+        last_row = con.execute(
+            "SELECT ts FROM huatou WHERE kind='想你' ORDER BY id DESC LIMIT 1").fetchone()
         con.close()
         if row and row[0]:
             dt = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
             gap_h = (now - dt).total_seconds() / 3600
-            if gap_h >= 6:
+            fresh = False
+            try:
+                if last_row and last_row[0]:
+                    dt2 = datetime.strptime(str(last_row[0])[:19], "%Y-%m-%d %H:%M:%S")
+                    fresh = (now - dt2).total_seconds() < LONGING_DEDUP_H * 3600
+            except Exception:
+                fresh = False   # 读不出上次入簿时间 → 不拦（当日 src_key 仍兜底）
+            if gap_h >= 6 and not fresh:
                 added += 1 if _add("想你", f"他没声儿 {gap_h:.0f} 小时了，有点想他",
-                                   f"longing#{now:%F}", now=now) else 0
+                                   f"longing#{now:%F}", now=now, strict=True) else 0
     except Exception:
-        pass
+        ok = False
 
     # ③ 昨天没说完的拍子（挂念弧跨天延续——以前天一亮就丢）
     try:
@@ -170,9 +215,10 @@ def collect(now=None):
             beats = [ln.strip() for ln in str(row[0] or "").splitlines() if ln.strip()]
             used = int(row[1] or 0)
             for i, beat in enumerate(beats[used:], start=used + 1):
-                added += 1 if _add("话头", f"昨天没说完的：{beat}", f"arc#{y}#{i}", now=now) else 0
+                added += 1 if _add("话头", f"昨天没说完的：{beat}", f"arc#{y}#{i}",
+                                   now=now, strict=True) else 0
     except Exception:
-        pass
+        ok = False
 
     # ④ 实际发出的信/念叨入簿（旧通道产物 → 记「已说」，回没回交 settle）
     try:
@@ -188,12 +234,16 @@ def collect(now=None):
             kind = "想念信" if t.startswith("💌") else ("园子" if t.startswith("🌱") else "念叨")
             body = t[2:] if t[:1] in ("💌", "🌱") else t
             added += 1 if _add(kind, f"说过了：{body[:60]}", f"outbox#{oid}",
-                               status="已说", said_at=at, now=now) else 0
+                               status="已说", said_at=at, now=now, strict=True) else 0
     except Exception:
-        pass
+        ok = False
 
-    st["last_collect"] = now.strftime("%F %T")
-    _save_state(st)
+    if ok:
+        st["last_collect"] = now.strftime("%F %T")
+        _save_state(st)
+    else:
+        # 9-26 修：指针不前进（保留旧值），下一轮从头重扫；src_key 去重保证不重复入簿。
+        _log(f"[{now:%F %T}] 攒（collect）有源块失败 —— 指针不前进，下一轮重试")
     return added
 
 
@@ -243,7 +293,10 @@ def take_huatou(now=None):
     老的优先+一点随机（与影子 shadow_pick 同款，不总是最老，像人）。
     取走即标『已提』（said_at=now），免得同一件每轮都顶到她眼前；settle 会在他之后说话时
     一并收成『已回』。开关 outreach_inject（默认关）——关掉＝回到只攒不递，一字不注入。
-    返回 dict|None；任何异常吞掉（fail-open，绝不拦开场）。"""
+    返回 dict|None；任何异常吞掉（fail-open，绝不拦开场）。
+
+    9-26 修（竞态）：UPDATE 带 `AND status='待说'` + rowcount 校验——两个线程同轮取到同一条时，
+    只有一个能改到行，另一个拿 rowcount=0 返回 None（不重复递、不覆盖别人的取件）。"""
     now = now or datetime.now()
     try:
         if not _cfg("outreach_inject", False):
@@ -255,10 +308,14 @@ def take_huatou(now=None):
             con.close()
             return None
         rid, ts, kind, text = random.choice(rows[:5])
-        con.execute("UPDATE huatou SET status='已提', said_at=? WHERE id=?",
-                    (now.strftime("%F %T"), rid))
+        cur = con.execute("UPDATE huatou SET status='已提', said_at=? "
+                          "WHERE id=? AND status='待说'",
+                          (now.strftime("%F %T"), rid))
+        won = (cur.rowcount or 0) == 1   # 9-26 修：抢到了才算取到
         con.commit()
         con.close()
+        if not won:
+            return None
         _log(f"[{now:%F %T}] 递到眼前（上岗）→ #{rid}〔{kind}〕{text[:60]}")
         return {"id": rid, "kind": kind, "text": text}
     except Exception:
@@ -268,7 +325,10 @@ def take_huatou(now=None):
 def take_huatou_for_send(now=None):
     """真发出口（OUTREACH-02，9-26）：从『待说』挑一件，**标『已说』**（与『已提』分开——
     这回是真说出去了，不是只递到眼前），供 _outreach_say_once 生成一句话发出去。
-    开关同一个 outreach_send（在 server 侧判）。返回 dict|None；fail-open。"""
+    开关同一个 outreach_send（在 server 侧判）。返回 dict|None；fail-open。
+
+    9-26 修（竞态）：同 take_huatou——UPDATE 带 `AND status='待说'` + rowcount 校验，
+    多线程同条只成一次（另一个拿 rowcount=0 返回 None）。"""
     now = now or datetime.now()
     try:
         con = _conn()
@@ -278,10 +338,14 @@ def take_huatou_for_send(now=None):
             con.close()
             return None
         rid, ts, kind, text = random.choice(rows[:5])
-        con.execute("UPDATE huatou SET status='已说', said_at=? WHERE id=?",
-                    (now.strftime("%F %T"), rid))
+        cur = con.execute("UPDATE huatou SET status='已说', said_at=? "
+                          "WHERE id=? AND status='待说'",
+                          (now.strftime("%F %T"), rid))
+        won = (cur.rowcount or 0) == 1   # 9-26 修：抢到了才算取到
         con.commit()
         con.close()
+        if not won:
+            return None
         _log(f"[{now:%F %T}] 真说出去了 → #{rid}〔{kind}〕{text[:60]}")
         return {"id": rid, "kind": kind, "text": text}
     except Exception:

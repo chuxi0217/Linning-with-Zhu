@@ -7,7 +7,7 @@ weather_for_loc）＋ 地名命中（place_for）。纯标准库＋memory_lib；
 
 运行期反查纪律（见 srv_state docstring）：入口属主名（today_str / load_config / LAST_LOC /
 WEATHER_CACHE / PLACES）与会被替身重绑的 s.now_str，一律走取用口或 srv_state._srv() 现取——
-沙盘套件（soften / knives3 / repo01 / fixbatch 等）靠重绑入口名驱动这些分支。
+沙盘套件（soften / knives3 / repo01 / fixbatch 等）靠重绑入口名、换 s.datetime 假钟驱动这些分支。
 """
 
 import json
@@ -43,7 +43,7 @@ PLACES = _load_places()
 def now_str():
     """本机本地时间含星期：2026-08-31 09:12 星期日"""
     weeks = "一二三四五六日"
-    d = datetime.now()
+    d = srv_state._srv().datetime.now()   # 运行期反查：沙盘会换 s.datetime（FakeDT 时间伪装）
     return f"{d.strftime('%Y-%m-%d %H:%M')} 星期{weeks[d.weekday()]}"
 
 
@@ -66,7 +66,7 @@ def gap_line():
         dt = datetime.strptime(last, "%Y-%m-%d %H:%M:%S")
     except ValueError:
         return ""
-    sec = (datetime.now() - dt).total_seconds()
+    sec = (srv_state._srv().datetime.now() - dt).total_seconds()   # 运行期反查：沙盘会换 s.datetime（FakeDT 时间伪装）
     if sec < 90:
         return ""
     crossed_day = dt.strftime("%Y-%m-%d") != srv_state._srv().today_str()   # 运行期反查：沙盘会重绑 s.today_str
@@ -107,7 +107,7 @@ def time_facts(now=None):
         dt = datetime.strptime(last, "%Y-%m-%d %H:%M:%S")
     except ValueError:
         return None
-    now = now or datetime.now()
+    now = now or srv_state._srv().datetime.now()   # 运行期反查：沙盘会换 s.datetime（FakeDT 时间伪装）
     gap_s = (now - dt).total_seconds()
     if gap_s < 0:   # 时钟回拨兜底
         gap_s = 0.0

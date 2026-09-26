@@ -6,8 +6,9 @@ _ps256_sign）＋ JWT（get_push_jwt）＋ V3 推送（send_push/notify_letter�
 ＋ 打卡念叨（gen_checkin_nags）。纯标准库（军规：不装第三方包）＋memory_lib；入口重导出同名
 （心跳 / 收信 / 园子 / 工具照旧引用）。
 
-运行期反查纪律（见 srv_state docstring）：notify_letter 读入口的 ASLEEP（沙盘 23 处重绑）；
-gen_checkin_nags 调 _he_present（沙盘会替身）——一律走 srv_state 取用口/_srv() 现取。
+运行期反查纪律（见 srv_state docstring）：notify_letter 读入口的 ASLEEP（沙盘 23 处重绑）、
+get_push_jwt 读 PUSH_SA_FILE；gen_checkin_nags 调 _he_present（沙盘会替身）——一律走
+srv_state 取用口/_srv() 现取。
 """
 
 import base64
@@ -106,7 +107,7 @@ def get_push_jwt():
     if PUSH_JWT_CACHE["jwt"] and now < PUSH_JWT_CACHE["exp"]:
         return PUSH_JWT_CACHE["jwt"]
     try:
-        with open(PUSH_SA_FILE, encoding="utf-8") as f:
+        with open(srv_state._srv().PUSH_SA_FILE, encoding="utf-8") as f:   # 运行期反查：沙盘会重绑 s.PUSH_SA_FILE
             sa = json.load(f)
         n, d = _pkcs8_to_rsa_nd(sa["private_key"])
         header = {"kid": sa["key_id"], "typ": "JWT", "alg": "PS256"}
@@ -202,6 +203,15 @@ def gen_checkin_nags():
     # 9-25 在场感知：他在场就不发站外念叨——有话当面说（防「通知流」感）
     if srv_state._srv()._he_present():   # 运行期反查：沙盘会重绑 s._he_present
         return 0
+    # 9-26 修（统一开口尺）：同一轮里别的通道刚出过手（≤300 秒）——让位，下轮再念叨
+    if srv_state._srv()._recent_send():
+        return 0
+    # 9-26 忙窗影子（④-A）：他报备过在忙——若忙窗生效，本轮念叨全压（影子期只记日志）
+    try:
+        if srv_state._srv()._busy_note("打卡念叨"):
+            return 0
+    except Exception:
+        pass
     now_hm = srv_state._srv().datetime.now().strftime("%H:%M")   # 运行期反查：沙盘会换 s.datetime（FakeDT 时间伪装）
     done_today = set(r[1] for r in m.get_checkins(1))
     made = 0
@@ -215,4 +225,9 @@ def gen_checkin_nags():
             continue
         m.add_outbox_msg(f"小乖，{marker} {target} 的，到现在还没打卡哦。姐姐记着呢，去补一下好不好。")
         made += 1
+    if made:
+        try:
+            srv_state._srv()._mark_send()   # 9-26 修：出过手 → 写「刚出手」这根尺（同轮后序通道让位）
+        except Exception:
+            pass
     return made

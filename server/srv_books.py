@@ -14,11 +14,11 @@ import threading
 import time
 import urllib.parse
 import zipfile
-from datetime import datetime
 from html.parser import HTMLParser
 import xml.etree.ElementTree as ET
 
 import memory_lib as m
+import srv_state
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # ── 共读导入·格式半边（9-23 共读格式批·服务端，家主令「共读支持 txt 以外格式」）──
@@ -259,7 +259,7 @@ _REJECT_LOCK = threading.Lock()
 def _reject_line(ip, code, reason, method, path, now=None):
     """拒绝日志限速器：返回该落的行（""＝本分钟静默被压制）。纯记账纯函数（状态在
     _REJECT_STATE），不写流、不抛——测试可注入 now 直接对账节奏。"""
-    minute = (now or datetime.now()).strftime("%Y-%m-%d %H:%M")
+    minute = (now or srv_state._srv().datetime.now()).strftime("%Y-%m-%d %H:%M")   # 运行期反查：沙盘会换 s.datetime 假钟
     key = (str(ip), minute)
     line = ""
     with _REJECT_LOCK:

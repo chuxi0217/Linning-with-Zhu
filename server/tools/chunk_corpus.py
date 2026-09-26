@@ -41,7 +41,13 @@ SAMPLE_CHUNKS = 3      # 每卷打印样例数：最短/中位/最长三点，�
 # 块长分布分桶：太短 / 中短 / 舒适区 / 稍长 / 过长（整数域 [lo, hi)，400 整归第三桶）
 CHUNK_BUCKETS = [(0, 150), (150, 250), (250, 401), (401, 600), (600, 10 ** 9)]
 
-PROD_DIR = "~/咱家记忆库"   # 生产目录：--dump-jsonl 禁写（只读副本才允许干活）
+PROD_DIR = "~/咱家记忆库"   # 生产目录（Windows 侧）：--dump-jsonl 禁写（只读副本才允许干活）
+# Linux 侧生产目录（双系统同一道闸，宁拒勿碰生产）：
+#   ① 本脚本所在仓库根——脚本在 <仓库根>/tools/ 下，根下 档案馆/、photos/、咱家的家.db 全是生产卷；
+#   ② 已知 Linux 生产根（server :8024 跑的那份；磁盘挂载路径若变，同步改这行）。
+_LINUX_PROD = "/media/<you>/<your-volume>/咱家记忆库"   # 示例占位——换成本机生产根
+PROD_DIRS = (PROD_DIR, _LINUX_PROD,
+             os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # chats 窗内排序需要时间；库里格式已核过全为 YYYY-MM-DD HH:MM:SS（0 异常）
 _TS_FMT = "%Y-%m-%d %H:%M:%S"
@@ -50,9 +56,10 @@ _TS_FMT = "%Y-%m-%d %H:%M:%S"
 def _guard_dump_path(path):
     """--dump-jsonl 只许写非生产路径：宁拒勿碰生产（工单纪律）。"""
     p = os.path.abspath(path).replace("\\", "/").lower()
-    prod = os.path.abspath(PROD_DIR).replace("\\", "/").lower()
-    if p == prod or p.startswith(prod + "/"):
-        sys.exit(f"[chunk] 拒绝：--dump-jsonl 只许写非生产路径（{path}）")
+    for prod_dir in PROD_DIRS:
+        prod = os.path.abspath(prod_dir).replace("\\", "/").lower()
+        if p == prod or p.startswith(prod + "/"):
+            sys.exit(f"[chunk] 拒绝：--dump-jsonl 只许写非生产路径（{path}）")
 
 
 def parse_args():
