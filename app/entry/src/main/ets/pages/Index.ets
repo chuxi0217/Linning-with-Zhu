@@ -588,31 +588,6 @@ class ChatDataSource implements IDataSource {
     }
   }
 
-  updateByKey(key: string, next: ChatItem): void {
-    for (let i = 0; i < this.items.length; i++) {
-      if (this.items[i].key === key) {
-        this.items[i] = next;
-        this.notify((l: DataChangeListener) => l.onDataChange(i));
-        return;
-      }
-    }
-  }
-
-  // 只换正文，其余字段（who/time/tools…）原样保留——ArkTS 不许 Object.assign，显式重建整条
-  updateText(key: string, text: string): void {
-    for (let i = 0; i < this.items.length; i++) {
-      if (this.items[i].key === key) {
-        const m = this.items[i];
-        const n: ChatItem = {
-          key: m.key, who: m.who, text: text, imageUrl: m.imageUrl, time: m.time,
-          tools: m.tools, msgId: m.msgId, hasThinking: m.hasThinking, fileName: m.fileName,
-        };
-        this.items[i] = n;
-        this.notify((l: DataChangeListener) => l.onDataChange(i));
-        return;
-      }
-    }
-  }
 }
 
 interface ThinkingResp {
@@ -1122,6 +1097,147 @@ function ttHHMM(minute: number): string {
 
 const TT_TIME_CAP: number = 23 * 60 + 55;   // 时间控件天花板 23:55：分一次走 5 格，这是最后一格
 
+// ═══════════ 📖 Markdown 轻渲染 · A 段（模块级：解析器）═══════════
+// （9-27 夜 图书管理员批）用场：档案馆开卷 / 周报开卷——家里很多文件是 md，
+// 开卷按格式渲染；聊天/日记/信件/她的原话一律不走这里（一个字不改）。
+// 子集：标题 #~###### · 粗体 **…** · 斜体 *…* · 行内代码 `…` · 无序列表 - * + ·
+//       有序列表 1. 1、1) · 引用 > · 分隔线 --- *** ___ · 代码块 ```。
+// 表格/嵌套引用暂不渲染（按原文显示）。零第三方依赖。
+// 粘贴位置：Index.ets 顶部常量区（建议 const TT_TIME_CAP 那行之后，空一行）。
+interface MdSeg {
+  t: string;     // 文本
+  b: boolean;    // 粗
+  i: boolean;    // 斜
+  c: boolean;    // 行内代码
+}
+
+interface MdBlock {
+  k: number;      // 0=段落 1=标题 2=列表项 3=引用 4=分隔线 5=代码块
+  lv: number;     // 标题 1~6；列表缩进 0/1
+  t: string;      // 原文
+  segs: MdSeg[];  // 行内分段（解析一次，渲染零成本）
+}
+
+function mdInline(s: string): MdSeg[] {
+  const out: MdSeg[] = [];
+  const parts: string[] = s.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/);
+  for (let i = 0; i < parts.length; i++) {
+    const p: string = parts[i];
+    if (p === '') {
+      continue;
+    }
+    if (p.length > 4 && p.startsWith('**') && p.endsWith('**')) {
+      const sg: MdSeg = { t: p.slice(2, p.length - 2), b: true, i: false, c: false };
+      out.push(sg);
+    } else if (p.length > 2 && p.startsWith('`') && p.endsWith('`')) {
+      const sg: MdSeg = { t: p.slice(1, p.length - 1), b: false, i: false, c: true };
+      out.push(sg);
+    } else if (p.length > 2 && p.startsWith('*') && p.endsWith('*')) {
+      const sg: MdSeg = { t: p.slice(1, p.length - 1), b: false, i: true, c: false };
+      out.push(sg);
+    } else {
+      const sg: MdSeg = { t: p, b: false, i: false, c: false };
+      out.push(sg);
+    }
+  }
+  return out;
+}
+
+function mdParse(src: string): MdBlock[] {
+  const out: MdBlock[] = [];
+  const lines: string[] = (src === undefined || src === null ? '' : src).split('\n');
+  let inCode: boolean = false;
+  let codeBuf: string = '';
+  for (let i = 0; i < lines.length; i++) {
+    const raw: string = lines[i];
+    const t: string = raw.trim();
+    if (t.startsWith('```')) {   // 代码块围栏
+      if (inCode) {
+        const b0: MdBlock = { k: 5, lv: 0, t: codeBuf, segs: [] };
+        out.push(b0);
+        codeBuf = '';
+        inCode = false;
+      } else {
+        inCode = true;
+      }
+      continue;
+    }
+    if (inCode) {
+      codeBuf = codeBuf === '' ? raw : codeBuf + '\n' + raw;
+      continue;
+    }
+    if (t === '') {
+      continue;   // 空行=块分隔（渲染靠块间距）
+    }
+    if (t === '---' || t === '***' || t === '___') {
+      const b4: MdBlock = { k: 4, lv: 0, t: '', segs: [] };
+      out.push(b4);
+      continue;
+    }
+    if (t.charAt(0) === '#') {   // 标题（#后必须有空格，保护 #标签）
+      let lv: number = 0;
+      while (lv < t.length && t.charAt(lv) === '#') {
+        lv++;
+      }
+      if (lv <= 6 && lv < t.length && (t.charAt(lv) === ' ' || t.charAt(lv) === '　')) {
+        const ht: string = t.slice(lv + 1).trim();
+        const b1: MdBlock = { k: 1, lv: lv, t: ht, segs: mdInline(ht) };
+        out.push(b1);
+        continue;
+      }
+    }
+    if (t.charAt(0) === '>') {   // 引用
+      let s0: string = t;
+      while (s0.startsWith('>')) {
+        s0 = s0.slice(1).trim();
+      }
+      if (s0 === '') {
+        continue;
+      }
+      const b3: MdBlock = { k: 3, lv: 0, t: s0, segs: mdInline(s0) };
+      out.push(b3);
+      continue;
+    }
+    if (t.length > 2 && (t.startsWith('- ') || t.startsWith('* ') || t.startsWith('+ '))) {
+      let indent: number = 0;   // 缩进数（两个空格以上=二级）
+      while (indent < raw.length
+             && (raw.charAt(indent) === ' ' || raw.charAt(indent) === '　' || raw.charAt(indent) === '\t')) {
+        indent++;
+      }
+      const lt: string = t.slice(2).trim();
+      const b2: MdBlock = { k: 2, lv: indent >= 2 ? 1 : 0, t: lt, segs: mdInline(lt) };
+      out.push(b2);
+      continue;
+    }
+    let d: number = 0;   // 有序列表：1. 1、1)
+    while (d < t.length && t.charAt(d) >= '0' && t.charAt(d) <= '9') {
+      d++;
+    }
+    if (d > 0 && d <= 2 && d < t.length) {
+      const ch: string = t.charAt(d);
+      let bodyStart: number = -1;
+      if (ch === '、') {
+        bodyStart = d + 1;
+      } else if ((ch === '.' || ch === ')') && d + 1 < t.length && t.charAt(d + 1) === ' ') {
+        bodyStart = d + 2;
+      }
+      if (bodyStart > 0 && bodyStart < t.length) {
+        const ot: string = t.slice(0, d) + '. ' + t.slice(bodyStart).trim();
+        const b2o: MdBlock = { k: 2, lv: 0, t: ot, segs: mdInline(ot) };
+        out.push(b2o);
+        continue;
+      }
+    }
+    const bp: MdBlock = { k: 0, lv: 0, t: t, segs: mdInline(t) };   // 普通段落
+    out.push(bp);
+  }
+  if (inCode && codeBuf !== '') {
+    const b5: MdBlock = { k: 5, lv: 0, t: codeBuf, segs: [] };
+    out.push(b5);
+  }
+  return out;
+}
+
 // 走一步（±5 分钟 / ±1 小时），钳在 00:00~23:55：
 // 跨位自动进位（08:55+5=09:00、08:00−5=07:55），顶到边就停住——UI 只产 24 小时制合法值
 function ttStep(t: string, deltaMin: number): string {
@@ -1169,12 +1285,6 @@ struct Index {
   // 跟随系统 = mediaquery 监听系统深色模式（sysDark 由 aboutToAppear 的监听器维护）──
   @StorageProp('nightPref') nightPref: string = 'auto';
   private mqListener: mediaquery.MediaQueryListener | undefined = undefined;
-  @State pendingThinkKey: string = '';   // send 时挂的「叫姐姐中…」占位卡 key（thinking 事件来复用）
-  // 9-18 修复批八（APP2-02）：当前未封口思考卡的 key（两路创建都记：beginThinking 的 thinkN 占位卡、
-  // SSE thinking 事件新开的 kN 卡）——异常收尾时按它精确清，不再按 key 前缀扫（扫不到 kN 卡会留僵尸）
-  private liveThinkKey: string = '';
-  // FE3-04（9-23）：本轮未收尾的流式正文气泡 key——流没收 done 时 catch 里先摘半截再对账
-  private liveReplyKey: string = '';
   // ── 9-27 打字机真修（v5）：正在流的两张卡改由 @State 驱动、在 List 尾部条件渲染 ──
   // 病因：LazyForEach 里"原地改一条"（updateText/updateByKey → onDataChange）**画不出来**——
   // 官方文档 @Builder 参数传递规则：按值传递（传变量）时参数变化**不会**引起 @Builder 内 UI 刷新；
@@ -1199,6 +1309,128 @@ struct Index {
     }
     const n: string | undefined = NIGHT_MAP[c];
     return n === undefined ? c : n;
+  }
+
+// ═══════════ 📖 Markdown 轻渲染 · B 段（struct Index 内：缓存 + 渲染）═══════════
+// 粘贴位置：struct Index { ... } 内（建议 private dk() 方法附近、@State chatData 之前）。
+// 说明：①mdOfA/mdOfR 惰性缓存——同一文本只在变化时解析一次（滚/重渲染零成本）；
+//       ②MdDocView 是两处阅读器共用的渲染体（块级排版 + 行内 Span 样式）；
+//       ③颜色全走 this.dk() + 现有色板，夜装自动跟；字号走四步进（20/16/14）。
+  private mdKeyA: string = '';
+  private mdCacheA: MdBlock[] = [];
+  private mdOfA(text: string): MdBlock[] {
+    if (text !== this.mdKeyA) {
+      this.mdKeyA = text;
+      this.mdCacheA = mdParse(text);
+    }
+    return this.mdCacheA;
+  }
+  private mdKeyR: string = '';
+  private mdCacheR: MdBlock[] = [];
+  private mdOfR(text: string): MdBlock[] {
+    if (text !== this.mdKeyR) {
+      this.mdKeyR = text;
+      this.mdCacheR = mdParse(text);
+    }
+    return this.mdCacheR;
+  }
+
+  @Builder
+  MdDocView(blocks: MdBlock[]) {
+    Column() {
+      ForEach(blocks, (blk: MdBlock, idx: number) => {
+        if (blk.k === 1) {
+          // 标题：# 与 ## 大字，### 起小一号；字重分级
+          Text(blk.t)
+            .fontSize(blk.lv <= 1 ? FS_TITLE : (blk.lv === 2 ? FS_BODY : FS_SUB))
+            .fontWeight(blk.lv <= 2 ? FontWeight.Bold : FontWeight.Medium)
+            .fontColor(this.dk(C_TEXT))
+            .width('100%')
+            .margin({ top: idx === 0 ? 0 : 12, bottom: 4 })
+        } else if (blk.k === 2) {
+          // 列表项：· 前缀（缩进项给全角空格）；行内样式走 Span
+          Row() {
+            Text(blk.lv > 0 ? '　·' : '·')
+              .fontSize(FS_BODY)
+              .fontColor(this.dk(C_TEXT_3))
+            Text() {
+              ForEach(blk.segs, (sg: MdSeg, si: number) => {
+                Span(sg.t)
+                  .fontSize(FS_BODY)
+                  .fontColor(sg.c ? this.dk(C_ACCENT) : this.dk(C_TEXT_2))
+                  .fontWeight(sg.b ? FontWeight.Bold : FontWeight.Normal)
+                  .fontStyle(sg.i ? FontStyle.Italic : FontStyle.Normal)
+              }, (sg: MdSeg, si: number) => si + ':' + sg.t)
+            }
+            .layoutWeight(1)
+            .fontSize(FS_BODY)
+            .fontColor(this.dk(C_TEXT_2))
+            .lineHeight(23)
+          }
+          .width('100%')
+          .alignItems(VerticalAlign.Top)
+          .margin({ top: 3 })
+        } else if (blk.k === 3) {
+          // 引用：左侧竖条 + 弱化文字
+          Row() {
+            Text('▎')
+              .fontSize(FS_BODY)
+              .fontColor(this.dk(C_DOT_BORDER))
+            Text() {
+              ForEach(blk.segs, (sg: MdSeg, si: number) => {
+                Span(sg.t)
+                  .fontSize(FS_BODY)
+                  .fontColor(this.dk(C_TEXT_3))
+                  .fontWeight(sg.b ? FontWeight.Bold : FontWeight.Normal)
+                  .fontStyle(sg.i ? FontStyle.Italic : FontStyle.Normal)
+              }, (sg: MdSeg, si: number) => si + ':' + sg.t)
+            }
+            .layoutWeight(1)
+            .fontSize(FS_BODY)
+            .fontColor(this.dk(C_TEXT_3))
+            .lineHeight(23)
+          }
+          .width('100%')
+          .alignItems(VerticalAlign.Top)
+          .margin({ top: 4 })
+        } else if (blk.k === 4) {
+          Divider()
+            .strokeWidth(1)
+            .color(this.dk(C_DOT_BORDER))
+            .margin({ top: 10, bottom: 10 })
+        } else if (blk.k === 5) {
+          // 代码块：卡片底 + 原样文本
+          Text(blk.t)
+            .fontSize(FS_SUB)
+            .fontColor(this.dk(C_TEXT_2))
+            .lineHeight(21)
+            .width('100%')
+            .padding(10)
+            .backgroundColor(this.dk(C_CARD))
+            .borderRadius(R_SM)
+            .margin({ top: 6 })
+        } else {
+          // 段落
+          Text() {
+            ForEach(blk.segs, (sg: MdSeg, si: number) => {
+              Span(sg.t)
+                .fontSize(FS_BODY)
+                .fontColor(sg.c ? this.dk(C_ACCENT) : this.dk(C_TEXT_2))
+                .fontWeight(sg.b ? FontWeight.Bold : FontWeight.Normal)
+                .fontStyle(sg.i ? FontStyle.Italic : FontStyle.Normal)
+            }, (sg: MdSeg, si: number) => si + ':' + sg.t)
+          }
+          .width('100%')
+          .fontSize(FS_BODY)
+          .fontColor(this.dk(C_TEXT_2))
+          .lineHeight(23)
+          .margin({ top: 4 })
+        }
+      }, (blk: MdBlock, idx: number) => idx + ':' + blk.k + ':' + blk.lv + ':' + blk.t)   // key 含全文：防切文档不刷新
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+    .padding({ left: M_PAGE, right: M_PAGE, bottom: 24 })
   }
 
   @State chatData: ChatDataSource = new ChatDataSource();   // FE-02：LazyForEach 数据源（原 messages 数组收编）
@@ -1388,7 +1620,6 @@ struct Index {
   // ── 姐姐思考中 ──
   @State thinkingSec: number = 0;
   @State thinkPeek: boolean = false;         // 💭 默认折叠（9-9）：流式思考点一下才偷看
-  private thinkingOn: boolean = false;
   private locPermAsked: boolean = false;
   private scroller: Scroller = new Scroller();
   private keySeq: number = 0;
@@ -4007,12 +4238,7 @@ struct Index {
         .padding({ left: M_PAGE, right: M_PAGE, top: 10, bottom: 6 })
 
         Scroll() {
-          Text(this.archDocText)
-            .fontSize(FS_BODY)
-            .fontColor(this.dk(C_TEXT_2))
-            .lineHeight(24)
-            .width('100%')
-            .padding({ left: M_PAGE, right: M_PAGE, bottom: 24 })
+          this.MdDocView(this.mdOfA(this.archDocText))
         }
         .layoutWeight(1)
         .width('100%')
@@ -4364,12 +4590,7 @@ struct Index {
         .padding({ left: M_PAGE, right: M_PAGE, top: 10, bottom: 6 })
 
         Scroll() {
-          Text(this.repDocText)
-            .fontSize(FS_BODY)
-            .fontColor(this.dk(C_TEXT_2))
-            .lineHeight(24)
-            .width('100%')
-            .padding({ left: M_PAGE, right: M_PAGE, bottom: 24 })
+          this.MdDocView(this.mdOfR(this.repDocText))
         }
         .layoutWeight(1)
         .width('100%')
@@ -7982,10 +8203,9 @@ struct Index {
     }
   }
 
-  // ── 姐姐思考中（9-12 时间线版）：只起计时器，不再挂占位卡——
-  // 思考卡由 SSE thinking 事件自己开，封口由 sealThink（thinkDone）负责 ──
+  // ── 姐姐思考中（9-12 时间线版；9-27 v5 改 live 卡）：起计时器 ＋ 挂一张 live 思考卡兜底——
+  // 第一个事件没到之前显示「叫姐姐中…」，thinking 一来就变计时逐字；封口与归档由 sealThink 负责 ──
   private beginThinking(): void {
-    this.thinkingOn = true;
     this.thinkingSec = 0;
     this.thinkPeek = false;   // 💭 默认折叠：新一轮重新折叠
     // 9-27 v5：占位卡不再 append 进 chatData（那样它永远不重画）——改挂 live 思考卡：
@@ -8013,9 +8233,6 @@ struct Index {
     this.liveThinkOn = false;
     this.liveThinkStarted = false;
     this.liveThinkText = '';
-    this.liveThinkKey = '';
-    this.pendingThinkKey = '';
-    this.thinkingOn = false;
     return elapsed;
   }
 
@@ -8281,8 +8498,8 @@ struct Index {
         this.histOldestThrough = this.todayDateStr();   // 无参=最近三天：窗口 [今-2..今]，两头游标都从今天起
         this.histNewestThrough = this.todayDateStr();
         // 9-18 App深搜修（DS-02）：不再整卷 setAll——「历史 + 未入库活口」合并落地（mergeWithLive），
-        // 否则本轮流式的乐观气泡/思考卡会被换掉，之后 updateByKey/updateText 找不到目标静默 no-op，
-        // 回复会从界面消失（冷启动窗口最宽）。活口判定见 keepLiveBubble 头注。
+        // 否则这轮刚发出去、还没入库的乐观气泡会被换掉。9-27 v5 起她的流式正文/思考卡已移出 chatData
+        // （不再受整卷替换影响），但「我」那条乐观气泡仍在册，仍要护。活口判定见 keepLiveBubble 头注。
         const merged: ChatItem[] = this.mergeWithLive(items);
         this.chatData.setAll(merged);
         this.scrollToEnd();
@@ -8805,7 +9022,6 @@ struct Index {
         let curThinkKey = '';
         let thinkT0 = 0;
         let thinkFull = '';
-        this.liveReplyKey = '';   // FE3-04（9-23）：正文气泡 key 提为组件态——异常收尾时 catch 也要拿得到
         // 9-27 v5：live 卡状态每一轮清零（beginThinking 已清过，这里再钉一次，防重入残留）
         this.liveReplyOn = false;
         this.liveReplyText = '';
@@ -9019,7 +9235,6 @@ struct Index {
             }
             this.chatData.append(finalMsg);
             this.scrollToEnd();
-            this.liveReplyKey = '';   // 收尾完成（已补全/已入库）——异常收尾不再管它
             this.liveReplyOn = false;
             this.liveReplyText = '';
             this.liveReplyTime = '';
@@ -9071,7 +9286,6 @@ struct Index {
       this.liveReplyOn = false;
       this.liveReplyText = '';
       this.liveReplyTime = '';
-      this.liveReplyKey = '';
       // 超时/断线先别报错：等几秒拉 history 对账，消息和回复已入库就直接显示；
       // 真没到才提示重发——绝不盲目自动重发，防库存双份
       const settled = await this.reconcile(text, sentAtMs);
