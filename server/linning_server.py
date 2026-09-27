@@ -1658,6 +1658,7 @@ def call_deepseek_stream(cfg, messages, on_event, use_tools=False, scene="chat.s
         content_parts, rc_parts = [], []
         tc_buf = {}   # index -> {"id","name","args": [分片...]}
         finish = None
+        usage_hold = None   # 9-27 夜十：DS 流式末包自带 usage（真数记账用；K3 无则留 None 走估算）
         try:
             with urllib.request.urlopen(req, timeout=int(cfg.get("api_timeout", 60))) as resp:   # 9-7 起 config 可调（流式期间数据持续来，不 stall；但 max 档思考静默期长，得等得起）
                 for raw_line in resp:
@@ -1671,6 +1672,8 @@ def call_deepseek_stream(cfg, messages, on_event, use_tools=False, scene="chat.s
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
                         continue
+                    if chunk.get("usage"):
+                        usage_hold = chunk["usage"]   # 9-27 夜十：官方「无论是否设置 include_usage，末包都给 usage」
                     choices = chunk.get("choices") or []
                     if not choices:
                         continue
@@ -1714,14 +1717,17 @@ def call_deepseek_stream(cfg, messages, on_event, use_tools=False, scene="chat.s
             # 9-27 可观测（假调用排查配套）：每轮流式收尾留一笔形状——finish/正文/思考/tool_calls 数
             print(f"  [引擎] 流式一轮完：finish={finish} 正文{len(msg['content'])}字 "
                   f"思考{len(msg['reasoning_content'])}字 tc={len(msg.get('tool_calls') or [])}")
-            try:   # W1 影子（9-24）：流式无 usage → 粗估记账（fail-open；9-27 标 estimated=1）
+            try:   # W1 影子：DS 流式末包自带 usage → 真数记账（estimated=0）；缺 usage（K3 旧路）→ 退回粗估
                 import events_lib
-                events_lib.ledger_record(scene, cfg.get("model", "?"),
-                                         events_lib.est_tokens(str(messages)),
-                                         events_lib.est_tokens(
-                                             (msg.get("content") or "")
-                                             + (msg.get("reasoning_content") or "")),
-                                         ok=1, estimated=1)
+                if usage_hold:
+                    events_lib.ledger_from_usage(scene, cfg.get("model", "?"), usage_hold, ok=1)
+                else:
+                    events_lib.ledger_record(scene, cfg.get("model", "?"),
+                                             events_lib.est_tokens(str(messages)),
+                                             events_lib.est_tokens(
+                                                 (msg.get("content") or "")
+                                                 + (msg.get("reasoning_content") or "")),
+                                             ok=1, estimated=1)
             except Exception:
                 pass
             return msg
