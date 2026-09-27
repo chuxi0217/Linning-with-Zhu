@@ -2904,6 +2904,19 @@ def thinking_chat_ids(date):
     return ids
 
 
+def thinkings_map_for_date(date):
+    """（9-27 夜·Preserved Thinking 灌回修）某天 chat_id → 思考原文 的字典（同 chat 多条取最新）。
+    只读；给「重启灌回带上 reasoning」用（K3 多轮要求原样回传完整 assistant 消息）。"""
+    conn = _conn()
+    c = conn.cursor()
+    c.execute('''SELECT t.chat_id, t.content FROM thinkings t
+                 JOIN chats c2 ON c2.id = t.chat_id
+                 WHERE c2.date = ? ORDER BY t.id''', (date,))
+    d = {r[0]: r[1] for r in c.fetchall()}
+    conn.close()
+    return d
+
+
 # ── 开门有信（v0.1.6，工单 9-2-#总，纯新增） ──
 
 def add_outbox_msg(text):

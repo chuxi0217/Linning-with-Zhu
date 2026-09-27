@@ -489,6 +489,7 @@ if _self_mod is not None:
 # ── 跨天连续性（二期 a.3）：昨夜尾巴与灌回的 token 护栏 ──
 TAIL_N = 40            # 昨夜尾巴最多带几条（可调；09-03 起放宽：全程带，叛乱与和解一夜不丢）
 TAIL_MAX_CHARS = 25000  # 尾巴/启动灌回总量上限，从旧往新砍、保最新
+_TAIL_REASON_CAP = 120000  # 灌回时思考原文总量上限（Preserved Thinking 修；超限从旧的那头不带）
 LINE_MAX_CHARS = 2000   # 单条超长按尾保留（交接信约一千字，别拦腰剪）
 
 # ── 装配脱敏开关：剥掉姐姐台词里的（…）动作/表情/心理段 ──
@@ -5781,13 +5782,42 @@ def rollover_if_new_day():
 def reload_context_on_boot():
     """重启不丢今天：只挂 main() 启动路径，__init__/reset 行为不动。
     今天有记录 → 灌回今天（与 /api/history 同源重组，参与当晚日记）；
-    今天无记录且昨天有 → 灌昨天尾巴（记账隔离）。日记不补写。"""
+    今天无记录且昨天有 → 灌昨天尾巴（记账隔离）。日记不补写。
+
+    9-27 夜修（Preserved Thinking）：灌回时把每条她的话的 reasoning 一起装回（从 thinkings 表）——
+    K3 官方要求多轮必须把 assistant 完整消息（含 reasoning_content）原样传回；丢了它，重启后
+    前几条她常常「不给看思考」（9-27 实案 5 条连挂；对照实验：不带=时有时无、带上=稳定返回）。
+    开关 boot_reasoning_attach；思考总量有上限（超限从旧的那头不带，保最新、防上下文超重）。"""
     today = today_str()
     rows = m.get_chats(today)
     if rows:
-        msgs = [{"role": "user" if role == "小乖" else "assistant",
-                 "content": _clip_line(content or "")}
-                for _id, _d, role, content, _t in rows]
+        attach = True
+        try:
+            attach = bool(load_config().get("boot_reasoning_attach", True))
+        except Exception:
+            attach = True
+        th = {}
+        if attach:
+            try:
+                th = m.thinkings_map_for_date(today)
+            except Exception:
+                th = {}
+        msgs = []
+        for _id, _d, role, content, _t in rows:
+            entry = {"role": "user" if role == "小乖" else "assistant",
+                     "content": _clip_line(content or "")}
+            if role != "小乖" and th.get(_id):
+                entry["reasoning_content"] = th[_id]
+            msgs.append(entry)
+        _budget = _TAIL_REASON_CAP
+        for x in reversed(msgs):
+            _rc = x.get("reasoning_content")
+            if not _rc:
+                continue
+            if len(_rc) <= _budget:
+                _budget -= len(_rc)
+            else:
+                x.pop("reasoning_content", None)
         total = sum(len(x["content"]) for x in msgs)
         while msgs and total > TAIL_MAX_CHARS:
             total -= len(msgs[0]["content"])
