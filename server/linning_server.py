@@ -2716,6 +2716,8 @@ def chat_with_library(cfg, messages):
             rc = msg.get("reasoning_content")
             return ((msg.get("content") or "（姐姐这轮一个字没吐（finish=空）——重发一次试试）"),
                     tools_log, (rc if isinstance(rc, str) else ""))
+        if _engine_carrier()["short"] != "K3" and not isinstance(msg.get("reasoning_content"), str):
+            msg["reasoning_content"] = ""   # 9-27 夜九·DS 适配：带 tools 请求的 assistant 回挂必须带该字段
         msgs.append(msg)   # assistant 的 tool_calls 原样回挂（reasoning_content 随原文保留）
         for tc in tool_calls[:4]:
             fn = (tc.get("function") or {})
@@ -6972,11 +6974,25 @@ class Handler(BaseHTTPRequestHandler):
                     "规则：涉及他今天安排的问题以此为准；没提到不用主动背日程。"})
             # 装配脱敏：姐姐历史台词剥掉（…）动作段；库里的旧原文不动
             # （9-2：发送侧窗口已撤——K2.6 有 256K，每天跨天交接重置，全量历史直接发）
+            # 9-27 夜九·DS 适配（官方《思考模式》指南原文）：请求带 tools 时，历史 assistant
+            # 轮次的 reasoning_content 必须完整回传——有则原样、缺则补空串（防 API 400，
+            # 社区实案 + 文档「未正确回传会 400」）；不带 tools 时该字段本会被忽略、补着无碍。
+            # K3 路维持原样（有才带）；thinking 关时反向不出该字段。
+            _eng_ds = (_engine_carrier()["short"] != "K3")
+            _think_on = True
+            try:
+                _think_on = bool(cfg.get("thinking_enabled", True))
+            except Exception:
+                pass
             for h in SESSION.history:
                 if h["role"] == "assistant" and isinstance(h.get("content"), str):
                     entry = {"role": "assistant", "content": strip_stage(h["content"])}
-                    if h.get("reasoning_content"):
-                        entry["reasoning_content"] = h["reasoning_content"]   # Preserved Thinking（9-12 晚九）
+                    _rc_h = h.get("reasoning_content") or ""
+                    if _eng_ds:
+                        if _think_on:
+                            entry["reasoning_content"] = _rc_h   # DS：有则原样、缺则空串（完整回传）
+                    elif _rc_h:
+                        entry["reasoning_content"] = _rc_h       # K3：Preserved Thinking 原样回传
                     messages.append(entry)
                 else:
                     messages.append(h)
