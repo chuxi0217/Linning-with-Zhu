@@ -235,7 +235,7 @@ def _book_import_bytes(data, fname_in, fb64):
     if not final_title:
         return 400, {"ok": False, "error": "书名和内容都得有"}
     bid = m.add_book(final_title, final_author)
-    bookdir = os.path.join(BASE_DIR, "files", "books")
+    bookdir = os.path.join(srv_state._srv().FILES_DIR, "books")   # 9-27 修：走入口属主名（沙盘重绑生效）
     os.makedirs(bookdir, exist_ok=True)
     fname = f"book_{bid}.txt"
     with open(os.path.join(bookdir, fname), "w", encoding="utf-8") as f:

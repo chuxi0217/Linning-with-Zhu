@@ -29,12 +29,12 @@ LIBRARY_TOOLS = [
         "readOnly": True,
         "function": {
             "name": "search_memory",
-            "description": "全文检索六卷：日记、小本本（notes）、他写来的信（letters）、收藏夹（favorites）、日记馆（diary_hall）、聊天原话（chats），中文分词全文匹配+同义词扩词，比按卷翻更准。聊往事想「在哪本里见过」、或 search_diary 查不到时调用",
+            "description": "全文检索六卷：日记、小本本（notes）、他写来的信（letters）、收藏夹（favorites）、日记馆（diary_hall）、聊天原话（chats），中文分词全文匹配+同义词扩词，比按卷翻更准。聊往事想「在哪本里见过」、或 search_diary 查不到时调用。type 填「旧宅」可翻前几个家的存档（第一个家/第二个家/第三个家）",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "关键词，像平时说话那样写就行"},
-                    "type": {"type": "string", "description": "只搜某一卷：日记/notes/来信/收藏/日记馆/原话，可省（默认六卷都搜）"},
+                    "type": {"type": "string", "description": "只搜某一卷：日记/notes/来信/收藏/日记馆/原话/旧宅，可省（默认六卷都搜；旧宅要写明才搜）"},
                     "limit": {"type": "integer", "description": "每卷最多几条，默认 5"},
                 },
                 "required": ["query"],

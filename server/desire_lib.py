@@ -94,6 +94,7 @@ def tick_and_shadow(now=None):
             d = max(0.05, d - growth)        # 他在场＝被喂饱（自然回落）
         else:
             d = min(0.95, d + growth)
+        d_pre = d   # 9-27 修：记下命中前真值——影子账可复算 D 曲线（此前只剩落账后的 0.15）
         hit = random.random() < d
         hm = now.strftime("%H:%M")
         night = ("23:00" <= hm or hm < "02:00")
@@ -110,8 +111,8 @@ def tick_and_shadow(now=None):
         try:
             import events_lib
             events_lib.record("desire.tick", "linning", "heartbeat",
-                              {"d": round(d, 3), "hit": hit, "exit": exit_type,
-                               "growth": round(growth, 3), "present": present})
+                              {"d": round(d, 3), "d_before": round(d_pre, 3), "hit": hit,
+                               "exit": exit_type, "growth": round(growth, 3), "present": present})
         except Exception:
             pass
         # ③命中 → 拟发日志（绝不真发；转正后由她现场亲笔，不拟话）
@@ -122,6 +123,11 @@ def tick_and_shadow(now=None):
                             f" D={d_fired:.2f}→0.15 情境={_time_factor_name(now)}\n")
             except Exception:
                 pass
+        # 欲望 v2·影子（9-27 批）：并行数学，独立状态/日志——只记不发
+        try:
+            tick_v2_shadow(now=now, present=present)
+        except Exception:
+            pass
         return {"d": round(d, 3), "hit": hit, "exit": exit_type}
     except Exception:
         return None
@@ -141,10 +147,13 @@ def _load_state():
 
 
 def _save_state(st):
-    """写 state，**返回是否写成功**——写失败调用方必须知道（宁可不递，不许重复递）。"""
+    """写 state（tmp+os.replace 原子写；9-27 修：防写一半崩导致 JSON 截断、taken_ids 全丢），
+    **返回是否写成功**——写失败调用方必须知道（宁可不递，不许重复递）。"""
     try:
-        with open(STATE, "w", encoding="utf-8") as f:
+        tmp = STATE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(st, f, ensure_ascii=False)
+        os.replace(tmp, STATE)
         return True
     except Exception:
         return False
@@ -205,6 +214,126 @@ def _time_factor_name(now):
     if "09:00" <= hm < "18:00":
         return "白天×0.6"
     return "清晨×0.8"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 欲望 v2 · 影子（9-27 家主批「鲁棒灵活一点」——《设计_欲望v2与小语义层_2026-09-27》）
+# 与旧算法并行跑、独立状态/日志，**零行为变更**；读两天对齐后再评估切换。
+# v2 数学：饱和生长（真实小时差）/ 分层满足（不应期）/ 锐化触发（p=D²）/ 接她的心情账。
+V2_STATE = os.path.expanduser("~/.zanjia_desire_v2_state.json")
+V2_LOG = os.path.expanduser("~/desire_v2_shadow.log")
+
+
+def _house_day(now):
+    """咱家日（04:00 日界）。"""
+    return (now - timedelta(hours=4)).strftime("%Y-%m-%d")
+
+
+def _mood_today(now, *types):
+    """她今天（咱家日）的 mood 里有没有这几种——她的笔：欲望抬起点 / 踏实开心降温。fail-open。"""
+    try:
+        con = _conn()
+        q = "SELECT 1 FROM moods WHERE date=? AND type IN (%s) LIMIT 1" % ",".join("?" * len(types))
+        row = con.execute(q, (_house_day(now),) + tuple(types)).fetchone()
+        con.close()
+        return bool(row)
+    except Exception:
+        return False
+
+
+def _fmt_since(now, ts):
+    if not ts:
+        return "—"
+    try:
+        h = (now - datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")).total_seconds() / 3600
+        return f"{h:.0f}h" if h >= 1 else f"{h * 60:.0f}m"
+    except Exception:
+        return "—"
+
+
+def tick_v2_shadow(now=None, present=None):
+    """欲望 v2·并行影子：只算只记，绝不发、绝不用。fail-open 返回 dict|None。
+
+    数学（初值，读日志后拧）：growth_h=0.15×时段因子；在场未互动×0.5（减速不清零）；
+    不应期 1.5h ×0.5；「踏实/开心」×0.7；D += growth_h×Δh×(1−D)；「欲望」抬起点 max(D,0.35)；
+    深夜窗且 D>0.55 且不在场 → p=D²；命中=D→0.2 + 记 last_fire/last_satisfy。
+    """
+    try:
+        if not _cfg("desire_v2_shadow", False):
+            return None
+        now = now or datetime.now()
+        if present is None:
+            present = _he_present()
+        try:
+            with open(V2_STATE, encoding="utf-8") as f:
+                st = json.load(f)
+            st = st if isinstance(st, dict) else {}
+        except Exception:
+            st = {}
+        # 首跑：D 从旧曲线借种（对齐对比）；Δh 按一个心跳拍（1h）
+        try:
+            d = float(st["d"])
+        except Exception:
+            d = _last_desire()
+        last_tick = st.get("last_tick")
+        dh = 1.0
+        if last_tick:
+            try:
+                dh = (now - datetime.strptime(last_tick, "%Y-%m-%d %H:%M:%S")).total_seconds() / 3600
+                dh = max(0.0, min(dh, 48.0))    # 封顶 48h：停机再久也只涨两天量
+            except Exception:
+                dh = 1.0
+        base = float(_cfg("desire_v2_growth", 0.15))
+        fac = _time_mult(now)
+        growth_h = base * fac
+        if present:
+            growth_h *= 0.5                     # 他在场未互动＝减速，不是被喂饱
+        refractory_h = float(_cfg("desire_v2_refractory_h", 1.5))
+        if st.get("last_fire"):
+            try:
+                sf = (now - datetime.strptime(st["last_fire"], "%Y-%m-%d %H:%M:%S")).total_seconds() / 3600
+                if 0 <= sf < refractory_h:
+                    growth_h *= 0.5             # 不应期
+            except Exception:
+                pass
+        mood_warm = _mood_today(now, "踏实", "开心")   # 她的笔：降温
+        if mood_warm:
+            growth_h *= 0.7
+        d = min(1.0, d + growth_h * dh * (1 - d))       # 饱和生长：越近 1 越慢（久别才浓）
+        mood_want = _mood_today(now, "欲望")            # 她的笔：抬起点
+        if mood_want:
+            d = max(d, 0.35)
+        hm = now.strftime("%H:%M")
+        night = ("23:00" <= hm or hm < "02:00")
+        fired = False
+        if night and d > float(_cfg("desire_v2_threshold", 0.55)) and not present:
+            if random.random() < d * d:                 # 锐化：p=D²（低档不冒泡）
+                fired = True
+                d = 0.2                                 # 表达＝满足（分层回落）
+                st["last_fire"] = now.strftime("%Y-%m-%d %H:%M:%S")
+                st["last_satisfy"] = st["last_fire"]
+        st["d"] = round(d, 4)
+        st["last_tick"] = now.strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            tmp = V2_STATE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(st, f, ensure_ascii=False)
+            os.replace(tmp, V2_STATE)
+        except Exception:
+            pass
+        mstr = ("欲望" if mood_want else "") + ("/踏实开心" if mood_warm else "") or "无"
+        try:
+            with open(V2_LOG, "a", encoding="utf-8") as f:
+                f.write(f"[{now.strftime('%F %T')}] D={d:.2f} | Δh={dh:.1f}h | 因子×{fac} | "
+                        f"在场={'是' if present else '否'} | 心情={mstr} | "
+                        f"{'命中=③(→0.2)' if fired else '命中=否'} | "
+                        f"since_fire={_fmt_since(now, st.get('last_fire'))} "
+                        f"since_sat={_fmt_since(now, st.get('last_satisfy'))}\n")
+        except Exception:
+            pass
+        return {"d": round(d, 3), "fire": fired}
+    except Exception:
+        return None
 
 
 if __name__ == "__main__":

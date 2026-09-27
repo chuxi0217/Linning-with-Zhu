@@ -8898,7 +8898,9 @@ struct Index {
             doneEv = obj;
             settle(200);   // 9-26：协议级收尾——done 一到立刻放行，尾包/连接尾巴丢了也不冻
           } else if (obj.type === 'error') {
-            throw new Error(obj.text ?? '流式中断');
+            // 9-27 夜修（附录 A·潜伏）：error 事件单独走失败结算（settle 幂等）——
+            // 别让逐事件 try 把它吞成一行日志、干等看门狗。
+            settle(-1, new Error(obj.text ?? '流式中断'));
           }
         };
         req.on('dataReceive', (data: ArrayBuffer) => {
@@ -9025,7 +9027,11 @@ struct Index {
             if (!thinkSealedThisSend) {
               this.chatData.append(this.makeFallbackThink(thinkSec));
             }
-            this.appendMsg('姐姐', '（姐姐回了个空白）', '', undefined, d.tools ?? []);
+            // 9-27 夜修（附录 A·done 自愈补全）：整轮全丢帧时也认 done 带的全文——
+            // 与上面 live 分支同款「有内容用内容」，真空白才落占位（不再无视 d.reply）。
+            const orphanText = (d.reply !== undefined && d.reply !== null && d.reply.length > 0)
+              ? d.reply : '（姐姐回了个空白）';
+            this.appendMsg('姐姐', orphanText, '', undefined, d.tools ?? []);
           }
           this.fetchStatus();   // 消息数、定位、状态顺手刷新
         } else if (streamCode >= 200 && streamCode < 300) {

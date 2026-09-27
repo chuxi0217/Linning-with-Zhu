@@ -17,8 +17,10 @@
   python tools/chunk_corpus.py --sample 3             # 每卷只挑 3 条源记录（小样）
   python tools/chunk_corpus.py --dump-jsonl x.jsonl   # 另落块 jsonl（拒写生产路径）
   python tools/chunk_corpus.py --report x.md          # 干跑报告落 md
+  python tools/chunk_corpus.py --db <库> --commit --yes  # M2 数据层：块写进库（幂等）
 
-纪律：纯标准库；--db 只读打开（mode=ro）；--dump-jsonl 拒写生产目录；绝不联网。
+纪律：纯标准库；--db 以只读打开做切块；--commit 才写 chunks/fts_chunks（走 memory_lib，
+生产库要 --yes）；嵌入不在此脚本（另跑 tools/chunk_embed.py）；绝不联网。
 """
 
 import argparse
@@ -71,6 +73,10 @@ def parse_args():
     ap.add_argument("--sample", type=int, default=None,
                     help="每卷最多处理 N 条源记录（调试/小样用，默认全量）")
     ap.add_argument("--report", default=None, help="干跑报告写进 md 文件（可选）")
+    ap.add_argument("--commit", action="store_true",
+                    help="M2 数据层（9-27）：把块写进 --db 指向的库（memory_lib.chunk_put，幂等；"
+                         "生产库要 --yes）——嵌入由 tools/chunk_embed.py 单独做")
+    ap.add_argument("--yes", action="store_true", help="写生产库的确认钮")
     return ap.parse_args()
 
 
@@ -486,6 +492,32 @@ def main():
         with open(args.report, "w", encoding="utf-8") as f:
             f.write(md)
         print(f"[chunk] 报告已写 → {args.report}")
+
+    # ── M2 数据层（9-27）：--commit 把块写进库（幂等；生产要 --yes）──
+    if args.commit:
+        _root = os.path.dirname(os.path.abspath(args.db))
+        if _root not in sys.path:
+            sys.path.insert(0, _root)
+        import memory_lib as _m
+        if os.path.abspath(_m.DB_PATH) != os.path.abspath(args.db):
+            sys.exit(f"[chunk] 拒绝：--db（{args.db}）与 memory_lib 的库（{_m.DB_PATH}）"
+                     f"不是同一个——防写错库")
+        _prod_dbs = [os.path.join(d, "咱家的家.db") for d in PROD_DIRS]
+        _prod = any(os.path.abspath(args.db).replace("\\", "/").lower()
+                    == os.path.abspath(p).replace("\\", "/").lower() for p in _prod_dbs)
+        if _prod and not args.yes:
+            print("[chunk] 目标是生产库——加 --yes 才写；本次只报数。")
+            return
+        _m.init_db()
+        n_changed = n_same = 0
+        for kind in ("days", "chats", "notes", "letters"):
+            for c in vol_stats[kind][1]:
+                _cid, _changed = _m.chunk_put(c["kind"], c["ref_id"], str(c["seq"]), c["text"])
+                n_changed += 1 if _changed else 0
+                n_same += 0 if _changed else 1
+        _st = _m.chunk_stats()
+        print(f"[chunk] 已写库：新增/更新 {n_changed}，未变 {n_same}；"
+              f"盘点 {_st['total']} 块 {_st['per_type']}")
 
 
 if __name__ == "__main__":

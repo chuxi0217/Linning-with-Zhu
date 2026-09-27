@@ -64,7 +64,7 @@ def auto_snapshot(tag=""):
         os.makedirs(srv.SNAPSHOT_DIR, exist_ok=True)
         ts = srv.datetime.now().strftime("%Y%m%d_%H%M%S")
         dst = os.path.join(srv.SNAPSHOT_DIR, f"咱家的家_自动备份_{ts}_{tag}.db")
-        _snapshot_db(os.path.join(BASE_DIR, "咱家的家.db"), dst)   # 9-18 后院深搜修：换 sqlite 备份 API（开机/跨天同一张手）
+        _snapshot_db(m.DB_PATH, dst)   # 9-27 修：源走 memory_lib 库路径（随沙盘重绑）；9-18 后院深搜修：sqlite 备份 API（开机/跨天同一张手）
         snaps = sorted(f for f in os.listdir(srv.SNAPSHOT_DIR) if f.startswith("咱家的家_自动备份_"))
         for old in snaps[:-srv.SNAPSHOT_KEEP]:
             try:

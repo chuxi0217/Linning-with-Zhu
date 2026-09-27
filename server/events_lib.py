@@ -73,12 +73,43 @@ CREATE TABLE IF NOT EXISTS token_ledger (
   latency_ms INTEGER,
   ok INTEGER NOT NULL DEFAULT 1,
   cost_est REAL,
-  budget_bucket TEXT NOT NULL
+  budget_bucket TEXT NOT NULL,
+  estimated INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_ledger_scene_ts ON token_ledger(scene, ts);
 """)
+    try:   # 9-27 审计缓办：旧库补 estimated 列（幂等；估算=1 / 真 usage=0）
+        cols = {r[1] for r in con.execute("PRAGMA table_info(token_ledger)").fetchall()}
+        if "estimated" not in cols:
+            con.execute("ALTER TABLE token_ledger ADD COLUMN estimated INTEGER NOT NULL DEFAULT 0")
+    except Exception:
+        pass
     con.commit()
     _ensured = True
+
+
+# 写失败留痕（9-27·审计缓办）：fail-open 还得看得见——计数 + 最近一次错误，/api/status 露一行。
+_FAILS = {"events": 0, "ledger": 0, "last": "", "last_ts": ""}
+
+
+def _fail_note(where, e):
+    try:
+        _FAILS[where] = int(_FAILS.get(where) or 0) + 1
+        _FAILS["last"] = f"{where}: {str(e)[:120]}"
+        _FAILS["last_ts"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        pass
+
+
+def health():
+    """两本影子账的写失败健康报告（只读；永远 fail-open）。"""
+    try:
+        return {"events_fails": int(_FAILS.get("events") or 0),
+                "ledger_fails": int(_FAILS.get("ledger") or 0),
+                "last": _FAILS.get("last") or "",
+                "last_ts": _FAILS.get("last_ts") or ""}
+    except Exception:
+        return {"events_fails": 0, "ledger_fails": 0, "last": "", "last_ts": ""}
 
 
 def record(kind, actor, source, payload=None, trace_id=None, session_id=None,
@@ -99,7 +130,8 @@ def record(kind, actor, source, payload=None, trace_id=None, session_id=None,
             return cur.lastrowid
         finally:
             con.close()
-    except Exception:
+    except Exception as e:
+        _fail_note("events", e)
         return None
 
 
@@ -123,8 +155,8 @@ def record_chat_turn(role, content, session_id="", trace_id=None, date=None):
 
 def ledger_record(scene, model, in_tokens, out_tokens, cached_tokens=0,
                   thinking_level=None, latency_ms=None, ok=1, cost_est=None,
-                  budget_bucket="soul", trace_id=None, session_id=None):
-    """记一笔 LLM 调用账（影子）。fail-open。"""
+                  budget_bucket="soul", trace_id=None, session_id=None, estimated=0):
+    """记一笔 LLM 调用账（影子）。fail-open。estimated=1 表示 tokens 是估算（流式路）不是真 usage。"""
     if not _cfg_flag("token_ledger_enabled"):
         return None
     try:
@@ -134,22 +166,33 @@ def ledger_record(scene, model, in_tokens, out_tokens, cached_tokens=0,
             cur = con.execute(
                 "INSERT INTO token_ledger (trace_id, session_id, scene, model,"
                 " in_tokens, out_tokens, cached_tokens, thinking_level, latency_ms,"
-                " ok, cost_est, budget_bucket) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                " ok, cost_est, budget_bucket, estimated) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (trace_id, session_id, scene, model, int(in_tokens or 0),
                  int(out_tokens or 0), int(cached_tokens or 0), thinking_level,
-                 latency_ms, int(ok), cost_est, budget_bucket))
+                 latency_ms, int(ok), cost_est, budget_bucket, int(estimated or 0)))
             con.commit()
             return cur.lastrowid
         finally:
             con.close()
-    except Exception:
+    except Exception as e:
+        _fail_note("ledger", e)
         return None
 
 
 def est_tokens(text):
-    """流式无 usage 时的粗估：中文≈1字/token、英文≈4字符/token，统一按 字符数/2.5 兜底。"""
+    """流式无 usage 时的粗估（9-27 修·审计缓办）：中文≈1字/token、英文≈4字符/token 分算。
+    旧口径统一 len/2.5——对中文低估约 2.5×（账面上的 tokens 因此偏小），审计要求先修掉。"""
     try:
-        return max(1, int(len(text or "") / 2.5))
+        t = str(text or "")
+        if not t:
+            return 0
+        cjk = 0
+        for ch in t:
+            o = ord(ch)
+            if (0x4E00 <= o <= 0x9FFF or 0x3400 <= o <= 0x4DBF
+                    or 0x3000 <= o <= 0x303F or 0xFF00 <= o <= 0xFFEF):
+                cjk += 1
+        return max(1, int(cjk + (len(t) - cjk) / 4.0 + 0.5))
     except Exception:
         return 0
 

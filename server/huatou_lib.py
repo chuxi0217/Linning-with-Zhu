@@ -70,9 +70,12 @@ def _load_state():
 
 
 def _save_state(st):
+    """写 state（tmp+os.replace 原子写；9-27 修：防半截 JSON 把簿子状态写坏）。fail-open。"""
     try:
-        with open(STATE, "w", encoding="utf-8") as f:
+        tmp = STATE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(st, f, ensure_ascii=False)
+        os.replace(tmp, STATE)
     except Exception:
         pass
 
@@ -286,6 +289,22 @@ def settle(now=None):
     except Exception:
         pass
     return closed
+
+
+def peek_pending(n=3):
+    """只读：待说件（老的优先）——单触发影子/开口轮装行李用；不消费、不标记。fail-open → []。"""
+    try:
+        _ensure()
+        con = _conn()
+        try:
+            rows = con.execute(
+                "SELECT id, kind, text, ts FROM huatou WHERE status='待说' ORDER BY id LIMIT ?",
+                (max(1, int(n)),)).fetchall()
+        finally:
+            con.close()
+        return [{"id": r[0], "kind": r[1], "text": r[2], "ts": r[3]} for r in rows]
+    except Exception:
+        return []
 
 
 def take_huatou(now=None):

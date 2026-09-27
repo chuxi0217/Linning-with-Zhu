@@ -200,6 +200,13 @@ def _he_present(within_s=1800):
 def gen_checkin_nags():
     """开门有信触发源②（9-2 #总；9-2 #12 挪进自主节律心跳，返回攒了几条）：
     打卡项 target_time 过点且今天没打 → 攒一句念叨。每天每项最多一句，今天已打的项不念叨。"""
+    # 9-27 家主令「打卡也不要那种模板的发通知」：停发钥匙（私档 config，现读现生效；缺省 True 保旧行为）。
+    # 打卡状态从此只作"行李文字"递给单触发开口轮（他欠着的），提不提由她自由决定。
+    try:
+        if not srv_state._srv().load_config().get("checkin_nags_enabled", True):
+            return 0
+    except Exception:
+        pass
     # 9-25 在场感知：他在场就不发站外念叨——有话当面说（防「通知流」感）
     if srv_state._srv()._he_present():   # 运行期反查：沙盘会重绑 s._he_present
         return 0

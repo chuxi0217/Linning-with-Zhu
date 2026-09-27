@@ -218,7 +218,7 @@ def _garden_wake_once():
         if _kind == "galatea":
             raw = _garden_wake_with_tools(wake_cfg, msgs, eid)
         else:
-            raw = srv_state._srv().call_deepseek(wake_cfg, msgs).strip()   # 运行期反查：沙盘会重绑 s.call_deepseek
+            raw = srv_state._srv().call_deepseek(wake_cfg, msgs, scene="garden.wake").strip()   # 运行期反查：沙盘会重绑 s.call_deepseek
     except Exception as e:
         m.release_world_event(eid)
         print(f"  [Garden] 这次没醒成（{e}）")
@@ -254,13 +254,32 @@ GARDEN_WALK_DAILY_MAX = 2
 _BRIDGE_FAIL_UNTIL = [0.0]   # 桥拉起失败的冷静期（epoch 秒），防 5 分钟一轮硬重试
 
 
+def _cmdline_is_bridge(parts):
+    """argv 精确判定：node + …/dist/cli.js + run（防 pgrep -f 子串误报——探针误报一次实案）。"""
+    return (len(parts) >= 3
+            and (parts[0] == "node" or parts[0].endswith("/node"))
+            and parts[1].endswith("dist/cli.js")
+            and parts[2] == "run")
+
+
 def _bridge_running():
-    """Garden 桥（node dist/cli.js run）在不在岗。只读检查（server 进程无自匹配风险）。"""
-    import subprocess
+    """Garden 桥（node dist/cli.js run）在不在岗。9-27 修：改读 /proc cmdline 精确匹配——
+    原 pgrep -f 会被「命令行里恰巧带这串字」的任何进程误报（探针实害一次）。只读，无副作用。"""
     try:
-        out = subprocess.run(["pgrep", "-f", r"node dist/cli\.js run"],
-                             capture_output=True, text=True, timeout=5)
-        return out.returncode == 0
+        for _pid in os.listdir("/proc"):
+            if not _pid.isdigit():
+                continue
+            try:
+                with open(f"/proc/{_pid}/cmdline", "rb") as _f:
+                    _raw = _f.read()
+            except Exception:
+                continue
+            if not _raw:
+                continue
+            _parts = [p.decode("utf-8", "replace") for p in _raw.split(b"\0") if p]
+            if _cmdline_is_bridge(_parts):
+                return True
+        return False
     except Exception:
         return False
 
@@ -540,6 +559,11 @@ def _garden_wake_with_tools(cfg, messages, eid):
                 print(f"   ↳ {tname} {t_ms}ms：{(result or '')[:80]}".replace("\n", " "))
                 msgs.append({"role": "tool", "tool_call_id": tc.get("id") or "",
                              "content": result[:2000]})
+            # 9-27 补（Kimi 官方消息布局要求：每个 tool_call 都要有对应 role=tool 回执）：
+            # 上面只执行前 4 件——超出的补一条"未执行"回执，别让布局缺条（防下一轮报错/重复调用）。
+            for tc in tcs[4:]:
+                msgs.append({"role": "tool", "tool_call_id": tc.get("id") or "",
+                             "content": "（这轮最多执行四件园子图书证——这条没执行，下轮再来。）"})
         msgs.append({"role": "user", "content":
             "（园门看完了：根据刚才看到的，直接输出结局 JSON，不用再调工具。）"})
         return (srv_state._srv().call_deepseek(cfg, msgs) or "").strip()

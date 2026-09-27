@@ -72,7 +72,9 @@ def take_recall(max_age_s=None):
         if time.time() - float(at or 0) > float(win):
             _clear_cand()   # 超窗：不注入，也不留在盘上日后翻出来（没到她眼前，不算已递）
             return None
-        _mark_delivered(c.get("key"))   # 9-26 修②：真取走 → 记「已递」，话头簿不再捡这条旧走神
+        # 9-27 修：先记「已递」，写不进去就不递（候选留着下次再来）——防「递了没记住」被话头簿再投一次。
+        if not _mark_delivered(c.get("key")):
+            return None
         _clear_cand()       # 取走即清——一次走神只提一次
         return c
     except Exception:
@@ -92,21 +94,21 @@ def delivered_keys():
 
 def _mark_delivered(key):
     """take 真取走候选时记一笔「已递」：state 文件 delivered_keys（去重、只留最近 DELIVERED_KEEP 个）。
-    与 recent/cand 同住 state 文件、保留其它键；fail-open，绝不拦 take。9-26 修②。"""
+    与 recent/cand 同住 state 文件、保留其它键。9-26 修②；9-27 修：**返回是否写成功**——
+    写失败调用方宁可不递（不清候选），防日后经话头簿把同一条再投一次。"""
     try:
         key = str(key or "")
         if not key:
-            return
+            return False
         st = _load_state()
         keys = [str(k) for k in (st.get("delivered_keys") or []) if k]
         if key in keys:
             keys.remove(key)
         keys.append(key)
         st["delivered_keys"] = keys[-DELIVERED_KEEP:]
-        with open(STATE_PATH, "w", encoding="utf-8") as f:
-            json.dump(st, f, ensure_ascii=False)
+        return _save_state(st)
     except Exception:
-        pass
+        return False
 
 
 def current_cand_key(max_age_s=None):
@@ -156,6 +158,18 @@ def _load_state():
 
 # ── 9-26 修：走神候选落盘（注入结构性失效）——cand / cand_at 与 recent 同住 state 文件 ──
 
+def _save_state(st):
+    """写 state 文件（tmp+os.replace 原子写；9-27 修：防写一半崩把 delivered/候选全丢）。返回是否成功。"""
+    try:
+        tmp = STATE_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(st, f, ensure_ascii=False)
+        os.replace(tmp, STATE_PATH)
+        return True
+    except Exception:
+        return False
+
+
 def _save_cand(cand):
     """候选落盘 + 进程内镜像。保留 state 其它键（recent 等）。fail-open。9-26 修。"""
     at = time.time()
@@ -163,14 +177,10 @@ def _save_cand(cand):
         _LAST["cand"], _LAST["at"] = cand, at
     except Exception:
         pass
-    try:
-        st = _load_state()
-        st["cand"] = cand
-        st["cand_at"] = at
-        with open(STATE_PATH, "w", encoding="utf-8") as f:
-            json.dump(st, f, ensure_ascii=False)
-    except Exception:
-        pass
+    st = _load_state()
+    st["cand"] = cand
+    st["cand_at"] = at
+    _save_state(st)
 
 
 def _load_cand():
@@ -197,8 +207,7 @@ def _clear_cand():
         if "cand" in st or "cand_at" in st:
             st.pop("cand", None)
             st.pop("cand_at", None)
-            with open(STATE_PATH, "w", encoding="utf-8") as f:
-                json.dump(st, f, ensure_ascii=False)
+            _save_state(st)
     except Exception:
         pass
 
@@ -210,8 +219,7 @@ def _remember(key):
         recent = [k for k in st.get("recent", []) if k != key]
         recent.append(key)
         st["recent"] = recent[-12:]
-        with open(STATE_PATH, "w", encoding="utf-8") as f:
-            json.dump(st, f, ensure_ascii=False)
+        _save_state(st)
     except Exception:
         pass
 

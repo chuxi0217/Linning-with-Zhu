@@ -170,6 +170,7 @@ import sqlite3
 import os
 import re
 import json
+import hashlib
 from datetime import datetime, timedelta, date as _date
 
 # ── 全文检索依赖（工单 FTS5-01）：jieba 缺席不挡营业，自动降级逐字切 ──
@@ -699,6 +700,37 @@ def init_db():
         )
     ''')
 
+    # 旧宅卷（v0.1.38，9-27 家主令「向量检索能不能检索旧家记录」）：前几个家的聊天存档
+    # （档案馆/旧家记录/*.txt）切块入库——一段对话一「块」，可词面可语义地翻回去。
+    # 只读档案：入库由 tools/oldhome_index.py 手工灌一次（幂等），运行期只读不写。
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS oldhome_chunks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file TEXT NOT NULL,
+            chunk_no INTEGER,
+            turn_from INTEGER,
+            turn_to INTEGER,
+            chars INTEGER,
+            text TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        )
+    ''')
+
+    # 语义分块（M2 数据层 v0.1.39，9-27）：M2 语义分块 v1——块表（chunks）+ fts_chunks 第八卷。
+    # 块由 tools/chunk_corpus.py --commit 手工灌（幂等：同 source_type+source_id+seq 原地更新）；
+    # 重嵌 tools/chunk_embed.py；**检索接线（chunk_retrieval）另批**——本表先静躺。
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS chunks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_type TEXT NOT NULL,
+            source_id INTEGER NOT NULL,
+            seq TEXT DEFAULT '',
+            text TEXT NOT NULL,
+            md5 TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        )
+    ''')
+
     # 全文检索四卷（v0.1.12，工单 FTS5-01）：四张 FTS5 虚表，纯新增，旧表一字不动。
     # 存的是 jieba 切好的词（空格连接），rowid 对齐源表 id；favorites 没有源表
     # （收藏夹是照片目录），name/ctx 双 UNINDEXED 存原件名与聊天上下文原文。
@@ -714,13 +746,17 @@ def init_db():
             c.execute("CREATE VIRTUAL TABLE IF NOT EXISTS fts_hall USING fts5(seg_text)")
             # 第六卷（v0.1.15，MEM-C）：聊天原话的影子——search_chats 从暴力 LIKE 升级
             c.execute("CREATE VIRTUAL TABLE IF NOT EXISTS fts_chats USING fts5(seg_text)")
+            # 第七卷（v0.1.38，旧宅卷）：前几个家存档的块影子
+            c.execute("CREATE VIRTUAL TABLE IF NOT EXISTS fts_oldhome USING fts5(seg_text)")
+            # 第八卷（v0.1.39，M2 语义块）：chunks 的影子（检索接线另批）
+            c.execute("CREATE VIRTUAL TABLE IF NOT EXISTS fts_chunks USING fts5(seg_text)")
         except sqlite3.OperationalError as e:
             FTS_ENABLED = False
             print(f"⚠️ FTS5 虚表建失败（{e}），全文检索降级关闭——其余功能不受影响")
 
     conn.commit()
     conn.close()
-    return "✅ 咱家的家.db 已建好，三十六张表 + 全文检索六卷就绪。"
+    return "✅ 咱家的家.db 已建好，三十八张表 + 全文检索八卷就绪。"
 
 
 # ══ 全文检索（v0.1.12，工单 FTS5-01，纯新增）══
@@ -870,6 +906,99 @@ def _fts_put_chat(c, chat_id, text):
               (chat_id, _seg(text)))
 
 
+def _fts_put_oldhome(c, chunk_id, text):
+    """（v0.1.38）旧宅卷：切块正文进分词（file/chunk_no 在源表，查询侧拼标注）。"""
+    c.execute("INSERT OR REPLACE INTO fts_oldhome (rowid, seg_text) VALUES (?, ?)",
+              (chunk_id, _seg(text)))
+
+
+def _fts_put_chunk(c, chunk_id, text):
+    """（v0.1.39）M2 语义块：块正文进分词。"""
+    c.execute("INSERT OR REPLACE INTO fts_chunks (rowid, seg_text) VALUES (?, ?)",
+              (chunk_id, _seg(text)))
+
+
+def chunk_put(source_type, source_id, seq, text):
+    """M2 语义块入库（tools/chunk_corpus.py --commit 用；幂等：同 (source_type, source_id, seq)
+    原地更新、id 稳定；md5 相同则不动）。FTS 挂同事务。返回 (id, changed)。"""
+    text = str(text or "")
+    md5 = hashlib.md5(text.encode("utf-8")).hexdigest()
+    conn = _conn()
+    c = conn.cursor()
+    try:
+        row = c.execute("SELECT id, md5 FROM chunks WHERE source_type=? AND source_id=? AND seq=?",
+                        (str(source_type), int(source_id), str(seq))).fetchone()
+        if row:
+            cid, old_md5 = row
+            if old_md5 == md5:
+                return cid, False          # 内容没变：不动（重跑省事）
+            c.execute("UPDATE chunks SET text=?, md5=? WHERE id=?", (text, md5, cid))
+            changed = True
+        else:
+            c.execute("INSERT INTO chunks (source_type, source_id, seq, text, md5) "
+                      "VALUES (?,?,?,?,?)",
+                      (str(source_type), int(source_id), str(seq), text, md5))
+            cid, changed = c.lastrowid, True
+        if FTS_ENABLED:
+            _fts_safe(_fts_put_chunk, c, cid, text)
+        conn.commit()
+        return cid, changed
+    finally:
+        conn.close()
+
+
+def chunk_stats():
+    """M2 语义块盘点：总块数 / 每卷块数。"""
+    conn = _conn()
+    c = conn.cursor()
+    try:
+        total = c.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        per = c.execute("SELECT source_type, COUNT(*) FROM chunks "
+                        "GROUP BY source_type ORDER BY source_type").fetchall()
+        return {"total": total, "per_type": per}
+    finally:
+        conn.close()
+
+
+def oldhome_put_chunk(file, chunk_no, turn_from, turn_to, text):
+    """旧宅卷入库（tools/oldhome_index.py 手工灌；幂等：同 file+chunk_no 原地更新、id 稳定）。
+    FTS 挂同事务；返回 chunk id。运行期没人写这张表——档案是灌一次就静的。"""
+    conn = _conn()
+    c = conn.cursor()
+    try:
+        row = c.execute("SELECT id FROM oldhome_chunks WHERE file=? AND chunk_no=?",
+                        (str(file), int(chunk_no))).fetchone()
+        if row:
+            cid = row[0]
+            c.execute('''UPDATE oldhome_chunks SET turn_from=?, turn_to=?, chars=?, text=?
+                         WHERE id=?''',
+                      (int(turn_from or 0), int(turn_to or 0), len(str(text)), str(text), cid))
+        else:
+            c.execute('''INSERT INTO oldhome_chunks (file, chunk_no, turn_from, turn_to, chars, text)
+                         VALUES (?, ?, ?, ?, ?, ?)''',
+                      (str(file), int(chunk_no), int(turn_from or 0), int(turn_to or 0),
+                       len(str(text)), str(text)))
+            cid = c.lastrowid
+        if FTS_ENABLED:
+            _fts_safe(_fts_put_oldhome, c, cid, text)
+        conn.commit()
+        return cid
+    finally:
+        conn.close()
+
+
+def oldhome_stats():
+    """旧宅卷盘点：总块数 / 每文件块数（tools/oldhome_index.py 收工时打一行）。"""
+    conn = _conn()
+    c = conn.cursor()
+    try:
+        total = c.execute("SELECT COUNT(*) FROM oldhome_chunks").fetchone()[0]
+        per = c.execute("SELECT file, COUNT(*) FROM oldhome_chunks GROUP BY file ORDER BY file").fetchall()
+        return {"total": total, "per_file": per}
+    finally:
+        conn.close()
+
+
 def fts_warmup():
     """预热分词器（server 开机调一次）：词典加载 1~3 秒挪到启动，多线程首查不打架。"""
     if jieba is not None:
@@ -972,6 +1101,12 @@ def _fts_like_fallback(kind, query, limit):
         elif kind == "letter":
             c.execute('''SELECT id, text, created_at FROM letters
                          WHERE text LIKE ? ORDER BY id DESC LIMIT ?''', (like, limit))
+        elif kind == "oldhome":
+            c.execute('''SELECT id, file, chunk_no, text FROM oldhome_chunks
+                         WHERE text LIKE ? ORDER BY id DESC LIMIT ?''', (like, limit))
+        elif kind == "chunk":
+            c.execute('''SELECT id, source_type, source_id, seq, text FROM chunks
+                         WHERE text LIKE ? ORDER BY id DESC LIMIT ?''', (like, limit))
         elif kind == "favorite":
             if FTS_ENABLED:
                 c.execute('''SELECT name, ctx FROM fts_favorites
@@ -1028,10 +1163,17 @@ _FETCH_SQL = {
     "chat": '''SELECT c2.id, c2.date, c2.role, c2.content, c2.created_at
                FROM fts_chats f JOIN chats c2 ON c2.id = f.rowid
                WHERE fts_chats MATCH ? ORDER BY rank LIMIT ?''',
+    "oldhome": '''SELECT o.id, o.file, o.chunk_no, o.text
+                  FROM fts_oldhome f JOIN oldhome_chunks o ON o.id = f.rowid
+                  WHERE fts_oldhome MATCH ? ORDER BY rank LIMIT ?''',
+    "chunk": '''SELECT c3.id, c3.source_type, c3.source_id, c3.seq, c3.text
+                FROM fts_chunks f JOIN chunks c3 ON c3.id = f.rowid
+                WHERE fts_chunks MATCH ? ORDER BY rank LIMIT ?''',
 }
 
 _SEG_TABLE_OF = {"day": "fts_days", "hall": "fts_hall", "note": "fts_notes",
-                 "letter": "fts_letters", "chat": "fts_chats"}
+                 "letter": "fts_letters", "chat": "fts_chats", "oldhome": "fts_oldhome",
+                 "chunk": "fts_chunks"}
 
 
 def _coverage_rerank(c, kind, rows, groups):
@@ -1270,6 +1412,14 @@ def embed_source_text(kind, ref_id):
             c.execute("SELECT text FROM letters WHERE id=?", (int(ref_id),))
             r = c.fetchone()
             return r[0] if r else None
+        if kind == "oldhome":
+            c.execute("SELECT text FROM oldhome_chunks WHERE id=?", (int(ref_id),))
+            r = c.fetchone()
+            return r[0] if r else None
+        if kind == "chunk":
+            c.execute("SELECT text FROM chunks WHERE id=?", (int(ref_id),))
+            r = c.fetchone()
+            return r[0] if r else None
     finally:
         conn.close()
     return None
@@ -1306,6 +1456,10 @@ def _vec_row(kind, ref_id):
             c.execute("SELECT id, text, created_at FROM notes WHERE id=?", (int(ref_id),))
         elif kind == "letter":
             c.execute("SELECT id, text, created_at FROM letters WHERE id=?", (int(ref_id),))
+        elif kind == "oldhome":
+            c.execute("SELECT id, file, chunk_no, text FROM oldhome_chunks WHERE id=?", (int(ref_id),))
+        elif kind == "chunk":
+            c.execute("SELECT id, source_type, source_id, seq, text FROM chunks WHERE id=?", (int(ref_id),))
         else:
             return None
         return c.fetchone()
@@ -1350,7 +1504,7 @@ def hybrid_search(query, kinds=("day", "chat", "note", "letter", "hall"), limit=
     res = fts_search(query, kinds, limit, expr_override=expr_override)
     if not qvec:
         return res
-    vec_kinds = tuple(k for k in kinds if k in ("day", "hall", "note", "letter"))
+    vec_kinds = tuple(k for k in kinds if k in ("day", "hall", "note", "letter", "oldhome"))
     if not vec_kinds:
         return res
     try:
