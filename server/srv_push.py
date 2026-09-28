@@ -219,6 +219,12 @@ def gen_checkin_nags():
             return 0
     except Exception:
         pass
+    # 9-27 B5 白名单影子：她的「不」（打卡念叨）——若拒绝账生效，本轮念叨全压（影子期只记日志）
+    try:
+        if srv_state._srv()._refusal_gate("打卡念叨"):
+            return 0
+    except Exception:
+        pass
     now_hm = srv_state._srv().datetime.now().strftime("%H:%M")   # 运行期反查：沙盘会换 s.datetime（FakeDT 时间伪装）
     done_today = set(r[1] for r in m.get_checkins(1))
     made = 0

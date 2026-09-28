@@ -2,8 +2,10 @@
 # -*- coding: utf-8 -*-
 """zanjia_tunnel.py —— 咱家反向隧道保活（跨平台版 · 9-25 · Linux/Windows 通用）
 
-和 ~/zanjia-tunnel.sh 同一个活：把 VPS 的 127.0.0.1:18024 反指到本机 :8024，
-掉线 5 秒重连——但换掉了 pgrep/bash，Windows 也能用（server 通电会自动拉起它）。
+和 ~/zanjia-tunnel.sh 同一个活：把 VPS 的 127.0.0.1:18024 反指到本机 :8024。
+重连策略（9-27 弱网加固）：长命连接掉线→5 秒快重连；短命连接反复掉（端口占用）→
+退避加倍 5→10→20→40→60 封顶；连稳 60 秒后复位。换掉了 pgrep/bash，Windows 也能用
+（server 通电会自动拉起它）。
 
 心跳：~/.zanjia_tunnel_heartbeat（循环里持续写时间戳）——
 server 的 _tunnel_probe 认它当探针（跨平台；Windows 没有 pgrep）。
@@ -72,18 +74,29 @@ def main():
            "-o", "ExitOnForwardFailure=yes", "-o", "BatchMode=yes",
            "-R", f"{rport}:127.0.0.1:{lport}", vps]
     _log(f"保活启动：{' '.join(cmd)}")
+    # 9-27 随身 WiFi 教训：弱网抖掉后，VPS 侧半死连接会把端口占一会儿（"forwarding failed"
+    # 死循环、每 5 秒白试一分钟）。改为：长命连接掉线→仍 5 秒快重连（不倒退）；
+    # 短命连接反复掉（端口占用典型）→ 退避加倍 5→10→20→40→60 封顶；连稳 60 秒后退避复位。
+    delay = 5
     while True:
         try:
             _beat()
             p = subprocess.Popen(cmd, **_hide_kw())
+            stable = 0
             while p.poll() is None:   # 连着的时候：每 10 秒续心跳
                 _beat()
                 time.sleep(10)
-            _log(f"ssh 掉了（退出码 {p.returncode}），5 秒后重连")
+                stable += 1
+            if stable >= 6:           # 活过 ≥60 秒：算真断线，保留 5 秒快重连
+                delay = 5
+            else:                     # 短命连接（端口占用等）：退避加倍，别白刷
+                delay = min(max(delay, 5) * 2, 60)
+            _log(f"ssh 掉了（退出码 {p.returncode}），{delay} 秒后重连")
         except Exception as e:
-            _log(f"拉起失败（{e}），5 秒后重试")
+            delay = min(max(delay, 5) * 2, 60)
+            _log(f"拉起失败（{e}），{delay} 秒后重试")
         _beat()
-        time.sleep(5)
+        time.sleep(delay)
 
 
 if __name__ == "__main__":

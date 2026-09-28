@@ -136,6 +136,10 @@ v0.1.41 纯增量（2026-09-25 服务器拆分 P0·漂移修）：lib_reports �
 都会 No such column（沙盘库实测中招；生产库是手补的列）。修：CREATE 带列＋init_db 里 PRAGMA
 探测缺列即 ALTER（照 moods/her_words 同款家风）。表结构只加列，零删改。
 
+v0.1.42 纯增量（2026-09-28 心潮桥批）：**xinchao_shadow（第 48 张表）**——忍住档＋忍耐熔断
+影子共用一张 append-only 账（log_shadow / shadow_rows / shadow_count）；只建表加函数，
+旧表旧函数一字未动。「v1 只记不递」：不进任何模型上下文（递不递归家主再拍）。
+
 v0.1.18 纯增量（2026-09-12 家主令「共读」）：books / book_marks 两张表（22/23）——
 两个人读同一本书，批注互相看得见。add_book 同名不重开；add_book_mark 两色墨迹
 （who=小乖/姐姐，loc 位置随手写）；get_books 带批注数；get_book_marks 旧到新；
@@ -731,6 +735,19 @@ def init_db():
         )
     ''')
 
+    # 心潮影子（v0.1.42，9-28 心潮桥批）：忍住档＋忍耐熔断共用一张 append-only 账——
+    # v1 只记不递：不进任何模型上下文（v2 是否递由家主再拍）。kind：endure·garden /
+    # endure·blocked / fuse；summary=一句人话；ref=来源（event# / refusal# / upset id 串）。
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS xinchao_shadow (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT,
+            kind TEXT,
+            summary TEXT,
+            ref TEXT
+        )
+    ''')
+
     # 全文检索四卷（v0.1.12，工单 FTS5-01）：四张 FTS5 虚表，纯新增，旧表一字不动。
     # 存的是 jieba 切好的词（空格连接），rowid 对齐源表 id；favorites 没有源表
     # （收藏夹是照片目录），name/ctx 双 UNINDEXED 存原件名与聊天上下文原文。
@@ -1194,10 +1211,37 @@ def _coverage_rerank(c, kind, rows, groups):
     return sorted(rows, key=lambda r: -_cov(r))
 
 
-def fts_search(query, kinds=("day", "note", "letter", "favorite"), limit=20, expr_override=None):
+def _fts_rank_scores(c, kind, ids, expr):
+    """旧事两修·B（9-28 深夜）：给已命中的行取 bm25 相关分，映射到 (0,1]（越大越相关）。
+    fts5 的 rank 为负数（越小越相关）→ s = 1 - e^rank；取不到（LIKE 兜底 / 无 expr）就缺席，
+    由调用方按 None 处理（fail-open）。纯只读、加性，不影响检索结果本身。"""
+    table = _SEG_TABLE_OF.get(kind)
+    if not table or not ids or not expr:
+        return {}
+    ph = ",".join("?" * len(ids))
+    try:
+        rows = c.execute(
+            f"SELECT rowid, rank FROM {table} WHERE {table} MATCH ? AND rowid IN ({ph})",
+            [expr, *list(ids)]).fetchall()
+    except Exception:
+        return {}
+    import math
+    out = {}
+    for rid, rk in rows:
+        try:
+            out[rid] = round(1.0 - math.exp(float(rk)), 4)
+        except Exception:
+            continue
+    return out
+
+
+def fts_search(query, kinds=("day", "note", "letter", "favorite"), limit=20, expr_override=None,
+               score_out=None):
     """全文检索主入口（工单 FTS5-01；v0.1.14 增第五卷 hall；v0.1.15 第六卷 chat）。
     expr_override：现成的 MATCH 表达式（开场自动检索的 Top-长词 OR 串用），
-    给了就不再切词构建。返回 dict，只含命中的卷：
+    给了就不再切词构建。score_out（可选 dict）：传入即回填 {卷: {rowid: 相关分}}——
+    加性旁路，不传=零行为变化（旧事两修/记忆权重用）。
+    返回 dict，只含命中的卷：
       'day':      [(id, date, day_no, title, content, mood), ...]   同 find_days 形状
       'note':     [(id, text, created_at), ...]
       'letter':   [(id, text, created_at), ...]（含已读信——历史也是历史）
@@ -1258,6 +1302,11 @@ def fts_search(query, kinds=("day", "note", "letter", "favorite"), limit=20, exp
                 rows = _fts_like_fallback(kind, query, limit)
             if rows:
                 out[kind] = rows[:limit]
+        if score_out is not None:
+            for _k, _rows in out.items():
+                if _k == "favorite":
+                    continue
+                score_out[_k] = _fts_rank_scores(c, _k, [r[0] for r in _rows], expr)
     finally:
         conn.close()
     return out
@@ -1496,12 +1545,14 @@ def vector_search(qvec, model, kinds=("day", "hall", "note", "letter"), topk=5):
 
 
 def hybrid_search(query, kinds=("day", "chat", "note", "letter", "hall"), limit=5,
-                  qvec=None, model="", expr_override=None):
+                  qvec=None, model="", expr_override=None, score_out=None):
     """MEM-C 混合检索主入口：FTS 词面打头，向量语义补漏（同卷去重后缀在尾部）。
     qvec 缺席 = 纯 FTS（向量层诚实缺席，行为与 fts_search 完全一致）。
     expr_override 透传 fts_search（开场自动检索的 Top-长词 OR 串）。
+    score_out（可选 dict）：传入即回填 {卷: {rowid: 相关分}}（词面 bm25→(0,1]、向量余弦原值）——
+    加性旁路，不传=零行为变化。
     返回形状同 fts_search 的 dict。向量门槛：score ≥0.35 才算「想起来」。"""
-    res = fts_search(query, kinds, limit, expr_override=expr_override)
+    res = fts_search(query, kinds, limit, expr_override=expr_override, score_out=score_out)
     if not qvec:
         return res
     vec_kinds = tuple(k for k in kinds if k in ("day", "hall", "note", "letter", "oldhome"))
@@ -1524,6 +1575,8 @@ def hybrid_search(query, kinds=("day", "chat", "note", "letter", "hall"), limit=
         row = _vec_row(kind, ref_id)
         if row:
             vec_extras.setdefault(kind, []).append(row)
+            if score_out is not None:
+                score_out.setdefault(kind, {})[ref_id] = round(float(score), 4)
     out = {}
     for k, rows in res.items():
         extras = vec_extras.get(k, [])
@@ -2219,6 +2272,73 @@ def read_my_ledger(limit=20):
     except Exception as e:
         print(f"  [主权] 翻她的账失手（{e}）")
         return {"grudges": [], "stances": [], "wishes": []}
+
+
+def log_shadow(kind, summary, ref=""):
+    """心潮影子 · 落档（v0.1.42，9-28 心潮桥批）：忍住档与熔断影子共用一张 append-only 账。
+    kind：endure·garden / endure·blocked / fuse；只写不递——不进任何模型上下文。
+    失败静默回 None。"""
+    try:
+        conn = _conn()
+        c = conn.cursor()
+        c.execute("INSERT INTO xinchao_shadow (ts, kind, summary, ref) VALUES (?, ?, ?, ?)",
+                  (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                   str(kind or "")[:30], str(summary or "")[:300], str(ref or "")[:120]))
+        rid = c.lastrowid
+        conn.commit()
+        conn.close()
+        return rid
+    except Exception as e:
+        print(f"  [心潮影子] 落档失手（{e}）")
+        return None
+
+
+def shadow_rows(kind=None, days=None, limit=100):
+    """读影子账（复盘／将来的「她的窗口」用；v1 不喂模型）。返回
+    [(id, ts, kind, summary, ref)] 新在前；fail-open 回 []。"""
+    try:
+        limit = max(1, min(int(limit or 100), 500))
+        cond, args = [], []
+        if kind:
+            cond.append("kind = ?")
+            args.append(str(kind))
+        if days:
+            since = (datetime.now() - timedelta(days=max(1, min(int(days), 3650)))
+                     ).strftime("%Y-%m-%d %H:%M:%S")
+            cond.append("ts >= ?")
+            args.append(since)
+        q = "SELECT id, ts, kind, summary, ref FROM xinchao_shadow"
+        if cond:
+            q += " WHERE " + " AND ".join(cond)
+        q += " ORDER BY id DESC LIMIT ?"
+        args.append(limit)
+        conn = _conn()
+        c = conn.cursor()
+        rows = c.execute(q, args).fetchall()
+        conn.close()
+        return rows
+    except Exception as e:
+        print(f"  [心潮影子] 读账失手（{e}）")
+        return []
+
+
+def shadow_count(kind=None, days=14):
+    """窗口内影子条数（复盘用）。fail-open 回 0。"""
+    try:
+        since = (datetime.now() - timedelta(days=max(1, min(int(days), 3650)))
+                 ).strftime("%Y-%m-%d %H:%M:%S")
+        conn = _conn()
+        c = conn.cursor()
+        if kind:
+            row = c.execute("SELECT COUNT(*) FROM xinchao_shadow WHERE ts >= ? AND kind = ?",
+                            (since, str(kind))).fetchone()
+        else:
+            row = c.execute("SELECT COUNT(*) FROM xinchao_shadow WHERE ts >= ?",
+                            (since,)).fetchone()
+        conn.close()
+        return int((row or [0])[0] or 0)
+    except Exception:
+        return 0
 
 
 def unsettled_grudge_rows():

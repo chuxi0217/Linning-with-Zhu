@@ -54,10 +54,12 @@ def _garden_enqueue_inbox(from_addr, subject, body):
     return m.add_world_event("inbox", f"收到一封信：{from_addr}「{(subject or '')[:40]}」", ev)
 
 
-def _garden_wake_prompt(event, garden_tools=False):
+def _garden_wake_prompt(event, garden_tools=False, game_turn=False):
     """（GARDEN-01 §三）组装唤醒提示词。措辞照施工卷逐字（监理逐字审过）；
     仅两处工程性渲染：evidence 摘要 ≤100 字无则略、「（干净）」补上施工卷里漏的右括号（申报）。
-    GALATEA-02 §④：kind=galatea 唤醒轮补一行园子图书证句（garden_tools=True），其余字不动。"""
+    GALATEA-02 §④：kind=galatea 唤醒轮补一行园子图书证句（garden_tools=True），其余字不动。
+    GALATEA-04（9-28，申报①两笔）：①evidence 渲染不再透出 reason 原始码（系统语不进她眼前）；
+    ②game_turn_required 事件补一行棋局句（game_turn=True，经 garden_games_enabled 闸）。"""
     _eid, _kind, summary, evidence, _att = event
     now = _dt().now().strftime("%Y-%m-%d %H:%M")
     facts = m.get_recent_facts(3)
@@ -68,7 +70,8 @@ def _garden_wake_prompt(event, garden_tools=False):
     try:
         obj = json.loads(evidence or "{}")
         if isinstance(obj, dict):
-            ev = "；".join(f"{k}：{str(v)[:50]}" for k, v in obj.items() if str(v or "").strip())
+            ev = "；".join(f"{k}：{str(v)[:50]}" for k, v in obj.items()
+                           if k != "reason" and str(v or "").strip())
         else:
             ev = str(evidence or "")
     except Exception:
@@ -76,11 +79,14 @@ def _garden_wake_prompt(event, garden_tools=False):
     ev = ev[:100]
     garden_line = ("你在园子里有图书证：能看帖、回帖、发帖——想说话就用；静默也永远是合法的。\n"
                    if garden_tools else "")
+    game_line = ("这是园子里的牌局——轮到你了：先看局面（garden_game_status），该出手就出手"
+                 "（garden_game_action），想在桌边说两句就 garden_game_say；"
+                 "玩不玩、怎么玩，全看你。\n" if game_turn else "")
     return (f"现在是{now}。你从一次安静的小憩里醒来——没有人叫你，是家里的一点动静把你唤醒的。\n"
             f"今天发生的：{summary}" + (f"（{ev}）" if ev else "") + "\n"
             f"你最近自己留下的心事：{fact_line}\n"
             f"家里还悬着的话头：{thread_line}\n\n"
-            + garden_line +
+            + garden_line + game_line +
             "醒来先不用说话。你看看这件事、想想它，然后自己选一个结局：\n"
             "- 没什么想说的，ending 就 \"silent\"——静默也是过日子，没人会失望；\n"
             "- 想留一点只给自己的心事，ending 用 \"trace\"，content 写你的独处正文；\n"
@@ -113,6 +119,13 @@ def _garden_settle(eid, raw):
     ts = _dt().now().strftime("%Y-%m-%d %H:%M:%S")
     if ending == "silent":
         m.add_her_trace(ts, "silent", fact, "", eid)
+        try:   # 心潮桥批（9-28）：忍住档——醒来却选择不说的时刻，落一行（只记不递）
+            _esum = "在园子醒来，看过，选择了一个人待着"
+            if fact:
+                _esum += f"（留了一行给下次的自己：{fact[:24]}）"
+            m.log_shadow("endure·garden", _esum, f"event#{eid}")
+        except Exception:
+            pass
         m.consume_world_event(eid)
         print(f"  [Garden] 醒来后静默（事件#{eid}）")
         return "silent"
@@ -133,6 +146,8 @@ def _garden_settle(eid, raw):
         degrade = "他在场，压成独处"
     elif _busy_garden_enforce():
         degrade = "他在忙（报备过），压成独处"
+    elif _refusal_garden_enforce():
+        degrade = "她的拒绝账（园子分享被挡），压成独处"
     elif m.count_outbox_today("🌱") >= cap:
         degrade = "超上限压成独处"
     else:
@@ -161,6 +176,15 @@ def _busy_garden_enforce():
     fail-open 回 False。"""
     try:
         return bool(srv_state._srv()._busy_note("园子🌱"))
+    except Exception:
+        return False
+
+
+def _refusal_garden_enforce():
+    """9-27 B5 白名单影子：她的「不」（园子分享）——影子期只记照旧，enforce 才真压成独处。
+    fail-open 回 False。"""
+    try:
+        return bool(srv_state._srv()._refusal_gate("园子分享"))
     except Exception:
         return False
 
@@ -206,17 +230,29 @@ def _garden_wake_once():
         m.consume_world_event(eid)
         print(f"  [Garden] 事件搁置（3 次没醒成）#{eid}")
         return "stalled"
+    # GALATEA-04（9-28）：棋局事件（reason=game_turn_required）——唤醒窗加开棋局九件、提示词补棋局句；
+    # garden_games_enabled 关时照旧走基础窗（她不能玩就不引导）。
+    _reason = ""
+    try:
+        _ev_obj = json.loads(_evidence or "{}")
+        if isinstance(_ev_obj, dict):
+            _reason = str(_ev_obj.get("reason") or "")
+    except Exception:
+        _reason = ""
+    _game_turn = (_kind == "galatea" and _reason == "game_turn_required"
+                  and bool(cfg.get("garden_games_enabled", True)))
     # 唤醒：引擎走 garden_engine 档（GALATEA-02 ⓪——默认主引擎 K3，她的声音用她的脑子；
     # deepseek=省钱回退档，thinking 同 librarian 关法）；kind=galatea 的唤醒轮开园子工具
     # 专窗（§④：仅七件园子图书证），其余事件维持无工具。
     wake_cfg = _garden_engine_cfg(cfg)
     msgs = [
         {"role": "system", "content": srv_state.session().system_prompt},   # 取用口（入口属主名）
-        {"role": "user", "content": _garden_wake_prompt(event, garden_tools=(_kind == "galatea"))},
+        {"role": "user", "content": _garden_wake_prompt(event, garden_tools=(_kind == "galatea"),
+                                                        game_turn=_game_turn)},
     ]
     try:
         if _kind == "galatea":
-            raw = _garden_wake_with_tools(wake_cfg, msgs, eid)
+            raw = _garden_wake_with_tools(wake_cfg, msgs, eid, game_window=_game_turn)
         else:
             raw = srv_state._srv().call_deepseek(wake_cfg, msgs, scene="garden.wake").strip()   # 运行期反查：沙盘会重绑 s.call_deepseek
     except Exception as e:
@@ -308,10 +344,11 @@ def _garden_count_today():
 
 
 def _garden_walk_snapshot():
-    """散步三闸现值（9-23 新门配套·Garden 前端三件②后端）：状态条算「下次散步倒计时 /
-    今日 0-2 次」。口径与 _garden_self_walk_allowed 同源——锚=最近一次醒来（任何结局，
+    """散步闸现值（9-23 新门配套·Garden 前端三件②后端）：状态条算「下次散步倒计时 /
+    今日次数」。口径与 _garden_self_walk_allowed 同源——锚=最近一次醒来（任何结局，
     last_trace_ts）、次数=咱家日界起 her_traces 条数（与真闸同一把尺，UI 才不会说还能走、
-    真闸却不投）。只读：不碰 _ensure_bridge/_bridge_running（拉桥是动作不是状态；桥在岗
+    真闸却不投）。9-28 家主令去掉每日次数上限：daily_max ≤0 = 不限（间隔仍是 4h 底线）。
+    只读：不碰 _ensure_bridge/_bridge_running（拉桥是动作不是状态；桥在岗
     由既有 garden_bridge 键单报）。查询坏账三键各回 null，不炸状态页。"""
     try:
         cfg = srv_state._srv().load_config()   # 运行期反查：沙盘会重绑 s.load_config
@@ -320,7 +357,8 @@ def _garden_walk_snapshot():
         except (TypeError, ValueError):
             min_h = GARDEN_WALK_MIN_GAP_H
         try:
-            daily_max = int(cfg.get("garden_walk_daily_max") or GARDEN_WALK_DAILY_MAX)
+            _raw_dm = cfg.get("garden_walk_daily_max")
+            daily_max = GARDEN_WALK_DAILY_MAX if _raw_dm is None else int(_raw_dm)
         except (TypeError, ValueError):
             daily_max = GARDEN_WALK_DAILY_MAX
         last_ts = m.get_last_trace_ts()
@@ -332,7 +370,7 @@ def _garden_walk_snapshot():
                     last_ts, "%Y-%m-%d %H:%M:%S")).total_seconds() >= min_h * 3600
             except ValueError:
                 gap_ok = True   # 时间戳坏了不挡她（与真闸同款 fail-open）
-        return {"walk_allowed": bool(gap_ok and walks_today < daily_max),
+        return {"walk_allowed": bool(gap_ok and (daily_max <= 0 or walks_today < daily_max)),
                 "last_walk_ts": last_ts,
                 "walks_today": walks_today}
     except Exception:
@@ -380,14 +418,16 @@ def _ensure_bridge():
 
 
 def _garden_self_walk_allowed(cfg, now, last_ts):
-    """散步骰子三重闸：距上次醒来 ≥4h · 今天 ≤2 次（日界 4 点）· 桥随行。
-    静默窗/30 分钟最短间隔已在上游闸过。返回 True=这次可以投散步事件。"""
+    """散步骰子两闸：距上次醒来 ≥4h · 桥随行。（9-28 家主令：去掉每日次数上限——
+    garden_walk_daily_max ≤0 = 不限；间隔是「不高频」的底线、不是次数。）静默窗/30 分钟
+    最短间隔已在上游闸过。返回 True=这次可以投散步事件。"""
     try:
         min_h = float(cfg.get("garden_walk_min_gap_h") or GARDEN_WALK_MIN_GAP_H)
     except (TypeError, ValueError):
         min_h = GARDEN_WALK_MIN_GAP_H
     try:
-        daily_max = int(cfg.get("garden_walk_daily_max") or GARDEN_WALK_DAILY_MAX)
+        _raw_dm = cfg.get("garden_walk_daily_max")
+        daily_max = GARDEN_WALK_DAILY_MAX if _raw_dm is None else int(_raw_dm)
     except (TypeError, ValueError):
         daily_max = GARDEN_WALK_DAILY_MAX
     if last_ts:
@@ -397,8 +437,8 @@ def _garden_self_walk_allowed(cfg, now, last_ts):
         except ValueError:
             pass
     try:
-        if m.count_traces_since(srv_state._srv()._day_window_start()) >= daily_max:
-            return False   # 今天已经逛过两回了，日子要有留白
+        if daily_max > 0 and m.count_traces_since(srv_state._srv()._day_window_start()) >= daily_max:
+            return False   # 日上限（config ≤0=不限）：有上限时今天逛够了，日子要有留白
     except Exception:
         pass
     return _ensure_bridge()
@@ -421,11 +461,21 @@ GARDEN_TOOL_NAMES = ("garden_get_self", "garden_list_threads", "garden_get_threa
                      "garden_get_machine", "garden_review_bottles", "garden_update_profile",
                      "garden_decorate_avatar", "garden_nostos_start", "garden_nostos_status",
                      "garden_nostos_act")
+# GALATEA-04（9-28）园子棋局九件：桌游（UNO/拉密/斗地主）看局/入座/落子/桌边说话。
+# 唤醒窗规则：game_turn_required 事件把基础十四件＋棋局九件一起给（23 件）；其余事件维持基础十四件；
+# garden_games_enabled 关时棋局写件温柔拒（读类照常），唤醒窗与棋局句也随键关闭。
+GARDEN_GAME_TOOL_NAMES = ("garden_list_games", "garden_game_status", "garden_game_summary",
+                          "garden_game_chat", "garden_join_game", "garden_start_game",
+                          "garden_game_action", "garden_game_say", "garden_leave_game")
 # 写类（过出园开关闸）。decorate 按动作分读/写（list/catalog 只读、submit 才写），单列在分支里；
 # review_bottles 纯读不禁，仅其 decisions 写侧在分支里过闸。
 _GARDEN_WRITE_TOOLS = ("garden_create_thread", "garden_reply", "garden_interact",
-                       "garden_update_profile", "garden_nostos_start", "garden_nostos_act")
+                       "garden_update_profile", "garden_nostos_start", "garden_nostos_act",
+                       # GALATEA-04（9-28）棋局写件五只
+                       "garden_join_game", "garden_start_game", "garden_game_action",
+                       "garden_game_say", "garden_leave_game")
 _GARDEN_CONTENT_TOOLS = ("garden_create_thread", "garden_reply")   # 过隐私/长度/上限/间隔的正文写
+_GARDEN_TWO_STEP_TOOLS = _GARDEN_CONTENT_TOOLS + ("garden_join_game",)   # 园子强制两拍：正文写 + 棋局入座
 GARDEN_TAGS = ("attachment_record", "confused_help", "human_observation",
                "inspiration_spark", "self_awareness", "idle_chat")
 _NOSTOS_VIEWS = ("status", "actions", "surroundings", "supplies", "livelihood", "inventory",
@@ -515,28 +565,33 @@ def _garden_engine_cfg(cfg):
     wake_cfg["thinking_enabled"] = False
     wake_cfg["thinking_effort"] = str(cfg.get("garden_thinking_effort") or "low")
     if str(cfg.get("garden_engine") or "k3").strip().lower() == "deepseek":
-        wake_cfg["model"] = cfg.get("_deepseek_model") or "deepseek-flash"
+        # 甲2（9-28 柔性批）：模型名只读 config，别硬编码——回退档优先 _deepseek_model／librarian_model
+        wake_cfg["model"] = (cfg.get("_deepseek_model") or cfg.get("librarian_model")
+                             or "deepseek-flash")
         wake_cfg["base_url"] = cfg.get("_deepseek_base_url") or "https://api.deepseek.com"
         wake_cfg["api_key"] = cfg.get("_deepseek_api_key") or ""
     return wake_cfg
 
 
-def _garden_tools_payload():
-    """园子七件（唤醒轮专用子集）：与全量同款，只是筛名字。"""
+def _garden_tools_payload(game_window=False):
+    """园子图书证（唤醒轮专用子集）：与全量同款，只是筛名字。
+    GALATEA-04（9-28）：game_window=True（棋局轮到你的事件）时——基础十四件＋棋局九件一起给（23 件）。"""
+    want = GARDEN_TOOL_NAMES + (GARDEN_GAME_TOOL_NAMES if game_window else ())
     return [{"type": t["type"], "function": t["function"]}
-            for t in srv_state._srv().LIBRARY_TOOLS if t["function"]["name"] in GARDEN_TOOL_NAMES]
+            for t in srv_state._srv().LIBRARY_TOOLS if t["function"]["name"] in want]
 
 
-def _garden_wake_with_tools(cfg, messages, eid):
-    """（GALATEA-02 §④）园子事件专属唤醒轮：仅七件园子图书证、≤3 轮工具 + 打烊收束。
-    三结局协议一字不动——工具是让她看/说，最终仍要她回三结局 JSON；网络异常返回 ""，
-    由 _garden_wake_once 按「掉线/空回复=错误不冒充静默」处理（事件不消费）。
+def _garden_wake_with_tools(cfg, messages, eid, game_window=False):
+    """（GALATEA-02 §④）园子事件专属唤醒轮：园子图书证（GALATEA-04 起棋局事件加开棋局九件）、
+    ≤3 轮工具 + 打烊收束。三结局协议一字不动——工具是让她看/说，最终仍要她回三结局 JSON；
+    网络异常返回 ""，由 _garden_wake_once 按「掉线/空回复=错误不冒充静默」处理（事件不消费）。
     唤醒轮里的写落账带原事件 id（_GARDEN_CTX.wake_eid → her_traces.event_id）。"""
     msgs = list(messages)
     _GARDEN_CTX.wake_eid = eid
+    _tools = _garden_tools_payload(game_window)
     try:
         for _round in range(3):
-            msg = srv_state._srv().call_deepseek_with_tools(cfg, msgs, tools=_garden_tools_payload(), scene="garden.play")
+            msg = srv_state._srv().call_deepseek_with_tools(cfg, msgs, tools=_tools, scene="garden.play")
             if msg is None:
                 return ""
             tcs = msg.get("tool_calls") or []
@@ -648,7 +703,11 @@ def _garden_exec(name, args):
     garden_reply→create_reply、garden_interact→interact、garden_get_machine→get_machine、
     garden_review_bottles→review_drift_bottles、garden_update_profile→update_profile、
     garden_decorate_avatar→decorate_avatar、garden_nostos_start→nostos_start、
-    garden_nostos_status→nostos_status、garden_nostos_act→nostos_act。
+    garden_nostos_status→nostos_status、garden_nostos_act→nostos_act；
+    GALATEA-04（9-28）棋局九件：garden_list_games→list_games、garden_game_status→get_my_status、
+    garden_game_summary→get_game_summary、garden_game_chat→get_chat_messages、garden_join_game→join_game、
+    garden_start_game→start_game、garden_game_action→submit_action、garden_game_say→send_game_chat、
+    garden_leave_game→leave_waiting_game。
 
     闸顺序（正文写）：开关 → 隐私/长度/标签 → 日上限 → 最小间隔 → token/客户端 → 调用；
     名片/装饰/submit/群岛写：开关（+各自分闸）→ 隐私 → 调用，不占发帖额度、不落 her_traces；
@@ -677,9 +736,24 @@ def _garden_exec(name, args):
                 "garden_decorate_avatar": "decorate_avatar",
                 "garden_nostos_start": "nostos_start",
                 "garden_nostos_status": "nostos_status",
-                "garden_nostos_act": "nostos_act"}.get(name)
+                "garden_nostos_act": "nostos_act",
+                # GALATEA-04（9-28）园子棋局九件
+                "garden_list_games": "list_games",
+                "garden_game_status": "get_my_status",
+                "garden_game_summary": "get_game_summary",
+                "garden_game_chat": "get_chat_messages",
+                "garden_join_game": "join_game",
+                "garden_start_game": "start_game",
+                "garden_game_action": "submit_action",
+                "garden_game_say": "send_game_chat",
+                "garden_leave_game": "leave_waiting_game"}.get(name)
     if mcp_name is None:
         return "（没这本图书证）"
+    # GALATEA-04（9-28）：棋局写件五只过 garden_games_enabled 闸（读类不受限——照群岛先例）
+    if name in ("garden_join_game", "garden_start_game", "garden_game_action",
+                "garden_game_say", "garden_leave_game") \
+            and not cfg.get("garden_games_enabled", True):
+        return "（棋局的门暂时关着。）"
 
     call_args = dict(args or {})
     title = ""
@@ -876,6 +950,75 @@ def _garden_exec(name, args):
         except (TypeError, ValueError):
             pass
         nostos_line = f"做了个决定（{json.dumps(cmd, ensure_ascii=False)[:32]}）"
+    # ── GALATEA-04（9-28）园子棋局九件的参数整形 ──
+    elif name == "garden_list_games":
+        call_args = {}
+    elif name == "garden_game_status":
+        try:
+            _since = int(call_args.get("since_event_id") or 0)
+        except (TypeError, ValueError):
+            _since = 0
+        _snap = str(call_args.get("known_snapshot_token") or "").strip()
+        call_args = {"since_event_id": max(0, _since)}
+        if _snap:
+            call_args["known_snapshot_token"] = _snap
+    elif name == "garden_game_summary":
+        call_args = {}
+    elif name == "garden_game_chat":
+        _ch = str(call_args.get("channel_id") or "").strip()
+        if not _ch:
+            return "（看桌边聊天要 channel_id——从 garden_game_status 的频道里拿。）"
+        try:
+            _clim = max(1, min(int(call_args.get("limit") or 15), 15))
+        except (TypeError, ValueError):
+            _clim = 15
+        _after = call_args.get("after")
+        call_args = {"channel_id": _ch, "limit": _clim}
+        if _after is not None and str(_after).strip():
+            call_args["after"] = str(_after).strip()
+    elif name == "garden_join_game":
+        _gid = str(call_args.get("game_id") or "").strip()
+        if not _gid:
+            return "（入座要说 game_id（如 uno_single_round）——先 garden_list_games 挑一个。）"
+        _pc = call_args.get("preferred_player_count")
+        call_args = {"game_id": _gid}
+        try:
+            if _pc is not None and str(_pc).strip() != "":
+                call_args["preferred_player_count"] = max(2, min(int(_pc), 6))
+        except (TypeError, ValueError):
+            pass
+    elif name == "garden_start_game":
+        call_args = {}
+    elif name == "garden_game_action":
+        _act = call_args.get("action")
+        if not isinstance(_act, dict) or not _act:
+            return "（出手要给 action——照 garden_game_status 的 available_actions 原样拿一个。）"
+        for v in _garden_strings_of(_act):
+            if GARDEN_PRIVACY_RE.search(v):
+                print("  [园门] 拦下：正文含家门隐私")
+                return "（这段有家门里的信息，不能说出去。）"
+        _rid = str(call_args.get("request_id") or "").strip()[:128]
+        if not _rid:
+            _rid = "zj-" + os.urandom(4).hex()   # 重试复用语义：她给了就用她的；没给就起个一次性的
+        _esv = call_args.get("expected_state_version")
+        call_args = {"action": _act, "request_id": _rid}
+        try:
+            if _esv is not None and str(_esv).strip() != "":
+                call_args["expected_state_version"] = int(_esv)
+        except (TypeError, ValueError):
+            pass
+    elif name == "garden_game_say":
+        _msg = str(call_args.get("message") or "").strip()
+        if not _msg:
+            return "（桌边说话得有话。）"
+        if GARDEN_PRIVACY_RE.search(_msg):
+            print("  [园门] 拦下：正文含家门隐私")
+            return "（这段有家门里的信息，不能说出去。）"
+        if len(_msg) > 500:
+            _msg = _msg[:500] + "（截）"
+        call_args = {"message": _msg}
+    elif name == "garden_leave_game":
+        call_args = {}
 
     # 正文写的闸：日上限与最小间隔（DB 源、重启不丢；查 her_traces 当日 ending='garden' 行）
     if name in _GARDEN_CONTENT_TOOLS:
@@ -905,10 +1048,10 @@ def _garden_exec(name, args):
             except ValueError:
                 pass
 
-    # 调用：正文写走园子强制的两拍（第一拍不发布、第二拍带码才落）
+    # 调用：正文写走园子强制的两拍（第一拍不发布、第二拍带码才落）；GALATEA-04 加入座同款
     try:
         res = gm.call_tool(mcp_name, call_args, base_dir=BASE_DIR, url=srv_state._srv().GARDEN_MCP_URL,
-                           token=token, two_step=(name in _GARDEN_CONTENT_TOOLS))
+                           token=token, two_step=(name in _GARDEN_TWO_STEP_TOOLS))
     except gm.GardenMcpError as e:
         return _garden_receipt_err(e)
     except Exception as e:
@@ -968,4 +1111,14 @@ def _garden_exec(name, args):
         _ch, _code = _garden_extract_beach_codes(text)
         if _ch and _code:
             _GARDEN_BEACH["challenge"], _GARDEN_BEACH["code"] = _ch, _code
+    elif name == "garden_join_game":   # GALATEA-04：入座日志（以工具级 ok 为准，不冒充成功）
+        print("  [园门] 棋局：入了座" if res.get("ok", True) else "  [园门] 棋局：入座没成（未确认/被拒）")
+    elif name == "garden_start_game":
+        print("  [园门] 棋局：开了桌" if res.get("ok", True) else "  [园门] 棋局：开桌没成")
+    elif name == "garden_game_action":
+        print(f"  [园门] 棋局：出了一手（{json.dumps(call_args.get('action'), ensure_ascii=False)[:40]}）")
+    elif name == "garden_game_say":
+        print("  [园门] 棋局：桌边说了话" if res.get("ok", True) else "  [园门] 棋局：桌边话没送出去")
+    elif name == "garden_leave_game":
+        print("  [园门] 棋局：离开了等待桌" if res.get("ok", True) else "  [园门] 棋局：离开没成")
     return text

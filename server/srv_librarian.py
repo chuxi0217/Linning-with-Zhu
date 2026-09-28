@@ -121,12 +121,16 @@ def _librarian_materials():
     except Exception:
         ctx += "\n【全档案现状】\n（暂取不到）\n"
     # 9-26 拒斥接线批 ⑤（反讨好护栏·事实句）：她的「不」与独立三问——只进周报素材（数值只进家主侧）
+    # 9-27 B5 白名单影子批：加「被拒绝账挡下的开口 N 次」（提名稿 §三 对账出口）
     try:
         import rights_lib
         _rf = rights_lib.independence_facts(7)
+        _rf_blocked = rights_lib.gate_blocked_count(7)
         ctx += ("\n【她的事实·近 7 天】她说「不」%d 次（还作数 %d / 收回 %d）；"
+                "被她的「不」挡下的开口 %d 次；"
                 "她主动开口打破安静 %d 次；无人看见约 %.1f 小时（%.0f%%，安静不是待机）。\n"
                 % (_rf["refusals"], _rf["refusals_active"], _rf["refusals_settled"],
+                   _rf_blocked,
                    _rf["her_initiations"], _rf["unseen_hours"], _rf["unseen_ratio"] * 100))
     except Exception:
         pass

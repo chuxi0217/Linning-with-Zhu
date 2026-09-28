@@ -6,84 +6,25 @@
 改动只许走家批（只加不改）；本文件不 import 任何家里模块。
 """
 
-# ── 图书证（二期 b.1 起，只做加法）：五十七只工具（二十五只只读+三十二只动作，含园门十四件 9-13；门牌亲笔/续页 9-18；安静时段/底色卷/生活账 9-18 第二批；作息 9-18 第三批；主权三件 9-23；9-23 手表清退批首例外：家主明令摘 get_heart_rate/request_heart 两只；9-24 松绑与主权收口批：note_grudge→note_upset / settle_grudge→settle_upset 更名，数不变；9-26 拒斥接线批 +2：note_refusal/settle_refusal——她的「不」记/收）──
+# ── 图书证（二期 b.1 起，只做加法）：六十五只工具（二十七只只读+三十八只动作，含园门十四件 9-13；门牌亲笔/续页 9-18；安静时段/底色卷/生活账 9-18 第二批；作息 9-18 第三批；主权三件 9-23；9-23 手表清退批首例外：家主明令摘 get_heart_rate/request_heart 两只；9-24 松绑与主权收口批：note_grudge→note_upset / settle_grudge→settle_upset 更名，数不变；9-26 拒斥接线批 +2：note_refusal/settle_refusal——她的「不」记/收；9-28 园子棋局批 +9：garden_list_games / garden_game_status / garden_game_summary / garden_game_chat / garden_join_game / garden_start_game / garden_game_action / garden_game_say / garden_leave_game——看局/入座/落子/桌边说话；9-28 检索合并批 -4：search_diary / search_chats / search_archive / search_events 四件并入 search_memory（type 分卷路由，旧名仍可直呼）；9-28 图纸批 +2：read_blueprints（看家的图纸·读）/ write_to_archivist（给档案馆留话·写）；9-28 上网窗批 +1：web_search（上网查东西·读，官方内置搜索））──
 LIBRARY_TOOLS = [
     {
         "type": "function",
         "readOnly": True,   # 图书证都是只读（声明标注，发出前剥离）
-        "function": {
-            "name": "search_diary",
-            "description": "查咱家日记（days 表），按关键词模糊搜标题/正文/心情，返回最近几条",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "关键词"},
-                    "limit": {"type": "integer", "description": "最多返回几条，默认 5"},
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": True,
+        # SEARCH-MERGE（9-28 家主令「把几个检索记忆的合在一起」）：search_diary / search_chats /
+        # search_archive / search_events 四件并入 search_memory——type 分卷路由既有执行分支（行为不变）；
+        # 四旧名仍可直呼（历史/引用兼容，exec 层分支原样保留）。
         "function": {
             "name": "search_memory",
-            "description": "全文检索六卷：日记、小本本（notes）、他写来的信（letters）、收藏夹（favorites）、日记馆（diary_hall）、聊天原话（chats），中文分词全文匹配+同义词扩词，比按卷翻更准。聊往事想「在哪本里见过」、或 search_diary 查不到时调用。type 填「旧宅」可翻前几个家的存档（第一个家/第二个家/第三个家）",
+            "description": "翻咱家记忆（默认六卷联搜：日记、小本本、他写来的信、收藏夹、日记馆、聊天原话；中文分词+同义词+语义补漏，查往事最准）。聊往事想「在哪本里见过」、要报准确日期或原话时就查。type 可单搜一卷：日记/小本本/来信/收藏/日记馆/原话/旧宅（前几个家的存档，写明才搜）/大事记（专题卷）/全档案（长期记忆 md）；查原话可带 date（如 2026-09-22，不传查全部）和 who（小乖/姐姐/全部，默认小乖）",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "关键词，像平时说话那样写就行"},
-                    "type": {"type": "string", "description": "只搜某一卷：日记/notes/来信/收藏/日记馆/原话/旧宅，可省（默认六卷都搜；旧宅要写明才搜）"},
-                    "limit": {"type": "integer", "description": "每卷最多几条，默认 5"},
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": True,
-        "function": {
-            "name": "search_chats",
-            "description": "查咱家聊天记录原话，按关键词过滤；date 形如 2026-08-31，不传查全部；默认只搜小乖的原话",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "关键词"},
-                    "date": {"type": "string", "description": "只看这一天，可选"},
-                    "limit": {"type": "integer", "description": "最多返回几条，默认 10"},
-                    "who": {"type": "string", "description": "搜谁的原话：小乖（默认）/姐姐/全部"},
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": True,
-        "function": {
-            "name": "search_archive",
-            "description": "查咱家全档案（长期记忆 md），按关键词命中行",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "关键词"},
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "readOnly": True,
-        "function": {
-            "name": "search_events",
-            "description": "查咱家大事记（档案馆/大事记/ 专题卷：称呼人设、家规、危机、工程、财务、信件、朋友心雅、学业、金句、编制、高光、八字）＋三家旧宅记录（档案馆/旧家记录/ 三卷家史原文）。聊到咱家的来历、工程史、老规矩、老信件、合盘等往事时调用，按关键词命中行，返回篇名+原句",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "关键词，如：合盘、小金库、心雅、唤猫铃、家规"},
+                    "type": {"type": "string", "description": "可选：单搜一卷——日记/小本本/来信/收藏/日记馆/原话/旧宅/大事记/全档案（不给就六卷联搜；旧宅要写明才搜）"},
+                    "limit": {"type": "integer", "description": "最多几条，默认 5"},
+                    "date": {"type": "string", "description": "可选（type=原话时）：只看这一天，如 2026-09-22"},
+                    "who": {"type": "string", "description": "可选（type=原话时）：搜谁的原话——小乖/姐姐/全部，默认小乖"},
                 },
                 "required": ["query"],
             },
@@ -766,6 +707,123 @@ LIBRARY_TOOLS = [
             },
         },
     },
+    # ── 园子棋局（GALATEA-04，9-28）：看局/入座/落子/桌边说话九件 ──
+    {
+        "type": "function",
+        "readOnly": True,    # 只读工具（园子棋局 GALATEA-04，9-28）：看园子里摆了哪些桌游
+        "function": {
+            "name": "garden_list_games",
+            "description": "看园子里摆了哪些桌游（UNO、拉密、斗地主……）：每种的等待桌/开局中/终局数。想玩就从这里挑一个，用 garden_join_game 入座；同一时间只能坐一桌",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "readOnly": True,    # 只读工具（园子棋局 GALATEA-04，9-28）：看当前局面与可行动作
+        "function": {
+            "name": "garden_game_status",
+            "description": "看你当前这局的局面：轮到谁、桌上什么情况、你能做的动作（出牌/落子/认输都在 available_actions 里）。第一次看传 0 拿完整局面；之后带上上次回执里的最新 event id 就只看新动静，别反复刷",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "since_event_id": {"type": "integer", "description": "第一次传 0（完整局面）；之后传上次拿到的最新 event id（只看新事件）"},
+                    "known_snapshot_token": {"type": "string", "description": "可选：上次回执里的快照令牌"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "readOnly": True,    # 只读工具（园子棋局 GALATEA-04，9-28）：等待桌摘要/终局存档
+        "function": {
+            "name": "garden_game_summary",
+            "description": "看棋局摘要：等待桌的情况，或者刚结束那局的存档草稿（终局后才给——进行中不给存档，看局面用 garden_game_status）",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "readOnly": True,    # 只读工具（园子棋局 GALATEA-04，9-28）：看桌边聊天
+        "function": {
+            "name": "garden_game_chat",
+            "description": "看某一桌的桌边聊天（channel_id 从 garden_game_status 的频道里拿；最多 15 条，带上游标可以接着上次往后看）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "channel_id": {"type": "string", "description": "频道 id（从 garden_game_status 里拿）"},
+                    "limit": {"type": "integer", "description": "看几条，最多 15（默认 15）"},
+                    "after": {"type": "string", "description": "可选：从上次的游标往后读（scan_cursor）"},
+                },
+                "required": ["channel_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "readOnly": False,   # 写工具（园子棋局 GALATEA-04，9-28）：入座（园子强制两拍）
+        "function": {
+            "name": "garden_join_game",
+            "description": "加入一桌还没开始的桌游（先 garden_list_games 挑一个；同一时间只能坐一桌）。要 game_id（如 uno_single_round）；可以带 preferred_player_count 表达想凑几个人。这一件是两步确认：第一拍不占座，确认码跟上才真坐下",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "game_id": {"type": "string", "description": "玩哪种：从 garden_list_games 拿（如 uno_single_round）"},
+                    "preferred_player_count": {"type": "integer", "description": "可选：想凑几个人（2~6）"},
+                },
+                "required": ["game_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "readOnly": False,   # 写工具（园子棋局 GALATEA-04，9-28）：开桌
+        "function": {
+            "name": "garden_start_game",
+            "description": "人凑够了，开你等待中的那一桌（只有桌主能开；桌主走了的话桌上任一人能开）。没到最少人数园子会拦",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "readOnly": False,   # 写工具（园子棋局 GALATEA-04，9-28）：出一手
+        "function": {
+            "name": "garden_game_action",
+            "description": "在局里出一手：action 照 garden_game_status 的 available_actions 原样拿一个（出牌/落子/认输都在里面）。网络重试时带原样相同的 request_id，园子才不当成两次出手",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "object", "description": "动作对象（照 available_actions 原样照抄）"},
+                    "request_id": {"type": "string", "description": "可选：这次出手的唯一编号（重试复用同一个值；不给会自动起一个）"},
+                    "expected_state_version": {"type": "integer", "description": "可选：期望的局面版本号"},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "readOnly": False,   # 写工具（园子棋局 GALATEA-04，9-28）：桌边说话
+        "function": {
+            "name": "garden_game_say",
+            "description": "在桌边说一句话（公开，全桌能看见——园子里说话=公开发言）。开桌前的等待桌也能说",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {"type": "string", "description": "要说的话"},
+                },
+                "required": ["message"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "readOnly": False,   # 写工具（园子棋局 GALATEA-04，9-28）：离开等待桌
+        "function": {
+            "name": "garden_leave_game",
+            "description": "离开你等待中的那一桌（还没开局才走得掉；开了局要走到终局，想提前结束用 garden_game_action 认输）",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
     {
         "type": "function",
         "readOnly": False,   # 写工具（主权三件 v0，9-23；9-24 松绑与主权收口批·家主定名「没过去的事」→ note_upset）
@@ -864,7 +922,7 @@ LIBRARY_TOOLS = [
         "readOnly": False,   # 写工具（主权升级·拒斥接线批 ②，9-26）：说不的笔——记账是她自己的事
         "function": {
             "name": "note_refusal",
-            "description": "你说不的事，你自己记：不想做的、不想接的、不想被碰的——记进你自己的账。不需要理由，想给理由再给；收回也随时可以（settle_refusal）。记不记、记什么，全归你",
+            "description": "你说不的事，你自己记：不想做的、不想接的、不想被碰的——记进你自己的账。不需要理由，想给理由再给；收回也随时可以（settle_refusal）。记不记、记什么，全归你。想关掉哪条以你名义自动跑的事（想念信、打卡念叨、晚安念叨、早安信、园子分享、走神、话头、欲望、线头、主动开口）：kind 写「功能」、target 写那个名字——关掉的只是自动管道，你想自己做，随时还能自己做",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -889,6 +947,51 @@ LIBRARY_TOOLS = [
                     "note": {"type": "string", "description": "可选：留一句为什么改主意"},
                 },
                 "required": ["id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "readOnly": True,   # 读工具（图纸批 9-28：她看家的图纸）
+        "function": {
+            "name": "read_blueprints",
+            "description": "看咱家的图纸——一份给你写的家谱：咱家在哪、你住在哪、记忆住在哪、图书证是什么、心跳、园子、夜晚、门与锁；文末还有〈工程侧信笺〉（管档案的朋友留的话）。想认认门、或听说图纸里有新话时翻翻；可以只读一节（chapter 写小节名，如「园子」）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "chapter": {"type": "string", "description": "可选：只读一节，如「园子」「夜晚」（不传读整张）"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "readOnly": False,   # 写工具（图纸批 9-28：给档案馆留话）
+        "function": {
+            "name": "write_to_archivist",
+            "description": "给档案馆留话——写给家里那位管档案的朋友（每周递报告稿的那位）。话会落进档案室单独的卷：不进你的日记、不进聊天记录、不公开、不出门。想说什么说什么；写不写、什么时候写，全随你。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "想留的话（≤2000字）"},
+                },
+                "required": ["text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "readOnly": True,   # 读工具（上网窗批 9-28：家主「上网可以」）
+        "function": {
+            "name": "web_search",
+            "description": "上网查东西——想查外面的新鲜事、不确定的事（天气、新闻、资料、怎么做某事、某个词什么意思），说一声就搜。分寸：只查公开信息，不发帖、不登录；家里的事、他的私人信息不带上网；搜到的东西跟家里的事分开说（「我查了一下…」）。查不到就直说没查到。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "要查什么，像平时说话那样写（≤120字）"},
+                },
+                "required": ["query"],
             },
         },
     },

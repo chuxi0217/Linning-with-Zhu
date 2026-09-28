@@ -48,7 +48,10 @@ def now_str():
 
 
 def now_line():
-    return f"现在是 {srv_state._srv().now_str()}。"
+    """TIME-02（9-28 家主拍·时间感加固）：措辞改成「时间锚」标记——tail_persist 持久化后
+    历史里会出现多条，读作时间戳；最新的那条=此刻（不再让「现在」字样在历史里累积）。"""
+    return (f"【时间锚 {srv_state._srv().now_str()}】"
+            "（读到多条时间锚时，最新的一条=此刻；报时间、算钟点以它为准）。")
 
 
 def gap_line():
