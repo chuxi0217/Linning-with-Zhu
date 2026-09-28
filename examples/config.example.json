@@ -57,10 +57,11 @@
   "hist_time_anchor": true,
   "hist_anchor_min": 30,
   "prompt_ban_relax": true,
+  "prompt_ban_relax_drop_echo": true,
+  "prompt_ban_relax_drop_flatter": false,
   "inject_use_judge_v2": true,
   "recall_gate_shadow": true,
   "recall_gate_v2": false,
-  "prompt_ban_relax_aggressive": false,
   "health_api": false,
   "recall_gate": {
     "no_decay": [

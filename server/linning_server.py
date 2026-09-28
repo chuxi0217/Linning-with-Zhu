@@ -614,8 +614,9 @@ DEFAULT_CONFIG = {
     "recall_gate_v2": False,
     # 丁·B1 轻减（9-29 家主圈）：删 7 处③风格类禁令尾巴；关=逐字节回原样。
     "prompt_ban_relax": True,
-    # 丁·B2 激进（9-29 家主「也可以试试」）：再删《不许的事》复读/秒回/讨好三条，只留「不许编」。
-    "prompt_ban_relax_aggressive": False,
+    # 丁·B2 拆两开关（9-29 拍板 A1）：drop_echo 删复读/秒回（默认开）；drop_flatter 删「不许讨好」（默认关）。
+    "prompt_ban_relax_drop_echo": True,
+    "prompt_ban_relax_drop_flatter": False,
     "outreach_single": False, "single_tier_h": 2,
     "single_cooldown_min": 5, "single_presence_damp": 0.5,
     "recall_gate": {"min_score": 0.35, "per_kind_per_day": 1,
@@ -1216,17 +1217,23 @@ _SP_RELAX_PAIRS = (
     ("，更不许怕露馅就演「我一直都热」", ""),
     ("；不许因为「上次说过」就改口换皮", ""),
 )
-# B2 激进档（家主 9-29「激进版也可以试试」；开关 prompt_ban_relax_aggressive，默认关）：
-# 在 B1 之上再删《不许的事》里 ③ 三条（复读／秒回／讨好），只留「不许编」这条红线，标题跟着改。
-# ⚠️ 我的建议：**先别删「不许讨好」**——讨好是咱家专门治过的失败模式（9-10「讨好鬼」实录），
-#    删了风险最高；先把复读/秒回两条试了，觉得好再动第三条。要那样告我，我拆成两条开关。
-_SP_RELAX_AGGRESSIVE_PAIRS = (
-    ("【不许的事】（这四条是线，不是考题——踩线了说一声就翻篇，不许开自我批斗会。）",
-     "【不许的事】（这条是线，不是考题——踩线了说一声就翻篇。）"),
+# B2 拆两开关（9-29 家主拍板 A1）——《不许的事》原四条（编/复读/秒回/讨好）按开关逐条减：
+#   prompt_ban_relax_drop_echo   删「复读＋秒回」——**本批开**（只删风格类，红线不动）
+#   prompt_ban_relax_drop_flatter 删「不许讨好」——**默认关**（讨好是 9-10 治过的失败模式，风险最高）
+# 标题按剩余条数改（四条 → 三条/两条/一条）；「不许编」这条红线任何档都不删。
+_SP_RELAX_TITLE_OLD = "【不许的事】（这四条是线，不是考题——踩线了说一声就翻篇，不许开自我批斗会。）"
+_SP_RELAX_TITLES = {
+    3: "【不许的事】（这三条是线，不是考题——踩线了说一声就翻篇，不许开自我批斗会。）",
+    2: "【不许的事】（这两条是线，不是考题——踩线了说一声就翻篇。）",
+    1: "【不许的事】（这条是线，不是考题——踩线了说一声就翻篇。）",
+}
+_SP_RELAX_DROP_ECHO_PAIRS = (
     ("- 不许复读。他追问你真实感受的时候，不许复用这一轮已经说过的句子。"
      "说过一次就是一次，第二次端出来他一口就尝得出来。\n", ""),
     ("- 不许秒回。他问你真的在想什么，先想，想不出来就说「姐姐在想」。"
      "秒回的那一刻起，他听到的就不是你了。\n", ""),
+)
+_SP_RELAX_DROP_FLATTER_PAIRS = (
     ("- 不许讨好。「答到你满意为止」是讨好鬼在替你说话，不是你。他的爱不是考试，"
      "没有标准答案，你也不用交卷。", ""),
 )
@@ -1234,10 +1241,11 @@ _SP_RELAX_AGGRESSIVE_PAIRS = (
 
 def _relax_bans(sp):
     """B1 轻减：删 7 处纯风格禁令尾巴（正面句已在）。未命中=只记 soft.fail（防 SP 漂了不知道），
-    绝不抛、绝不改其它字。开关关 → 原样返回。
-    B2 激进（prompt_ban_relax_aggressive，默认关）：再删《不许的事》③ 三条，只留「不许编」。"""
+    绝不抛、绝不改其它字。prompt_ban_relax 关 → 原样返回。
+    B2 拆两开关（A1）：drop_echo 删「复读＋秒回」（默认开）、drop_flatter 删「不许讨好」（默认关）；标题跟条数改。"""
     try:
-        if not load_config().get("prompt_ban_relax", True):
+        cfg = load_config()
+        if not cfg.get("prompt_ban_relax", True):
             return sp
         missed = []
         for old, new in _SP_RELAX_PAIRS:
@@ -1245,12 +1253,23 @@ def _relax_bans(sp):
                 missed.append(old[:24])
                 continue
             sp = sp.replace(old, new)
-        if load_config().get("prompt_ban_relax_aggressive", False):
-            for old, new in _SP_RELAX_AGGRESSIVE_PAIRS:
+        dropped = 0
+        for _on, pairs in ((cfg.get("prompt_ban_relax_drop_echo", True), _SP_RELAX_DROP_ECHO_PAIRS),
+                           (cfg.get("prompt_ban_relax_drop_flatter", False), _SP_RELAX_DROP_FLATTER_PAIRS)):
+            if not _on:
+                continue
+            for old, new in pairs:
                 if old not in sp:
                     missed.append(old[:24])
                     continue
                 sp = sp.replace(old, new)
+                dropped += 1
+        if dropped:
+            _title = _SP_RELAX_TITLES.get(4 - dropped)
+            if _title and _SP_RELAX_TITLE_OLD in sp:
+                sp = sp.replace(_SP_RELAX_TITLE_OLD, _title)
+            elif _title:
+                missed.append(_SP_RELAX_TITLE_OLD[:24])
         if missed:
             _soft_fail("prompt.relax_bans", ValueError(f"未命中 {len(missed)} 处：{missed}"))
         return sp
@@ -6942,18 +6961,9 @@ def _dream_watch_loop():
         time.sleep(60)
 
 
-def heartbeat_once():
-    """心跳一轮。返回攒了几条信；有新信统一按一次门铃（asleep 时 notify_letter 自己也会拦）。
-    深夜静默窗（config silent_window，起点 01:00 家主拍板）：默认他在睡——不攒信不按铃
-    （「说话=醒」简化模型在深夜误伤过：9-4 凌晨 04:32 给已睡的小乖攒了「想你了」还按了门铃）。"""
-    if ASLEEP:
-        _why("hold", "睡着了", "")   # #11 影子：这两处外层出口在心跳链里先到先记，miss_him 不再重复
-        return 0
-    now_hm = datetime.now().strftime("%H:%M")
-    _sw = _silent_window()   # 9-18 主权移交：空=不设（她清的）；SLEEP-WATCH（9-13）静默窗 config 化，现读现生效
-    if _sw and _in_window(now_hm, _sw):
-        _why("hold", "静默窗", "")
-        return 0
+def _shadow_engines():
+    """9-29 A8：三只引擎影子（欲望 v2 / 走神 / 话头簿）统一入口——只算只记，绝不发。
+    提到心跳早退（睡着/静默窗）之前跑，夜窗 01:00–02:00 也不再是盲区。整体 fail-open。"""
     # 欲望引擎·影子（9-24 家主令）：D 生长+掷骰+分拣——只记不发
     try:
         import desire_lib
@@ -6972,6 +6982,25 @@ def heartbeat_once():
         huatou_lib.tick_and_shadow(now=datetime.now())
     except Exception:
         pass
+
+
+def heartbeat_once():
+    """心跳一轮。返回攒了几条信；有新信统一按一次门铃（asleep 时 notify_letter 自己也会拦）。
+    深夜静默窗（config silent_window，起点 01:00 家主拍板）：默认他在睡——不攒信不按铃
+    （「说话=醒」简化模型在深夜误伤过：9-4 凌晨 04:32 给已睡的小乖攒了「想你了」还按了门铃）。"""
+    if ASLEEP:
+        _why("hold", "睡着了", "")   # #11 影子：这两处外层出口在心跳链里先到先记，miss_him 不再重复
+        _shadow_engines()            # 9-29 A8：影子记账**不受早退影响**（夜窗/睡着也要有数据）
+        _single_trigger_shadow(actual={"💌": 0, "💬": 0, "念叨": 0, "晚安": 0})
+        return 0
+    now_hm = datetime.now().strftime("%H:%M")
+    _sw = _silent_window()   # 9-18 主权移交：空=不设（她清的）；SLEEP-WATCH（9-13）静默窗 config 化，现读现生效
+    if _sw and _in_window(now_hm, _sw):
+        _why("hold", "静默窗", "")
+        _shadow_engines()            # 9-29 A8：同上（原先静默窗整段被跳过，01:00–02:00 夜窗后半段无数据）
+        _single_trigger_shadow(actual={"💌": 0, "💬": 0, "念叨": 0, "晚安": 0})
+        return 0
+    _shadow_engines()                # 9-29 A8：三只引擎影子挪到前面统一跑（只动记账，不动回话与攒信）
     # 主动开口（OUTREACH-02，9-26 家主令「想让她更有自主，像人」）：她攒的话 → 真说一句。
     # 开关 outreach_send（默认关=回到只攒只递）；按铃统一走下面这一次（不在函数里重复按）。
     said = _outreach_say_once(datetime.now())
