@@ -61,5 +61,20 @@
   "recall_gate_shadow": true,
   "recall_gate_v2": false,
   "prompt_ban_relax_aggressive": false,
-  "health_api": false
+  "health_api": false,
+  "recall_gate": {
+    "no_decay": [
+      "day",
+      "letter",
+      "hall"
+    ],
+    "writer_weight": {
+      "hand": 1.0,
+      "stream": 0.9
+    },
+    "quota": {
+      "oldhome": 1
+    },
+    "gate_tool": false
+  }
 }

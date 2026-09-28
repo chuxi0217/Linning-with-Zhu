@@ -620,7 +620,12 @@ DEFAULT_CONFIG = {
                     "kind_weight": {"day": 1.0, "chat": 1.0, "note": 1.0,
                                     "letter": 1.0, "hall": 1.0, "oldhome": 0.6},
                     "recency": {"near_days": 7, "near": 1.0,
-                                "mid_days": 30, "mid": 0.9, "far": 0.75}},
+                                "mid_days": 30, "mid": 0.9, "far": 0.75},
+                    # 记忆权重扩表（9-29）：不可损层 / 笔 / 每卷配额 / 工具侧是否真筛
+                    "no_decay": ["day", "letter", "hall"],
+                    "writer_weight": {"hand": 1.0, "stream": 0.9},
+                    "quota": {"oldhome": 1},
+                    "gate_tool": False},
     "port": 8024,          # 咱家纪念日端口
     "thinking_enabled": True,    # 二期d：思考模式开关（配置外置先例）
     "thinking_effort": "high",   # low/high/max，9-1 探针实证可用
@@ -2803,7 +2808,12 @@ def exec_library_tool(name, args):
                     qvec, emodel = vecs[0], e[2]
             except Exception as e2:
                 print(f"  [MEM-C] 查询嵌入失手（退纯词面）：{e2}")
-        res = m.hybrid_search(query, kinds, limit, qvec=qvec, model=emodel)
+        _wscores = {}
+        res = m.hybrid_search(query, kinds, limit, qvec=qvec, model=emodel,
+                              score_out=_wscores)
+        # 记忆权重（9-29 扩表）：工具侧**影子先行**——她主动查、宁多勿漏，默认只记不改；
+        # 只有 recall_gate.gate_tool=true 时才真按权重排序＋每卷配额（门槛/同卷同日去重不适用）。
+        res = _recall_gate_res(res, _wscores, path="tool", soft=True)
         if not res:
             return f"（{want}卷里没查到「{query}」）" if want else f"（六卷都搜不到「{query}」）"
         lines = []
@@ -4416,6 +4426,18 @@ def _mechanism_face():
     return out
 
 
+def _is_peak_slot(wd, hh):
+    """官方高峰时段：周一至周五 9:00-12:00 与 14:00-18:00（不含法定节假日）。
+    wd: 0=周日…6=周六（strftime('%w')）。节假日本地判不了——会按高峰计，属**偏高**估计。"""
+    try:
+        wd, hh = int(wd), int(hh)
+    except Exception:
+        return False
+    if wd < 1 or wd > 5:      # 周六/周日 → 空闲
+        return False
+    return (9 <= hh < 12) or (14 <= hh < 18)
+
+
 def _cost_today():
     """当日账：调用数、in/out/缓存 tokens、缓存命中率、按私档单价估的花费。
     单价在 config 的 _price_in/_price_out/_price_cached（元/百万 token，下划线私档——
@@ -4426,6 +4448,12 @@ def _cost_today():
             "SELECT COUNT(*), COALESCE(SUM(in_tokens),0), COALESCE(SUM(out_tokens),0),"
             " COALESCE(SUM(cached_tokens),0) FROM token_ledger"
             " WHERE date(ts)=date('now','localtime')").fetchone()
+        # 9-29：分时段计价用的按 (星期, 小时) 分桶（wd 0=周日…6=周六）
+        split_rows = con.execute(
+            "SELECT strftime('%w', ts), CAST(strftime('%H', ts) AS INTEGER),"
+            " COALESCE(SUM(in_tokens - cached_tokens),0), COALESCE(SUM(cached_tokens),0),"
+            " COALESCE(SUM(out_tokens),0) FROM token_ledger"
+            " WHERE date(ts)=date('now','localtime') GROUP BY 1, 2").fetchall()
         scenes = con.execute(
             "SELECT scene, COUNT(*), COALESCE(SUM(in_tokens),0), COALESCE(SUM(out_tokens),0),"
             " COALESCE(SUM(cached_tokens),0) FROM token_ledger"
@@ -4438,19 +4466,33 @@ def _cost_today():
     hit = round(tcached / tin, 4) if tin else None
     cfg = load_config()
     pi, po, pc = cfg.get("_price_in"), cfg.get("_price_out"), cfg.get("_price_cached")
-    cost = None
+    pip, pop, pcp = cfg.get("_price_in_peak"), cfg.get("_price_out_peak"), cfg.get("_price_cached_peak")
+    cost, mode = None, None
     try:
         if pi is not None and po is not None:
             pcv = pc if pc is not None else po
-            cost = round((tin - tcached) / 1e6 * pi + tcached / 1e6 * pcv + tout / 1e6 * po, 4)
+            if pip is not None and pop is not None:
+                # 9-29 分时段计价（官方「高峰/空闲」两档；周末全天半价）——按 (星期几, 小时) 分桶算。
+                pcvp = pcp if pcp is not None else pop
+                pk = il = 0.0
+                for _wd, _hh, _fin, _fca, _fout in split_rows:
+                    if _is_peak_slot(_wd, _hh):
+                        pk += _fin / 1e6 * pip + _fca / 1e6 * pcvp + _fout / 1e6 * pop
+                    else:
+                        il += _fin / 1e6 * pi + _fca / 1e6 * pcv + _fout / 1e6 * po
+                cost = round(pk + il, 4)
+                mode = "分时段（高峰+空闲；周末/夜间按空闲）"
+            else:
+                cost = round((tin - tcached) / 1e6 * pi + tcached / 1e6 * pcv + tout / 1e6 * po, 4)
+                mode = "单档"
     except Exception:
-        cost = None
+        cost, mode = None, None
     return {"date": today_str(), "calls": calls, "in_tokens": tin, "out_tokens": tout,
             "cached_tokens": tcached, "cache_hit": hit, "cost_est": cost,
             # 审查修复（9-28 深夜）：不再回显 _price_* 的具体数值——/api/health 无鉴权，
-            # 私档单价不该出现在响应里（只报"有没有配"，不报数）。
-            "cost_unit": ("元/百万token（单价取自私档 _price_*，不回显）"
-                          if pi is not None else None),
+            # 私档单价不该出现在响应里（只报"有没有配"、以及用的是哪档口径）。
+            "cost_unit": ("元/百万token（单价取自私档 _price_*，不回显）" if pi is not None else None),
+            "cost_mode": mode,
             "scenes": [{"scene": r[0], "calls": int(r[1]), "in": int(r[2]),
                         "out": int(r[3]), "cached": int(r[4])} for r in scenes]}
 
@@ -5080,7 +5122,17 @@ _RECALL_GATE_DEFAULTS = {
     "kind_weight": {"day": 1.0, "chat": 1.0, "note": 1.0, "letter": 1.0,
                     "hall": 1.0, "oldhome": 0.6},
     "recency": {"near_days": 7, "near": 1.0, "mid_days": 30, "mid": 0.9, "far": 0.75},
+    # ── 记忆权重扩表（9-29）──────────────────────────────────────────────
+    # ① 不可损层：她的笔/正典不吃时间衰减（旧宅那种"远事"才该被压）。
+    "no_decay": ["day", "letter", "hall"],
+    # ② 笔：亲笔件 > 流水话（chat 是话赶话的流水，同分下让亲笔件先浮）。
+    "writer_weight": {"hand": 1.0, "stream": 0.9},
+    # ③ 每卷配额：低权重卷"最多浮几条"（0/缺 = 不限）。旧宅 ≤1 就是这么落的。
+    "quota": {"oldhome": 1},
+    # ④ 工具侧（search_memory）是否真按权重筛——默认 False：她主动查，只影子不改结果。
+    "gate_tool": False,
 }
+_STREAM_KINDS = ("chat",)   # 流水话卷（相对"亲笔件"）——目前只有聊天原话
 
 
 def _gate_cfg():
@@ -5130,7 +5182,7 @@ def _recency_weight(date_str, rec):
         return 1.0
 
 
-def _gate_shadow_log(res, scores, path, plan, summary):
+def _gate_shadow_log(res, scores, path, plan, summary, rank=None):
     """落 events: mem.recall.shadow——「若按新规则会递哪些」＋空手样本（delivered=0）。fail-open。"""
     try:
         import events_lib
@@ -5156,14 +5208,19 @@ def _gate_shadow_log(res, scores, path, plan, summary):
                            "kept": (summary or {}).get("kept"),
                            "dropped": (summary or {}).get("dropped"),
                            "drop_why": {k: [w for _, w in v] for k, v in dropped.items()},
+                           # 9-29 记忆权重扩表：跨卷综合分排序（卷权重×时间×笔）——影子里的第一手数据，
+                           # "按分跨卷排"要不要真切，读完几天它再定（切它=改开场行序，风险高于收益）。
+                           "order": rank or [],
                            "kinds": kinds})
     except Exception as e:
         _soft_fail("recall.shadow", e)
 
 
-def _recall_gate_res(res, scores, path="mixed"):
-    """旧事两修·B：对检索结果按三件规则过滤/排序。返回（可能改过的）res。
-    recall_gate_v2 关（默认）→ 只记影子（recall_gate_shadow 开时）、原样返回。fail-open。"""
+def _recall_gate_res(res, scores, path="mixed", soft=False):
+    """记忆权重·检索侧：按权重表对检索结果排序/配额/门槛。返回（可能改过的）res。
+    recall_gate_v2 关（默认）→ 只记影子（recall_gate_shadow 开时）、原样返回。fail-open。
+    soft=True（工具侧 search_memory）：**不做门槛、不做同卷同日去重**——她主动查，宁多勿漏；
+    仅当 `recall_gate.gate_tool` 为真时才真的按权重排序＋每卷配额。"""
     try:
         if not isinstance(res, dict) or not res:
             if _flag_on("recall_gate_shadow"):
@@ -5173,27 +5230,37 @@ def _recall_gate_res(res, scores, path="mixed"):
         rec = gcfg.get("recency") or {}
         min_score = float(gcfg.get("min_score", 0.35))
         quota = int(gcfg.get("per_kind_per_day", 1) or 0)
-        kept, dropped = {}, {}
+        no_decay = tuple(gcfg.get("no_decay") or ())
+        wr = gcfg.get("writer_weight") or {}
+        caps = gcfg.get("quota") or {}
+        _apply = _flag_on("recall_gate_v2") and (not soft or bool(gcfg.get("gate_tool")))
+        kept, dropped, _rank = {}, {}, []
         for kind, rows in res.items():
             if not isinstance(rows, list) or kind == "favorite":
                 kept[kind] = rows
                 continue
             sc = (scores or {}).get(kind) or {}
             kw = float((gcfg.get("kind_weight") or {}).get(kind, 1.0))
+            ww = float(wr.get("stream" if kind in _STREAM_KINDS else "hand", 1.0))
             scored = []
             for r in rows:
                 base = sc.get(r[0])
                 d = _row_date_of(kind, r)
-                comp = (base if base is not None else 0.5) * kw * _recency_weight(d, rec)
+                tw = 1.0 if kind in no_decay else _recency_weight(d, rec)
+                comp = (base if base is not None else 0.5) * kw * tw * ww
                 scored.append((comp, base, r, d))
+                _rank.append((round(comp, 4), kind, r[0]))
             scored.sort(key=lambda x: -x[0])
-            seen_day, keep = {}, []
+            seen_day, keep, cap = {}, [], int(caps.get(kind, 0) or 0)
             for _comp, base, r, d in scored:
-                if base is not None and base < min_score:
+                if not soft and base is not None and base < min_score:
                     dropped.setdefault(kind, []).append((r[0], "score"))
                     continue
-                if quota and d and seen_day.get(d, 0) >= quota:
+                if not soft and quota and d and seen_day.get(d, 0) >= quota:
                     dropped.setdefault(kind, []).append((r[0], "daydup"))
+                    continue
+                if len(keep) >= cap > 0:
+                    dropped.setdefault(kind, []).append((r[0], "quota"))
                     continue
                 if d:
                     seen_day[d] = seen_day.get(d, 0) + 1
@@ -5201,9 +5268,11 @@ def _recall_gate_res(res, scores, path="mixed"):
             kept[kind] = keep
         summary = {"kept": sum(len(v) for v in kept.values() if isinstance(v, list)),
                    "dropped": sum(len(v) for v in dropped.values() if isinstance(v, list))}
+        _rank.sort(key=lambda x: (-x[0], x[1], x[2]))
         if _flag_on("recall_gate_shadow"):
-            _gate_shadow_log(res, scores, path, {"kept": kept, "dropped": dropped}, summary)
-        if _flag_on("recall_gate_v2"):
+            _gate_shadow_log(res, scores, path, {"kept": kept, "dropped": dropped}, summary,
+                             rank=[f"{k}:{i}({c})" for c, k, i in _rank[:8]])
+        if _apply:
             return {k: v for k, v in kept.items() if v}
         return res
     except Exception as e:
