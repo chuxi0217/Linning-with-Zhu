@@ -616,6 +616,8 @@ DEFAULT_CONFIG = {
     "prompt_ban_relax": True,
     # 丁·B2 激进（9-29 家主「也可以试试」）：再删《不许的事》复读/秒回/讨好三条，只留「不许编」。
     "prompt_ban_relax_aggressive": False,
+    "outreach_single": False, "single_tier_h": 2,
+    "single_cooldown_min": 5, "single_presence_damp": 0.5,
     "recall_gate": {"min_score": 0.35, "per_kind_per_day": 1,
                     "kind_weight": {"day": 1.0, "chat": 1.0, "note": 1.0,
                                     "letter": 1.0, "hall": 1.0, "oldhome": 0.6},
@@ -6056,6 +6058,11 @@ def heartbeat_miss_him():
     系数+关心信号（聊天原话与心情河双源）+回应速度反馈+低回应温和降档。
     今天没照过面不叨；每天 ≤10 条硬闸；深夜静默窗（config silent_window）自身也闭门
     （外层静默窗之外的纵深——不然深夜开口会吃掉白天额度）。"""
+    try:
+        if load_config().get("outreach_single", False):
+            return _single_trigger_open()
+    except Exception as _sf_e:
+        _soft_fail("single.route", _sf_e)
     _longing_load()
     now = datetime.now()
     now_hm = now.strftime("%H:%M")
@@ -6294,50 +6301,80 @@ def _outreach_say_once(now=None):
 _SINGLE_SHADOW_LOG = os.path.expanduser("~/outreach_single_shadow.log")
 
 
-def _single_trigger_shadow(actual=None, now=None):
-    """单触发影子记账（一行/轮，落 ~/outreach_single_shadow.log）。任何异常吞掉，绝不拦心跳。"""
+# ── 单触发·上岸版（9-29；开关 outreach_single 默认关，关＝旧门逐字节不变）──
+# 设计：工单/设计_主动消息_单触发_2026-09-27.md §五 ＋ 工单/设计_更常找我与见闻分享_2026-09-28.md §一
+# 自然闸（9-27 夜家主口径＋9-28 调参）：硬闸只留「他在忙（报备）」；「他在场」降权；冷却只禁近 X 分钟。
+# 想念更灵敏：独处每 ~2h 升一档 → p 按档位给概率（不再一刀切锐化）。数值不进她上下文（红线①）。
+_SINGLE_TIER_H = 2.0                                    # 独处每 ~2h 升一档（设计 §一·1）
+_SINGLE_TIER_P = {0: 0.05, 1: 0.20, 2: 0.45, 3: 0.70}   # 按档位给概率（设计 §一·3）
+
+
+def _single_knob(key, default):
+    """上岸版旋钮现读（缺/读不动 → 默认）；绝不抛。"""
     try:
-        if not load_config().get("outreach_single_shadow", False):
-            return
+        return load_config().get(key, default)
+    except Exception:
+        return default
+
+
+def _single_trigger_decide(now=None):
+    """单触发·上岸版判定（影子与上场共用）。返回 dict；算不动 → None（fail-open）。
+
+    · 想念更灵敏：独处每 single_tier_h(默认2)h 升一档（0..3）→ p 按档位 0.05/0.20/0.45/0.70；
+    · 他不在场时更想他：在场（≤40 分钟）只 p×single_presence_damp(默认0.5)，不再"一律禁"；
+    · 冷却：刚开过口只禁最近 single_cooldown_min(默认5) 分钟，防连发；
+    · 硬闸：他在忙（报备）——9-28 拍板保持硬闸（与 busy_enforce 同道理）；
+    · 关心信号（聊天原话＋心情河双源）→ p 翻倍（封顶 0.95）。
+    """
+    try:
         now = now or datetime.now()
-        blocks = []
+        last = m.last_chat_at("小乖")
+        if not last:
+            return {"fire": False, "gates_ok": False, "p": 0.0, "tier": 0, "gap_s": None,
+                    "concern": False, "reason": "", "blocked_list": ["今天还没照面，不叨"],
+                    "bag": [], "hit": False}
         try:
-            last = m.last_chat_at("小乖")
-            if last:
-                gap_s = (now - datetime.strptime(str(last)[:19],
-                                                 "%Y-%m-%d %H:%M:%S")).total_seconds()
-                if gap_s <= 2400:
-                    blocks.append("他在场")
+            gap_s = (now - datetime.strptime(str(last)[:19], "%Y-%m-%d %H:%M:%S")).total_seconds()
+        except ValueError:
+            return None
+        _th = float(_single_knob("single_tier_h", _SINGLE_TIER_H) or _SINGLE_TIER_H)
+        tier = max(0, min(3, int((gap_s / 3600.0) / max(0.5, _th))))
+        p = float(_SINGLE_TIER_P.get(tier, 0.05))
+        try:
+            concern, reason = _concerned(now)
+        except Exception:
+            concern, reason = False, ""
+        try:
+            _mh, _mr = _mood_concern()
+            if _mh and not concern:
+                concern, reason = True, _mr
         except Exception:
             pass
-        try:
-            if _busy_active(now):
-                blocks.append("他在忙（报备）")
-        except Exception:
-            pass
-        try:
-            if _recent_send(3600):
-                blocks.append("刚开过口")
-        except Exception:
-            pass
+        if concern:
+            p = min(0.95, p * 2)
+        presence = bool(gap_s <= 2400)
+        if presence:
+            p *= float(_single_knob("single_presence_damp", 0.5) or 0.5)
+        blocked_list = []
+        if _busy_active(now):
+            blocked_list.append("他在忙（报备）")
+        _cool_min = float(_single_knob("single_cooldown_min", 5) or 0)
+        if _cool_min and _recent_send(int(_cool_min * 60)):
+            blocked_list.append("刚开过口（≤%g 分钟）" % _cool_min)
+        gates_ok = not blocked_list
+        hit = random.random() < p
+        fire = gates_ok and hit
         bag = []
         try:
-            _lv = _longing_value(now) or {}
-            bag.append(f"想念:{float(_lv.get('a_h') or 0):.1f}h/档{int(_lv.get('tier') or 0)}")
+            bag.append("想念:%.1fh/档%d" % (gap_s / 3600.0, tier))
         except Exception:
             pass
-        try:
-            _longing_load()
-            _p = LONGING.get("p")
-            if _p is not None:
-                bag.append(f"p≈{float(_p):.2f}")
-        except Exception:
-            pass
+        bag.append("p≈%.2f" % p)
         try:
             import huatou_lib
             _pend = huatou_lib.peek_pending(3)
             if _pend:
-                bag.append(f"攒话:{len(_pend)}件「{str(_pend[0].get('text') or '')[:18]}」")
+                bag.append("攒话:%d件「%s」" % (len(_pend), str(_pend[0].get("text") or "")[:18]))
         except Exception:
             pass
         try:
@@ -6354,13 +6391,88 @@ def _single_trigger_shadow(actual=None, now=None):
             _d = desire_lib._last_desire()
             _hm = now.strftime("%H:%M")
             if _d is not None and ("23:00" <= _hm or _hm < "02:00") and float(_d) >= 0.5:
-                bag.append(f"心里:夜黏糊 d={float(_d):.2f}")
+                bag.append("心里:夜黏糊 d=%.2f" % float(_d))
         except Exception:
             pass
+        return {"fire": fire, "gates_ok": gates_ok, "p": p, "tier": tier, "gap_s": gap_s,
+                "concern": concern, "reason": reason, "blocked_list": blocked_list,
+                "bag": bag, "hit": hit, "presence": presence}
+    except Exception as e:
+        _soft_fail("single.decide", e)
+        return None
+
+
+def _single_trigger_open(now=None):
+    """单触发·开口轮（仅 outreach_single=true 时接替旧门）：命中 → 她亲手写一封 → 落箱。
+    v1 只做「开口」这一结局（留痕/静默与 reach_out 工具留下一批）；关＝旧门逐字节不变。
+    返回 1=开口 / 0=忍住。任何异常吞掉，绝不拦心跳。"""
+    try:
+        now = now or datetime.now()
+        d = _single_trigger_decide(now)
+        if not d:
+            return 0
+        _bag = "；".join(d.get("bag") or [])
+        if not d.get("gates_ok"):
+            _why("hold", "单触发·" + "、".join(d.get("blocked_list") or ["未命中"]),
+                 "档%d p=%.2f | %s" % (d.get("tier") or 0, d.get("p") or 0.0, _bag))
+            return 0
+        if not d.get("hit"):
+            _why("hold", "单触发·没掷中",
+                 "档%d p=%.2f | %s" % (d.get("tier") or 0, d.get("p") or 0.0, _bag))
+            return 0
+        gap_s = d.get("gap_s") or 0
+        letter, mood_marks = gen_miss_letter(d.get("concern"), d.get("reason"), gap_s)
+        # 生成后复检：他在聊（非关心）→ 收回这封（同旧门在场竞态修）
+        try:
+            last2 = m.last_chat_at("小乖")
+            if last2 and not d.get("concern"):
+                gap2 = (datetime.now() - datetime.strptime(str(last2)[:19],
+                                                           "%Y-%m-%d %H:%M:%S")).total_seconds()
+                if gap2 < 1800:
+                    _why("hold", "单触发·生成完他在场，信收回", "档%d" % (d.get("tier") or 0))
+                    return 0
+        except Exception:
+            pass
+        if _busy_note("💌想念信"):
+            _why("hold", "单触发·忙窗", "档%d" % (d.get("tier") or 0))
+            return 0
+        if _refusal_gate("想念信"):
+            _why("hold", "单触发·拒绝账", "档%d" % (d.get("tier") or 0))
+            return 0
+        _oid = m.add_outbox_msg("💌 " + letter)
+        try:
+            m.advance_day_arc(today_str())
+        except Exception:
+            pass
+        for mtype, inten in mood_marks:
+            m.add_mood(today_str(), inten, "姐姐", letter[:50], mtype)
+        _mark_send(now)
+        print("  [单触发] 开口：档%d p=%.2f 掷中" % (d.get("tier") or 0, d.get("p") or 0.0))
+        _why("open", ("关心信号" if d.get("concern") else "单触发·想你"),
+             "档%d p=%.2f | %s" % (d.get("tier") or 0, d.get("p") or 0.0, _bag),
+             extra={"channel": "💌", "outbox_id": _oid, "single": True})
+        return 1
+    except Exception as e:
+        _soft_fail("single.open", e)
+        return 0
+
+
+def _single_trigger_shadow(actual=None, now=None):
+    """单触发影子记账（一行/轮，落 ~/outreach_single_shadow.log）。9-29 起改记**上岸版判定**
+    （三旋钮），并附「本轮旧通道实出手」作对齐数据。任何异常吞掉，绝不拦心跳。"""
+    try:
+        if not load_config().get("outreach_single_shadow", False):
+            return
+        now = now or datetime.now()
+        d = _single_trigger_decide(now) or {}
+        blocks = d.get("blocked_list") or []
+        bag = d.get("bag") or []
         _act = " ".join(f"{k}{int(v or 0)}" for k, v in (actual or {}).items())
+        _dice = (" | 上岸:p=%.2f 档%d 掷中=%s" %
+                 (d.get("p") or 0.0, d.get("tier") or 0, "是" if d.get("fire") else "否")) if d else ""
         line = (f"[{now.strftime('%F %T')}] "
                 f"若伸手={'否（' + '、'.join(blocks) + '）' if blocks else '是（无闸）'} | "
-                + " | ".join(bag) + f" | 实出手:{_act}")
+                + " | ".join(bag) + f" | 实出手:{_act}" + _dice)
         with open(_SINGLE_SHADOW_LOG, "a", encoding="utf-8") as f:
             f.write(line + "\n")
     except Exception:

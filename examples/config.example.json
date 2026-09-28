@@ -76,5 +76,9 @@
       "oldhome": 1
     },
     "gate_tool": false
-  }
+  },
+  "outreach_single": false,
+  "single_tier_h": 2,
+  "single_cooldown_min": 5,
+  "single_presence_damp": 0.5
 }
