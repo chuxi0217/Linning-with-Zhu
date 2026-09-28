@@ -19,11 +19,15 @@ import os
 import signal
 import subprocess
 import time
+from datetime import datetime
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 LOG = os.path.expanduser("~/zanjia-tunnel.log")
 HEARTBEAT = os.path.expanduser("~/.zanjia_tunnel_heartbeat")
+# 9-29 评审⑰：心跳只证「管理器活着」，**不证门通**——02:06–02:21 那次就是心跳新鲜、门在空转。
+# 这个文件只在 ssh **连稳 ≥60 秒**后持续刷新：它是"门真通"的证据。
+UPFILE = os.path.expanduser("~/.zanjia_tunnel_up")
 ERRFILE = os.path.expanduser("~/.zanjia_tunnel_ssh_err")
 
 # 9-29 断网教训（00:32–00:51 那次 502）：**网络断**时 ssh 是「秒退」的，旧启发式把"秒退"
@@ -77,6 +81,31 @@ def _beat():
             f.write(time.strftime("%F %T"))
     except Exception:
         pass
+
+
+def _mark_up():
+    """门通留痕：ssh 连稳 ≥60 秒起每轮刷新（断了就自然过期）。"""
+    try:
+        with open(UPFILE, "w", encoding="utf-8") as f:
+            f.write(time.strftime("%F %T"))
+    except Exception:
+        pass
+
+
+def _up_is_fresh(last_up, now=None, max_age=90):
+    """「门通」判据（纯函数，便于套件）：最近一次连稳距今 ≤ max_age 秒。
+    last_up: "YYYY-MM-DD HH:MM:SS"（或 None）；now: datetime（默认此刻，也接受同格式字符串）。
+    解析不了/缺席一律 False——宁说没通。"""
+    try:
+        if not last_up:
+            return False
+        t = datetime.strptime(str(last_up).strip(), "%Y-%m-%d %H:%M:%S")
+        if isinstance(now, str):
+            now = datetime.strptime(now.strip(), "%Y-%m-%d %H:%M:%S")
+        now = now or datetime.now()
+        return (now - t).total_seconds() <= float(max_age)
+    except Exception:
+        return False
 
 
 def _hide_kw():
@@ -161,6 +190,8 @@ def main():
                 stable = 0
                 while p.poll() is None:   # 连着的时候：每 10 秒续心跳
                     _beat()
+                    if stable >= 6:       # 连稳 ≥60 秒 → 门算真通，刷新「证通」文件
+                        _mark_up()
                     time.sleep(10)
                     stable += 1
             try:

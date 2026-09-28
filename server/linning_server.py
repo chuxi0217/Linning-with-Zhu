@@ -2753,8 +2753,24 @@ def _tools_payload():
     return [{"type": t["type"], "function": t["function"]} for t in LIBRARY_TOOLS]
 
 
+def _tool_selfcheck():
+    """图书证自检（9-29 评审⑤-half）：注册表里的每只证，执行层**有没有一段接它**。
+    静态对账（读 exec_library_tool 源码里的 name 分支／园门名单）——**不真调**，
+    绝不落库、绝无副作用（真调空参有落库风险，不如静态查）。罩的是「菜单加了、执行忘了」
+    这类事故：她看得见那只工具，却永远调不动。返回 (接住, 总数, 掉队名单)。fail-open。"""
+    try:
+        import inspect
+        src = inspect.getsource(exec_library_tool)
+        names = [t2["function"]["name"] for t2 in LIBRARY_TOOLS]
+        garden = set(GARDEN_TOOL_NAMES) | set(GARDEN_GAME_TOOL_NAMES)
+    except Exception:
+        return (0, 0, [])
+    miss = [n for n in names if f'"{n}"' not in src and n not in garden]
+    return (len(names) - len(miss), len(names), miss)
+
+
 def exec_library_tool(name, args):
-    """图书证执行层。二十五只只读：memory_lib 只读调用 + 全档案/大事记只读扫描 + read_hall 日记馆 + read_her_words 她的自留页
+    """图书证执行层。只读与动作分列（**清单以 LIBRARY_TOOLS 注册表为准**，别在这数数）：memory_lib 只读调用 + 全档案/大事记只读扫描 + read_hall 日记馆 + read_her_words 她的自留页
     + read_life_log 生活账、read_rhythm 作息（9-18 第二批/第三批）、read_my_ledger 她自己的账（主权三件 9-23）；
     三十二只动作（不碰旧表旧数据）：pin_wall 门牌墙亲笔（钉/改/撤/看，旧文落 pin_log）、
     write_archive 全档案续页（只添不改，当日一备）、quiet_hours 她自己的安静时段（看/改/清，9-18 第二批·主权移交）、
@@ -4429,8 +4445,10 @@ def _mechanism_face():
     out = {}
     try:
         out["tunnel"] = bool(_tunnel_probe())
+        out["tunnel_up"] = _tunnel_up_fresh()   # ⑰：心跳新鲜 ≠ 门通，这个才是"门真连着"
     except Exception:
         out["tunnel"] = None
+        out["tunnel_up"] = None
     try:
         out["garden_bridge"] = bool(_bridge_running())
     except Exception:
@@ -7619,7 +7637,9 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass   # 他划走了，正常
         except Exception as e:
-            print(f"⚠️ GET {self.path} 炸了：{e}")
+            # ⑯ 评审（9-29）：只记路径、**剥掉 query**——app 的 ?token=… 不该明文落 _server.log
+            # （那日志正好能被 /api/logs 读）。
+            print(f"⚠️ GET {urllib.parse.urlparse(self.path or '').path} 炸了：{e}")
             try:
                 self._send_json({"error": f"server 内部岔子：{str(e)[:200]}"}, 500)
             except Exception:
@@ -8965,6 +8985,13 @@ def main():
     # 嵌入端点随家通电（9-14 家主拍板折中方案）：没起就由 server 亲手拉起 llama-server
     print(f"  嵌入端点：{_ensure_llama_server()}（:{LLAMA_PORT}）")
     print(f"  网络门：{_ensure_tunnel()}（反向隧道 :18024）")
+    # ⑤ 图书证自检（9-29 评审⑤-half）：菜单有、执行层没接 = 她永远调不动那只证
+    _sc_ok, _sc_tot, _sc_miss = _tool_selfcheck()
+    if _sc_miss:
+        print(f"  图书证自检：{_sc_ok}/{_sc_tot}——⚠️ 掉队（菜单有、执行没接）：{'、'.join(_sc_miss)}")
+        _soft_fail("工具.自检", ValueError(f"执行层没接：{_sc_miss}"))
+    else:
+        print(f"  图书证自检：{_sc_ok}/{_sc_tot} 只接得上 ✓")
     # Garden 桥按它家硬规矩不自动拉起（fail-closed）——但通电横幅必须看得见它
     print("  Garden 桥：在岗（耳朵支着）" if _bridge_running()
           else "  Garden 桥：未挂——跑 ~/garden-run.sh（它家规矩：每次连接亲手按）")
@@ -9073,6 +9100,16 @@ def _tunnel_probe():
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                            timeout=5)
         return r.returncode == 0
+    except Exception:
+        return False
+
+
+def _tunnel_up_fresh(max_age=90):
+    """「门**通**」判据（9-29 评审⑰）：心跳只证"管理器活着"，这个文件才证"隧道真连着"
+    （zanjia_tunnel 在 ssh 连稳 ≥60s 后持续刷新；9-29 02:06–02:21 那次正是心跳新鲜、门在空转）。
+    取不到/过期一律 False——宁说没通。"""
+    try:
+        return (time.time() - os.path.getmtime(os.path.expanduser("~/.zanjia_tunnel_up"))) <= float(max_age)
     except Exception:
         return False
 

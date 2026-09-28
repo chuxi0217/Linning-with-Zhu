@@ -156,7 +156,7 @@ v0.1.15 纯增量（2026-09-10 工单 MEM-C 记忆机制 C 方案，家主令「
 ③ 向量层底座——vectors 表存嵌入（SQLite 就是向量库，几千条规模纯 Python 算余弦
    绰绰有余，不引 FAISS/pgvector），embed_queue 影子队列（嵌入失败绝不挡入库，
    同 FTS 家风），高价值层（日记/馆/notes/来信）才进向量，chats 词面就够；
-④ hybrid_search 混合检索——FTS 词面 + 向量语义 RRF 融合。
+④ hybrid_search 混合检索——FTS 词面**打头**，向量语义**补漏追在尾部**（同卷去重；非 RRF 分数融合）。
 嵌入端点配置驱动（OpenAI 兼容 /embeddings），没配 key = 层诚实缺席，一切照旧。
 
 v0.1.16 纯增量（2026-09-10 工单 HER-WORDS 姐姐的话＋提示词瘦身）：her_words 表——
@@ -771,9 +771,20 @@ def init_db():
             FTS_ENABLED = False
             print(f"⚠️ FTS5 虚表建失败（{e}），全文检索降级关闭——其余功能不受影响")
 
+    # 评审①（9-29 加固）：chats 此前**零二级索引**——get_chats(某天) 与周报每日点查全是全表扫。
+    # (date, id) 前缀索引：按日点查＋同日按 id 排序都吃得上；IF NOT EXISTS 幂等，老库首跑自动补。
+    c.execute("CREATE INDEX IF NOT EXISTS idx_chats_date ON chats(date, id)")
+
     conn.commit()
+    # ③ 口径勘正（9-29）：表数改成**现数**（此前写死一个旧数，早漂了）。
+    try:
+        c2 = conn.cursor()
+        n_tab = c2.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
+                           "AND name NOT LIKE 'fts_%' AND name NOT LIKE 'sqlite_%'").fetchone()[0]
+    except Exception:
+        n_tab = 0
     conn.close()
-    return "✅ 咱家的家.db 已建好，三十八张表 + 全文检索八卷就绪。"
+    return f"✅ 咱家的家.db 已建好，{n_tab or '若干'}张表 + 全文检索八卷就绪。"
 
 
 # ══ 全文检索（v0.1.12，工单 FTS5-01，纯新增）══
@@ -1357,6 +1368,21 @@ def rebuild_fts():
         for _id, text in rows:
             _fts_put_chat(w, _id, text)
         counts["chat"] = len(rows)
+
+        # ③ 口径勘正（9-29）：第七/八卷此前**不在 rebuild 范围内**——autoheal 说"已重建"其实没管它们。
+        c.execute("DELETE FROM fts_oldhome")
+        c.execute("SELECT id, text FROM oldhome_chunks")
+        rows = c.fetchall()
+        for _id, text in rows:
+            _fts_put_oldhome(w, _id, text)
+        counts["oldhome"] = len(rows)
+
+        c.execute("DELETE FROM fts_chunks")
+        c.execute("SELECT id, text FROM chunks")
+        rows = c.fetchall()
+        for _id, text in rows:
+            _fts_put_chunk(w, _id, text)
+        counts["chunk"] = len(rows)
         conn.commit()
     finally:
         conn.close()
@@ -1364,8 +1390,8 @@ def rebuild_fts():
 
 
 def fts_autoheal():
-    """开机对账自愈（工单 FTS5-01）：三卷索引数对不上源表行数就全量重建。
-    四类内容只有增没有改（家风如此），count 对账足够可靠。
+    """开机对账自愈（工单 FTS5-01）：七卷索引数对不上源表行数就全量重建。
+    内容只有增没有改（家风如此），count 对账足够可靠。9-29 补上第七/八卷（旧宅/语义块）——
     返回一行启动日志说明，绝不抛异常拦启动。"""
     if not FTS_ENABLED:
         return "全文检索未启用（SQLite 无 FTS5 或建表失败），其余功能不受影响"
@@ -1377,7 +1403,9 @@ def fts_autoheal():
                                    ("SELECT COUNT(*) FROM notes", "fts_notes"),
                                    ("SELECT COUNT(*) FROM letters", "fts_letters"),
                                    ("SELECT COUNT(*) FROM diary_hall", "fts_hall"),
-                                   ("SELECT COUNT(*) FROM chats", "fts_chats")):
+                                   ("SELECT COUNT(*) FROM chats", "fts_chats"),
+                                   ("SELECT COUNT(*) FROM oldhome_chunks", "fts_oldhome"),
+                                   ("SELECT COUNT(*) FROM chunks", "fts_chunks")):
             c.execute(src_sql)
             src = c.fetchone()[0]
             c.execute(f"SELECT COUNT(*) FROM {fts_table}")
@@ -3097,6 +3125,23 @@ def count_traces_since(since):
     n = c.fetchone()[0]
     conn.close()
     return n
+
+
+def chat_counts_by_dates(dates):
+    """（9-29 评审①）给定日期列表，**一次 GROUP BY** 取回每日聊天条数。
+    替掉调用侧"循环 N 天各点查一次 get_chats"（原先 14 次全表扫）。返回 {date: n}，只含库里真有的日子。只读。"""
+    ds = [str(d) for d in (dates or []) if d]
+    if not ds:
+        return {}
+    conn = _conn()
+    c = conn.cursor()
+    try:
+        rows = c.execute("SELECT date, COUNT(*) FROM chats WHERE date IN (%s) GROUP BY date"
+                         % ",".join("?" * len(ds)), tuple(ds)).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    conn.close()
+    return {str(d): int(n) for d, n in rows}
 
 
 def get_chats_stats():

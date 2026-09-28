@@ -54,11 +54,12 @@ def _librarian_materials():
         k = mt or "旧记分"
         mood_tally[k] = mood_tally.get(k, 0) + 1
     mood_line = "、".join(f"{k}×{v}" for k, v in sorted(mood_tally.items(), key=lambda x: -x[1]))
-    chat_counts = {}
-    for i in range(14):
-        d = (srv_state._srv().datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")   # 运行期反查：沙盘会换 s.datetime 假钟
-        chat_counts[d] = len(m.get_chats(d))
-    chat_line = " ".join(f"{k[5:]}:{v}" for k, v in sorted(chat_counts.items()))
+    # 9-29 评审①：原先逐日点查 14 次 get_chats（各一次全表扫）→ 现一次 GROUP BY；
+    # 日期仍按运行期假钟算（沙盘会换 s.datetime），缺的日子补 0 保持口径不变。
+    _days14 = [(srv_state._srv().datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
+               for i in range(14)]   # 运行期反查：沙盘会换 s.datetime 假钟
+    _cc = m.chat_counts_by_dates(_days14)
+    chat_line = " ".join(f"{d[5:]}:{_cc.get(d, 0)}" for d in sorted(_days14))
     threads = "；".join(f"#{tid}{t2}" for tid, _d, t2, _c in m.get_open_threads(8))
     # 线头定省（9-23 防积压批 B）：挂了 ≥7 天、近 7 天任何渠道都没动过的老线——摆上桌，
     # 供她终审时随手收或续（收线是她的笔，这里只显形不代收）。
