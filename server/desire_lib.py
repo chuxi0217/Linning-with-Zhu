@@ -13,6 +13,7 @@
 """
 
 import json
+import math
 import os
 import random
 import sqlite3
@@ -241,6 +242,41 @@ def _mood_today(now, *types):
         return False
 
 
+def _mood_last_gap_h(now, *types):
+    """最近一次这几种 mood 距今多少小时（她的笔：点火余温）。没有/查不动 → None。fail-open。"""
+    try:
+        if not types:
+            return None
+        con = _conn()
+        # 只认"此刻之前"的心情：时钟回拨/测试冻结时钟时，未来时间戳不能算成"刚发生"（会假点火）
+        q = ("SELECT created_at FROM moods WHERE type IN (%s) AND created_at <= ?"
+             " ORDER BY id DESC LIMIT 1" % ",".join("?" * len(types)))
+        row = con.execute(q, tuple(types) + (now.strftime("%Y-%m-%d %H:%M:%S"),)).fetchone()
+        con.close()
+        if not row or not row[0]:
+            return None
+        return max(0.0, (now - datetime.strptime(str(row[0]), "%Y-%m-%d %H:%M:%S")
+                         ).total_seconds() / 3600)
+    except Exception:
+        return None
+
+
+def _night_gap_min(hm):
+    """距下一次深夜窗(23:00)还有多少分钟（只用于 trace 文案）。"""
+    try:
+        return (23 * 60 - (int(str(hm)[:2]) * 60 + int(str(hm)[3:5]))) % (24 * 60)
+    except Exception:
+        return 0
+
+
+def _fmt_min(m):
+    try:
+        m = int(m)
+    except Exception:
+        return "?"
+    return f"{m // 60}h{m % 60:02d}m" if m >= 60 else f"{m}m"
+
+
 def _fmt_since(now, ts):
     if not ts:
         return "—"
@@ -254,9 +290,17 @@ def _fmt_since(now, ts):
 def tick_v2_shadow(now=None, present=None):
     """欲望 v2·并行影子：只算只记，绝不发、绝不用。fail-open 返回 dict|None。
 
-    数学（初值，读日志后拧）：growth_h=0.15×时段因子；在场未互动×0.5（减速不清零）；
-    不应期 1.5h ×0.5；「踏实/开心」×0.7；D += growth_h×Δh×(1−D)；「欲望」抬起点 max(D,0.35)；
-    深夜窗且 D>0.55 且不在场 → p=D²；命中=D→0.2 + 记 last_fire/last_satisfy。
+    数学（9-29 升级；初值，读日志后拧）：
+      生长 = desire_v2_growth(0.15) × 时段因子 × (0.5 在场) × (0.5 不应期)
+             × fac_ignite（点火） × (0.7 喂饱) × (0.8 委屈)
+      D += 生长×Δh×(1−D)（饱和生长）；今天有「欲望」→ 抬起点 max(D,0.35)；
+      「喂饱」→ 再按 Δh 线性回落 feed_decay（真回落，不只是减速）。
+      深夜窗(23:00–02:00) 且 D>threshold(0.55) 且不在场 → p=D² 掷骰；命中 D→0.2 + 记 last_fire。
+
+    A（9-29）：行尾追加**闸门因果 trace**（照积温 getTriggerTrace）——哪一闸挡的、差多少。
+    B（9-29）：**点火＝亲密余温**（最近一次「欲望」心情距今 h → ×(1+gain·e^(−h/τ))）；
+               **喂饱＝日常被接住**（今天有踏实/想你 且近 feed_window 无欲望 → ×0.7 ＋ 回落）；
+               **点火优先**——亲密语境不算被喂饱。输入全是她的笔（心情河），不引关键词表。
     """
     try:
         if not _cfg("desire_v2_shadow", False):
@@ -289,29 +333,75 @@ def tick_v2_shadow(now=None, present=None):
         if present:
             growth_h *= 0.5                     # 他在场未互动＝减速，不是被喂饱
         refractory_h = float(_cfg("desire_v2_refractory_h", 1.5))
+        since_fire_h = None
         if st.get("last_fire"):
             try:
-                sf = (now - datetime.strptime(st["last_fire"], "%Y-%m-%d %H:%M:%S")).total_seconds() / 3600
-                if 0 <= sf < refractory_h:
-                    growth_h *= 0.5             # 不应期
+                since_fire_h = (now - datetime.strptime(
+                    st["last_fire"], "%Y-%m-%d %H:%M:%S")).total_seconds() / 3600
+                if 0 <= since_fire_h < refractory_h:
+                    growth_h *= 0.5             # 不应期（减速，不是硬闸）
             except Exception:
-                pass
-        mood_warm = _mood_today(now, "踏实", "开心")   # 她的笔：降温
-        if mood_warm:
-            growth_h *= 0.7
+                since_fire_h = None
+        # ── B：点火 / 喂饱（输入全是她的笔）──
+        mood_warm = _mood_today(now, "踏实", "开心")      # 降温 / 喂饱信号
+        mood_want = _mood_today(now, "欲望")               # 抬起点
+        mood_sad = _mood_today(now, "委屈")
+        gap_want = _mood_last_gap_h(now, "欲望")           # 最近一次「欲望」距今（小时）
+        ignite_on = bool(_cfg("desire_v2_ignite", True))
+        fac_ignite = 1.0
+        if ignite_on and gap_want is not None:
+            _gain = float(_cfg("desire_v2_ignite_gain", 0.5))
+            _tau = max(0.5, float(_cfg("desire_v2_ignite_tau_h", 3)))
+            fac_ignite = 1.0 + _gain * math.exp(-gap_want / _tau)
+        _win = max(0.0, float(_cfg("desire_v2_feed_window_h", 6)))
+        fed = bool(ignite_on and mood_warm and (gap_want is None or gap_want > _win))
+        if fed:
+            growth_h *= 0.7                     # 被接住＝喂饱（点火优先，不双算）
+        if mood_sad:
+            growth_h *= float(_cfg("desire_v2_sad_damp", 0.8))
+        growth_h *= fac_ignite                  # 点火：亲密余温 → 涨得更快
         d = min(1.0, d + growth_h * dh * (1 - d))       # 饱和生长：越近 1 越慢（久别才浓）
-        mood_want = _mood_today(now, "欲望")            # 她的笔：抬起点
         if mood_want:
-            d = max(d, 0.35)
+            d = max(d, 0.35)                    # 她的笔：抬起点
+        feed_decay = float(_cfg("desire_v2_feed_decay", 0.05)) if fed else 0.0
+        if feed_decay:
+            d = max(0.0, d - feed_decay * dh)   # 喂饱：真回落（按 Δh 线性，避免自激）
+        # ── A：闸门因果（照积温 getTriggerTrace）──
         hm = now.strftime("%H:%M")
         night = ("23:00" <= hm or hm < "02:00")
-        fired = False
-        if night and d > float(_cfg("desire_v2_threshold", 0.55)) and not present:
-            if random.random() < d * d:                 # 锐化：p=D²（低档不冒泡）
+        thr = float(_cfg("desire_v2_threshold", 0.55))
+        gates, blocked = [], ""
+        if night:
+            gates.append(f"夜窗✓({hm})")
+        else:
+            gates.append("夜窗✗(差%s)" % _fmt_min(_night_gap_min(hm)))
+            blocked = "夜窗"
+        if not present:
+            gates.append("不在场✓")
+        else:
+            gates.append("在场✗")
+            blocked = blocked or "在场"
+        if d > thr:
+            gates.append(f"阈值✓({d:.2f}>{thr:.2f})")
+        else:
+            gates.append(f"阈值✗({d:.2f}，差{thr - d:.2f})")
+            blocked = blocked or "阈值"
+        if since_fire_h is not None and 0 <= since_fire_h < refractory_h:
+            gates.append(f"不应期×0.5({since_fire_h:.1f}h<{refractory_h:g}h)")
+        else:
+            gates.append("不应期✓(%s)" % _fmt_since(now, st.get("last_fire")))
+        fired, _roll, _p = False, None, None
+        if night and d > thr and not present:
+            _p = d * d
+            _roll = random.random()
+            if _roll < _p:                      # 锐化：p=D²（低档不冒泡）
                 fired = True
-                d = 0.2                                 # 表达＝满足（分层回落）
+                d = 0.2                         # 表达＝满足（分层回落）
                 st["last_fire"] = now.strftime("%Y-%m-%d %H:%M:%S")
                 st["last_satisfy"] = st["last_fire"]
+            gates.append(f"掷骰{'✓' if fired else '✗'}(p={_p:.2f}，掷{_roll:.2f})")
+        if blocked:
+            gates.append(f"← 被{blocked}挡")
         st["d"] = round(d, 4)
         st["last_tick"] = now.strftime("%Y-%m-%d %H:%M:%S")
         try:
@@ -321,14 +411,25 @@ def tick_v2_shadow(now=None, present=None):
             os.replace(tmp, V2_STATE)
         except Exception:
             pass
-        mstr = ("欲望" if mood_want else "") + ("/踏实开心" if mood_warm else "") or "无"
+        mstr = ("欲望" if mood_want else "") + ("/踏实开心" if mood_warm else "")
+        if mood_sad:
+            mstr += "/委屈"
+        mstr = mstr or "无"
+        _ex = []
+        if fac_ignite > 1.001:
+            _ex.append(f"点火×{fac_ignite:.2f}" + (f"({gap_want:.1f}h前)" if gap_want is not None else ""))
+        if fed:
+            _ex.append("喂饱")
         try:
             with open(V2_LOG, "a", encoding="utf-8") as f:
                 f.write(f"[{now.strftime('%F %T')}] D={d:.2f} | Δh={dh:.1f}h | 因子×{fac} | "
                         f"在场={'是' if present else '否'} | 心情={mstr} | "
-                        f"{'命中=③(→0.2)' if fired else '命中=否'} | "
+                        + ((" ".join(_ex) + " | ") if _ex else "")
+                        + f"{'命中=③(→0.2)' if fired else '命中=否'} | "
                         f"since_fire={_fmt_since(now, st.get('last_fire'))} "
-                        f"since_sat={_fmt_since(now, st.get('last_satisfy'))}\n")
+                        f"since_sat={_fmt_since(now, st.get('last_satisfy'))}"
+                        + (f" | trace: {' '.join(gates)}" if _cfg("desire_v2_trace", True) else "")
+                        + "\n")
         except Exception:
             pass
         return {"d": round(d, 3), "fire": fired}
