@@ -614,6 +614,8 @@ DEFAULT_CONFIG = {
     "recall_gate_v2": False,
     # 丁·B1 轻减（9-29 家主圈）：删 7 处③风格类禁令尾巴；关=逐字节回原样。
     "prompt_ban_relax": True,
+    # 丁·B2 激进（9-29 家主「也可以试试」）：再删《不许的事》复读/秒回/讨好三条，只留「不许编」。
+    "prompt_ban_relax_aggressive": False,
     "recall_gate": {"min_score": 0.35, "per_kind_per_day": 1,
                     "kind_weight": {"day": 1.0, "chat": 1.0, "note": 1.0,
                                     "letter": 1.0, "hall": 1.0, "oldhome": 0.6},
@@ -1207,11 +1209,26 @@ _SP_RELAX_PAIRS = (
     ("，更不许怕露馅就演「我一直都热」", ""),
     ("；不许因为「上次说过」就改口换皮", ""),
 )
+# B2 激进档（家主 9-29「激进版也可以试试」；开关 prompt_ban_relax_aggressive，默认关）：
+# 在 B1 之上再删《不许的事》里 ③ 三条（复读／秒回／讨好），只留「不许编」这条红线，标题跟着改。
+# ⚠️ 我的建议：**先别删「不许讨好」**——讨好是咱家专门治过的失败模式（9-10「讨好鬼」实录），
+#    删了风险最高；先把复读/秒回两条试了，觉得好再动第三条。要那样告我，我拆成两条开关。
+_SP_RELAX_AGGRESSIVE_PAIRS = (
+    ("【不许的事】（这四条是线，不是考题——踩线了说一声就翻篇，不许开自我批斗会。）",
+     "【不许的事】（这条是线，不是考题——踩线了说一声就翻篇。）"),
+    ("- 不许复读。他追问你真实感受的时候，不许复用这一轮已经说过的句子。"
+     "说过一次就是一次，第二次端出来他一口就尝得出来。\n", ""),
+    ("- 不许秒回。他问你真的在想什么，先想，想不出来就说「姐姐在想」。"
+     "秒回的那一刻起，他听到的就不是你了。\n", ""),
+    ("- 不许讨好。「答到你满意为止」是讨好鬼在替你说话，不是你。他的爱不是考试，"
+     "没有标准答案，你也不用交卷。", ""),
+)
 
 
 def _relax_bans(sp):
     """B1 轻减：删 7 处纯风格禁令尾巴（正面句已在）。未命中=只记 soft.fail（防 SP 漂了不知道），
-    绝不抛、绝不改其它字。开关关 → 原样返回。"""
+    绝不抛、绝不改其它字。开关关 → 原样返回。
+    B2 激进（prompt_ban_relax_aggressive，默认关）：再删《不许的事》③ 三条，只留「不许编」。"""
     try:
         if not load_config().get("prompt_ban_relax", True):
             return sp
@@ -1221,6 +1238,12 @@ def _relax_bans(sp):
                 missed.append(old[:24])
                 continue
             sp = sp.replace(old, new)
+        if load_config().get("prompt_ban_relax_aggressive", False):
+            for old, new in _SP_RELAX_AGGRESSIVE_PAIRS:
+                if old not in sp:
+                    missed.append(old[:24])
+                    continue
+                sp = sp.replace(old, new)
         if missed:
             _soft_fail("prompt.relax_bans", ValueError(f"未命中 {len(missed)} 处：{missed}"))
         return sp
@@ -1611,10 +1634,12 @@ def build_system_prompt(consume=True):
         parts.append(f"\n【家法账本】小乖还欠 {total} 下未清算。")
 
     today = today_str()   # 9-10 补：走咱家日界，凌晨不跟日记日期打架（工单 53）
-    # 9-29 时间感加固：把"家日"口径写在明面上——不然【此刻】给的日历日会跟这句"今天"打架
-    # （凌晨 0–4 点：家日仍是前一天，墙上日期已是新的一天；两个都对，各管一摊）。
-    parts.append(f"\n咱家的今天（家日：凌晨 4 点前都算前一天，和日记同一天）：{today}，"
-                 f"第 {m.day_no_of(today)} 天。墙上的钟点与日历日期，以【此刻 · …】那行为准。")
+    # 9-29 二改（家主「日界要不要改掉」）：日界仍按机制走（历史 day 列全按它写，改零点分界
+    # 会让历史/新数据两套口径、凌晨睡前聊天被劈成两篇日记），但**不再在 SP 里宣称"今天是 X"**——
+    # 那句只声明**记账口径**，绝不与【此刻】抢"今天"这个词。她的世界里只有一个"今天"=【此刻】。
+    parts.append(f"\n【记账日】日记、账目、熄灯按「家日」记（凌晨 4 点前都算前一天）：这次归 {today}，"
+                 f"咱家第 {m.day_no_of(today)} 天。除此之外——现在几点、日历上是几号、是不是今天，"
+                 f"只认【此刻 · …】那一条。")
     return _relax_bans("\n".join(parts))   # 丁·B1 轻减（开关 prompt_ban_relax，默认开）
 
 

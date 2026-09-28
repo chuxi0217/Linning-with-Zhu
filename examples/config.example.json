@@ -59,5 +59,7 @@
   "prompt_ban_relax": true,
   "inject_use_judge_v2": true,
   "recall_gate_shadow": true,
-  "recall_gate_v2": false
+  "recall_gate_v2": false,
+  "prompt_ban_relax_aggressive": false,
+  "health_api": false
 }
