@@ -2085,6 +2085,34 @@ def why_now_recent(days=7, limit=200):
         return []
 
 
+def why_now_counts(days=7):
+    """近 N 天 why_now 的**口径计数**（9-29 修）：开口/忍住笔数 + 最近一次开口。
+    病根：仪表此前拿 why_now_recent(7, 1000) 的**截断行**去数笔数——一周到 1000 行时
+    新一笔会把最老一笔挤出窗口，计数就少算（且"开口"会莫名减一）。计数与"最近一次开口"
+    各走一条聚合查询，不受 limit 影响。查不动 → {"opens":0,"holds":0,"last_open":""}。"""
+    out = {"opens": 0, "holds": 0, "last_open": ""}
+    try:
+        days = max(1, min(int(days or 7), 90))
+        since = (datetime.strptime(house_today_str(), "%Y-%m-%d")
+                 - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+        conn = _conn()
+        c = conn.cursor()
+        for dec, n in c.execute("SELECT decision, COUNT(*) FROM why_now WHERE day >= ? "
+                                "GROUP BY decision", (since,)).fetchall():
+            if dec == "open":
+                out["opens"] = int(n)
+            elif dec == "hold":
+                out["holds"] = int(n)
+        lo = c.execute("SELECT ts, reason FROM why_now WHERE day >= ? AND decision='open' "
+                       "ORDER BY id DESC LIMIT 1", (since,)).fetchone()
+        if lo:
+            out["last_open"] = f"{str(lo[0] or '')[11:16]} {lo[1] or ''}"
+        conn.close()
+    except Exception as e:
+        print(f"  [时机] why_now 计数失手（{e}）")
+    return out
+
+
 # ── 硬事实表（v0.1.36，9-18 优化批六·事实表 v0，升级方向 #6 前半）──
 # 病根：9-17 幻觉事件里「数字/日子凭印象说」是一类——生日、纪念日、日界这类钉过钉子的
 # 事实，不该靠记忆拼，该有表直给。只建表+读写；播种在 server 侧代码里（逐条带回源 note），

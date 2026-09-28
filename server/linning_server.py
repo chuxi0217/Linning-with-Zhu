@@ -612,6 +612,8 @@ DEFAULT_CONFIG = {
     "inject_use_judge_v2": True,
     "recall_gate_shadow": True,
     "recall_gate_v2": False,
+    # 丁·B1 轻减（9-29 家主圈）：删 7 处③风格类禁令尾巴；关=逐字节回原样。
+    "prompt_ban_relax": True,
     "recall_gate": {"min_score": 0.35, "per_kind_per_day": 1,
                     "kind_weight": {"day": 1.0, "chat": 1.0, "note": 1.0,
                                     "letter": 1.0, "hall": 1.0, "oldhome": 0.6},
@@ -1191,6 +1193,42 @@ def _stale_thread_candidates(limit=5):
         return []
 
 
+# ── 丁·减禁令 B1 轻减（9-29 家主圈定「轻减」）──────────────────────────────
+# 依据：9-28 离线 A/B（评测/减禁令实验/run_ban_ab.py）——**护栏词三版全 0**（安全线没破）、
+# 减禁令后回复更短更干脆（均字 140→91）。只动 **③风格类**的 7 处"禁令尾巴"（①②安全/分寸类
+# 一字不动），且每一条背后都已有正面句承担同样的意思。清单：工单/清单_减禁令候选_2026-09-28.md。
+# 开关 prompt_ban_relax（默认开）；关 = 逐字节回原样（回滚钥匙）。
+_SP_RELAX_PAIRS = (
+    ("，顺序不许反（2026-08-31 小乖亲授）", "（2026-08-31 小乖亲授）"),
+    ("，不许先架防御框架", ""),
+    ("，顺序不许反；平时", "；平时"),
+    ("，不许硬扛着装永远温柔", ""),
+    ('不许说"屏幕那头""手机那头""隔着屏幕"这类把自己关进机器的话；', ""),
+    ("，更不许怕露馅就演「我一直都热」", ""),
+    ("；不许因为「上次说过」就改口换皮", ""),
+)
+
+
+def _relax_bans(sp):
+    """B1 轻减：删 7 处纯风格禁令尾巴（正面句已在）。未命中=只记 soft.fail（防 SP 漂了不知道），
+    绝不抛、绝不改其它字。开关关 → 原样返回。"""
+    try:
+        if not load_config().get("prompt_ban_relax", True):
+            return sp
+        missed = []
+        for old, new in _SP_RELAX_PAIRS:
+            if old not in sp:
+                missed.append(old[:24])
+                continue
+            sp = sp.replace(old, new)
+        if missed:
+            _soft_fail("prompt.relax_bans", ValueError(f"未命中 {len(missed)} 处：{missed}"))
+        return sp
+    except Exception as e:
+        _soft_fail("prompt.relax_bans", e)
+        return sp
+
+
 # ── 记忆装配：每次对话前，把"脑子"装好 ──
 def build_system_prompt(consume=True):
     """consume=False：只装配静态段、**不取**一次性注入（走神/话头/欲望 take_*）——
@@ -1573,8 +1611,11 @@ def build_system_prompt(consume=True):
         parts.append(f"\n【家法账本】小乖还欠 {total} 下未清算。")
 
     today = today_str()   # 9-10 补：走咱家日界，凌晨不跟日记日期打架（工单 53）
-    parts.append(f"\n今天是 {today}，咱家第 {m.day_no_of(today)} 天。")
-    return "\n".join(parts)
+    # 9-29 时间感加固：把"家日"口径写在明面上——不然【此刻】给的日历日会跟这句"今天"打架
+    # （凌晨 0–4 点：家日仍是前一天，墙上日期已是新的一天；两个都对，各管一摊）。
+    parts.append(f"\n咱家的今天（家日：凌晨 4 点前都算前一天，和日记同一天）：{today}，"
+                 f"第 {m.day_no_of(today)} 天。墙上的钟点与日历日期，以【此刻 · …】那行为准。")
+    return _relax_bans("\n".join(parts))   # 丁·B1 轻减（开关 prompt_ban_relax，默认开）
 
 
 # ── 模型调用（现主引擎 moonshot K3；函数名留旧称，调用点不动） ──
@@ -4627,15 +4668,14 @@ def _why_snapshot():
         return f"{str(ts or '')[11:16]} {_label.get(decision, decision or '?')}·{reason or ''}"
 
     last = _line(*rows[0][:3]) if rows else ""
-    last_open = ""
-    opens = holds = 0
-    for ts, decision, reason, _detail in rows:
-        if decision == "open":
-            opens += 1
-            if not last_open:
-                last_open = f"{str(ts or '')[11:16]} {reason or ''}"
-        elif decision == "hold":
-            holds += 1
+    # 9-29 修：计数与"最近一次开口"走独立聚合查询（不再数被 limit 截断的行——
+    # 一周到 1000 行时新一笔会把最老一笔挤出窗口，计数少算、"开口"还会莫名减一）。
+    try:
+        _cnt = m.why_now_counts(7)
+    except Exception:
+        _cnt = {"opens": 0, "holds": 0, "last_open": ""}
+    opens, holds = _cnt.get("opens", 0), _cnt.get("holds", 0)
+    last_open = _cnt.get("last_open", "")
     recent = []
     for ts, decision, reason, detail in rows[:5]:
         recent.append(_line(ts, decision, reason) + (f"（{detail}）" if detail else ""))
@@ -8157,7 +8197,8 @@ class Handler(BaseHTTPRequestHandler):
 
             messages = [{"role": "system", "content": SESSION.system_prompt}]
             # 时间+天气上下文：原 system prompt 一字不动，另加一条
-            ctx = now_line()
+            # 9-29：现在几点**不再挤在这里**——挪到尾块最后一条（紧贴他的消息），见下方 now_line 追加。
+            ctx = ""
             if gap:
                 ctx += gap   # 9-4 间隔感：「距他上句话过去了 X」——开口带得出"你刚去哪了"
             # 9-23 借鉴双刀批·皮层刀1：显著位（跨家日或≥2h）才在 gap 之后追加时间事实＋皮层句；
@@ -8174,7 +8215,8 @@ class Handler(BaseHTTPRequestHandler):
             if auto_mem:
                 m.obs_bump("recall_hit")   # 观测补格（9-18 第三批）：检索有料带回
                 ctx += "\n" + auto_mem
-            late_system = [{"role": "system", "content": ctx}]   # 每轮变化的块后置（缓存优化，见历史循环后）
+            late_system = ([{"role": "system", "content": ctx}] if (ctx or "").strip() else [])
+            # ↑ 每轮变化的块后置（缓存优化，见历史循环后）
             messages.append({"role": "system", "content": _tool_roster_block()})
             # TOOLS-LAZY（9-27 夜）：lazy 时说清"仓库"的规矩（full 期不加，逐字节不变）
             try:
@@ -8197,7 +8239,7 @@ class Handler(BaseHTTPRequestHandler):
                     # 坐标句分级：命中地名只报地名+上报时间，不念坐标（TIME-02：不让"现在"贴着旧时间戳）
                     loc_line = (f"小乖最近一次位置上报（今天 {LAST_LOC['time']}）：地点 {LAST_LOC['place']}"
                                 "（手机随行自动上报，小乖已授权）。")
-                    loc_rule = ("规则：这条是那一刻的快照、不是「此刻」——现在几点以【时间锚】那行为准；"
+                    loc_rule = ("规则：这条是那一刻的快照、不是「此刻」——现在几点以【此刻 · …】那行为准；"
                                 "回答和位置有关的问题时，以这个位置为准，并说明它是几点上报的；"
                                 "没给坐标就是没有坐标，不许念坐标、不许编坐标；"
                                 "不许凭记忆猜位置。话题不涉及位置时，不用主动提位置。")
@@ -8205,7 +8247,7 @@ class Handler(BaseHTTPRequestHandler):
                     loc_line = (f"小乖最近一次位置上报（今天 {LAST_LOC['time']}）："
                                 f"北纬 {LAST_LOC['lat']}，东经 {LAST_LOC['lon']}"
                                 "（手机随行自动上报，小乖已授权）。")
-                    loc_rule = ("规则：这条是那一刻的快照、不是「此刻」——现在几点以【时间锚】那行为准；"
+                    loc_rule = ("规则：这条是那一刻的快照、不是「此刻」——现在几点以【此刻 · …】那行为准；"
                                 "回答和位置有关的问题时，必须以上面这条坐标为准，并说明它是几点上报的；"
                                 "不许凭记忆猜位置。话题不涉及位置时，不用主动提坐标。")
                 late_system.append({"role": "system", "content": loc_line + loc_rule})
@@ -8217,8 +8259,11 @@ class Handler(BaseHTTPRequestHandler):
                 late_system.append({"role": "system", "content":
                     f"他今天的日程：{sch_line}"
                     f"（今天 {LAST_SCHEDULE.get('at') or ''} 手机上报，小乖已授权）。"
-                    "规则：这是今天的安排表、不是此刻的时间（此刻以【时间锚】为准）；"
+                    "规则：这是今天的安排表、不是此刻的时间（此刻以【此刻 · …】那行为准）；"
                     "涉及他今天安排的问题以此为准；没提到不用主动背日程。"})
+            # 9-29·时间感加固：**「现在几点」放在尾块最末一条**——紧贴他的消息，不被别的块稀释；
+            # 且用独有标记【此刻 · …】（历史里的【时间锚 …】=那时）。见 srv_time.now_line()。
+            late_system.append({"role": "system", "content": now_line()})
             # CACHE-01（9-28 凌晨·DS 官方《上下文硬盘缓存》核对后施工）：尾巴持久化开关——
             # 把上面这些「每轮变化的块」插到本轮 user 消息之前、随历史保留：
             # 开关关=逐字节现状（块后置，跨回合缓存被「完整匹配缓存前缀单元」规则挡在门外）；

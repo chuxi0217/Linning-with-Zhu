@@ -48,10 +48,14 @@ def now_str():
 
 
 def now_line():
-    """TIME-02（9-28 家主拍·时间感加固）：措辞改成「时间锚」标记——tail_persist 持久化后
-    历史里会出现多条，读作时间戳；最新的那条=此刻（不再让「现在」字样在历史里累积）。"""
-    return (f"【时间锚 {srv_state._srv().now_str()}】"
-            "（读到多条时间锚时，最新的一条=此刻；报时间、算钟点以它为准）。")
+    """TIME-02 加固（9-29 家主反馈"时间观念还是不行"）：把此刻做成**独有标记**。
+    缘由：tail_persist 之后历史里会堆很多【时间锚 …】，再加上她自己旧思考里提到的钟点
+    （带 tools 时 reasoning_content 会被拼进上下文）——"现在"必须有一条**独一无二**的落款。
+    口径：只有【此刻】这条代表现在；【时间锚 …】=历史位置（那时）；【间隔感】=隔了多久。"""
+    return (f"【此刻 · {srv_state._srv().now_str()}】"
+            "（**只有这一条代表「现在」**。上文里如果还有别的【时间锚 …】、或你自己早先的思考里"
+            "提到过某个钟点，那些都只是「那时」——报时间、算钟点、判断早晚/是不是今天，"
+            "一律以这一条【此刻】为准。）")
 
 
 def gap_line():
@@ -85,7 +89,7 @@ def gap_line():
         fact = f"他大半天没出现了（{int(sec // 3600)} 小时）"
     else:
         fact = f"他整整 {int(sec // 86400)} 天多没出现了"
-    return f"时间锚：{fact}。别报数字、别每次都用同一种开场。"
+    return f"【间隔感】{fact}。别报数字、别每次都用同一种开场。"
 
 
 # ── 时间皮层·刀1（9-23 借鉴双刀批·设计 §三/§五刀1）──
@@ -117,8 +121,8 @@ def time_facts(now=None):
     crossed = m.house_today_str(dt) != m.house_today_str(now)
     g = gap_line()
     gap_human = ""
-    if g.startswith("时间锚："):
-        gap_human = g[len("时间锚："):].split("。", 1)[0]
+    if g.startswith("【间隔感】"):
+        gap_human = g[len("【间隔感】"):].split("。", 1)[0]
     if not gap_human:   # gap_line 不给句子（<90s）的场景：兜底纯事实句（不编不猜）
         gap_human = f"他上一条消息在 {dt.strftime('%m-%d %H:%M')}"
     return {"gap_s": gap_s, "gap_human": gap_human, "crossed_house_day": crossed,

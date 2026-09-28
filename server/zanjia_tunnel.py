@@ -23,6 +23,30 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 LOG = os.path.expanduser("~/zanjia-tunnel.log")
 HEARTBEAT = os.path.expanduser("~/.zanjia_tunnel_heartbeat")
+ERRFILE = os.path.expanduser("~/.zanjia_tunnel_ssh_err")
+
+# 9-29 断网教训（00:32–00:51 那次 502）：**网络断**时 ssh 是「秒退」的，旧启发式把"秒退"
+# 一律当"端口被占"→ 退避翻倍到 60s 并卡在那儿，于是断网期间 19 分钟才接回。
+# 现在按退出原因分流：断网类 → 快重试（等网回来）；端口占用类 → 才退避。
+_NET_DOWN_PAT = ("no route to host", "network is unreachable", "temporary failure in name resolution",
+                 "connection timed out", "operation timed out", "not responding",
+                 "connection reset", "connection refused", "broken pipe",
+                 "kex_exchange_identification", "closed by remote host")
+
+
+def _is_net_down(err_text):
+    e = (err_text or "").lower()
+    return any(p in e for p in _NET_DOWN_PAT)
+
+
+def _retry_delay(err_text, stable, delay, fast=5, cap=60):
+    """下一轮重连等待秒数（纯函数，便于套件测）。
+    - 活过 ≥60 秒的真断线 → fast（不倒退）；
+    - 退出信息像"断网"（No route to host / not responding…）→ fast（网一回来自动好，别干等）；
+    - 认不出来（多为 VPS 侧端口占用等）→ 退避加倍（cap 封顶），防每 5 秒白刷。"""
+    if stable >= 6 or _is_net_down(err_text):
+        return fast
+    return min(max(int(delay), fast) * 2, cap)
 
 
 def _cfg(key, default):
@@ -71,29 +95,39 @@ def main():
     lport = str(_cfg("local_port", "8024"))
     cmd = ["ssh", "-N",
            "-o", "ServerAliveInterval=20", "-o", "ServerAliveCountMax=3",
-           "-o", "ExitOnForwardFailure=yes", "-o", "BatchMode=yes",
+           "-o", "ConnectTimeout=10", "-o", "ExitOnForwardFailure=yes", "-o", "BatchMode=yes",
            "-R", f"{rport}:127.0.0.1:{lport}", vps]
     _log(f"保活启动：{' '.join(cmd)}")
     # 9-27 随身 WiFi 教训：弱网抖掉后，VPS 侧半死连接会把端口占一会儿（"forwarding failed"
-    # 死循环、每 5 秒白试一分钟）。改为：长命连接掉线→仍 5 秒快重连（不倒退）；
-    # 短命连接反复掉（端口占用典型）→ 退避加倍 5→10→20→40→60 封顶；连稳 60 秒后退避复位。
-    delay = 5
+    # 死循环、每 5 秒白试一分钟）。
+    # 9-29 加固：退避改**按退出原因分流**（见 _retry_delay）——断网类快重试、其余才退避；
+    # 并用 ConnectTimeout=10 让"连不上"快速失败（默认 TCP 超时要等两分钟）。
+    fast = int(_cfg("retry_fast", 5))
+    cap = int(_cfg("retry_max", 60))
+    delay = fast
     while True:
+        err_text = ""
         try:
             _beat()
-            p = subprocess.Popen(cmd, **_hide_kw())
-            stable = 0
-            while p.poll() is None:   # 连着的时候：每 10 秒续心跳
-                _beat()
-                time.sleep(10)
-                stable += 1
-            if stable >= 6:           # 活过 ≥60 秒：算真断线，保留 5 秒快重连
-                delay = 5
-            else:                     # 短命连接（端口占用等）：退避加倍，别白刷
-                delay = min(max(delay, 5) * 2, 60)
-            _log(f"ssh 掉了（退出码 {p.returncode}），{delay} 秒后重连")
+            with open(ERRFILE, "w", encoding="utf-8") as ef:
+                p = subprocess.Popen(cmd, stderr=ef, **_hide_kw())
+                stable = 0
+                while p.poll() is None:   # 连着的时候：每 10 秒续心跳
+                    _beat()
+                    time.sleep(10)
+                    stable += 1
+            try:
+                with open(ERRFILE, encoding="utf-8", errors="replace") as ef:
+                    err_text = ef.read()[-400:]
+            except Exception:
+                err_text = ""
+            delay = _retry_delay(err_text, stable, delay, fast=fast, cap=cap)
+            why = "断网/超时" if (stable < 6 and _is_net_down(err_text)) else (
+                "长命掉线" if stable >= 6 else "端口占用/未知")
+            _log(f"ssh 掉了（退出码 {p.returncode}·{why}），{delay} 秒后重连"
+                 + (f"｜{err_text.strip().splitlines()[-1][:80]}" if err_text.strip() else ""))
         except Exception as e:
-            delay = min(max(delay, 5) * 2, 60)
+            delay = min(max(int(delay), fast) * 2, cap)
             _log(f"拉起失败（{e}），{delay} 秒后重试")
         _beat()
         time.sleep(delay)

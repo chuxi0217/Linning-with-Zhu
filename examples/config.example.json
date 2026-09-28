@@ -53,5 +53,11 @@
   "longing_t1_h": 3,
   "longing_a": 0.25,
   "longing_cap": 1.0,
-  "grudge_half_life_h": 0
+  "grudge_half_life_h": 0,
+  "hist_time_anchor": true,
+  "hist_anchor_min": 30,
+  "prompt_ban_relax": true,
+  "inject_use_judge_v2": true,
+  "recall_gate_shadow": true,
+  "recall_gate_v2": false
 }
