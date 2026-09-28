@@ -16,6 +16,7 @@ server 的 _tunnel_probe 认它当探针（跨平台；Windows 没有 pgrep）�
 """
 import json
 import os
+import signal
 import subprocess
 import time
 
@@ -89,6 +90,50 @@ def _hide_kw():
     return {"creationflags": 0x08000000, "startupinfo": si}
 
 
+def _is_self_forward(args, marker):
+    """一行 ps 的 args 是不是「自家反隧道 ssh」——必须 -N 且命令行含精确转发串。纯函数，便于套件。"""
+    return bool(args) and args.startswith("ssh ") and " -N " in args and (marker in args)
+
+
+def _kill_stale_self(marker):
+    """清掉**自家残留**的反隧道 ssh。
+
+    9-29 02:06–02:21 实案：server 重启后 `_ensure_tunnel` 拉起新管理器，可**上一条 ssh 还活着**
+    （成了孤儿），VPS 那头的端口被它占着 → 新管理器每次都 "remote port forwarding failed"，
+    退避 60 秒空转十几分钟（门其实还通，靠的就是那条孤儿）。换管理器时先清掉自家的，端口就腾出来了。
+    只杀命令行**精确匹配**那个转发串的 ssh；绝不碰别的 ssh 会话。返回清掉的条数。"""
+    n = 0
+    try:
+        out = subprocess.run(["ps", "-eo", "pid=,args="], capture_output=True, text=True,
+                             timeout=5).stdout
+    except Exception:
+        return 0
+    me = os.getpid()
+    for line in out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        pid_s, args = parts
+        if not _is_self_forward(args, marker):
+            continue
+        try:
+            pid = int(pid_s)
+        except Exception:
+            continue
+        if pid == me:
+            continue
+        try:
+            os.kill(pid, signal.SIGTERM)
+            n += 1
+            _log(f"清掉自家残留 ssh（pid {pid}）——它占着 VPS 那头的 {marker}")
+        except Exception as e:
+            _log(f"清残留 ssh 失手（pid {pid}）：{e}")
+    return n
+
+
 def main():
     vps = str(_cfg("vps", "root@your-vps.example"))
     rport = str(_cfg("remote_port", "18024"))
@@ -104,6 +149,8 @@ def main():
     # 并用 ConnectTimeout=10 让"连不上"快速失败（默认 TCP 超时要等两分钟）。
     fast = int(_cfg("retry_fast", 5))
     cap = int(_cfg("retry_max", 60))
+    marker = f"{rport}:127.0.0.1:{lport}"
+    _kill_stale_self(marker)      # 启动先清自家孤儿（换管理器时最常见）
     delay = fast
     while True:
         err_text = ""
@@ -122,6 +169,8 @@ def main():
             except Exception:
                 err_text = ""
             delay = _retry_delay(err_text, stable, delay, fast=fast, cap=cap)
+            if "remote port forwarding failed" in err_text.lower():
+                _kill_stale_self(marker)   # 端口被自家孤儿占着 → 当场清掉再重试
             why = "断网/超时" if (stable < 6 and _is_net_down(err_text)) else (
                 "长命掉线" if stable >= 6 else "端口占用/未知")
             _log(f"ssh 掉了（退出码 {p.returncode}·{why}），{delay} 秒后重连"
