@@ -18,6 +18,8 @@ import {
   FS_TITLE, FS_BODY, FS_SUB, FS_AUX, R_TAIL, R_SM, R_MD, R_LG, R_XL, R_PILL, R_PILL_XL,
   M_PAGE, NIGHT_MAP
 } from '../common/AppStyles';
+// 9-29 §12 app 显示面：只读信息页骨架（家的体检 / 夜里 / 随手记 三页共用）——拆分第一块砖
+import { InfoPage, InfoGroup } from './InfoPage';
 
 const MAX_EDGE: number = 1024;
 const JPEG_QUALITY: number = 70;
@@ -61,6 +63,13 @@ let FAVORITES_URL: string = BASE_URL + '/api/favorites';       // 收藏夹清�
 let FAVORITES_BASE: string = BASE_URL + '/favorites/';         // 收藏夹图根（照 PHOTOS_BASE 家风，图 URL 尾巴带 ?token=）
 let WALL_URL: string = BASE_URL + '/api/wall';                 // 门牌墙（b）
 let LIB_REPORTS_URL: string = BASE_URL + '/api/lib_reports';   // 周报列表/开卷（d；服务端本批配套）
+// ── 9-29 §12 app 显示面（家主令「能显示的都显示，除她的隐私空间」）──
+// 全是只读口；隐私边界：影子读数**不带她的原文**、睡眠整理的牵线**只报条数**、台账**私档段不出**。
+let HEALTH_URL: string = BASE_URL + '/api/health';     // 家的体检·观测层（9-28 柔性批；开关 health_api）
+let SHADOWS_URL: string = BASE_URL + '/api/shadows';   // 家的体检·影子读数（9-29 服务端新件）
+let MECH_URL: string = BASE_URL + '/api/mech';         // 家的体检·机制台账公开段（9-29 服务端新件）
+let DREAM_URL: string = BASE_URL + '/api/dream';       // 夜里·睡眠整理（9-29 服务端新件）
+let NOTES_URL: string = BASE_URL + '/api/notes';       // 随手记（9-9 现成，此前 app 没接）
 
 // 换门牌：一处改全部（空串=回默认 Windows 门牌）
 function applyServerBase(base: string): void {
@@ -95,6 +104,11 @@ function applyServerBase(base: string): void {
   FAVORITES_BASE = b + '/favorites/';
   WALL_URL = b + '/api/wall';
   LIB_REPORTS_URL = b + '/api/lib_reports';
+  HEALTH_URL = b + '/api/health';
+  SHADOWS_URL = b + '/api/shadows';
+  MECH_URL = b + '/api/mech';
+  DREAM_URL = b + '/api/dream';
+  NOTES_URL = b + '/api/notes';
 }
 const HTTP_TIMEOUT_MS: number = 30000;
 const CHAT_TIMEOUT_MS: number = 90000;   // /api/chat 专用：姐姐查图书证会多花时间，放宽到 90s
@@ -474,6 +488,173 @@ interface LibReportDocResp {
 interface PromiseResp {
   promise?: string;
   first?: string | null;   // FE-02 门楣：今天日记的首句（server 只加不改，没有则 null）
+}
+
+// ── 9-29 §12 app 显示面：三只只读口的返回形状（字段全 optional，缺项照缺席渲染，不拿 0 冒充）──
+// 家的体检·观测层 /api/health（9-28 柔性批已上线；health_api 关着时 404）
+interface HealthSoftTop {
+  where?: string;
+  n?: number;
+}
+
+interface HealthSoftFail {
+  days?: number;
+  total?: number;
+  top3?: HealthSoftTop[];
+}
+
+interface HealthEmbed {
+  endpoint?: string;
+  model?: string;
+}
+
+interface HealthBackup {
+  file?: string;
+  at?: string;
+  age_h?: number;
+}
+
+interface HealthMechFace {
+  tunnel?: boolean;
+  tunnel_up?: boolean;
+  garden_bridge?: boolean;
+  embedding?: HealthEmbed | null;
+  last_backup?: HealthBackup | null;
+}
+
+interface HealthLedgerScene {
+  scene?: string;
+  calls?: number;
+  in?: number;
+  out?: number;
+  cached?: number;
+}
+
+interface HealthLedger {
+  date?: string;
+  calls?: number;
+  in_tokens?: number;
+  out_tokens?: number;
+  cached_tokens?: number;
+  cache_hit?: number | null;
+  cost_est?: number | null;
+  cost_mode?: string;
+  scenes?: HealthLedgerScene[];
+}
+
+interface HealthResp {
+  now?: string;
+  server_up_min?: number | null;
+  soft_fail?: HealthSoftFail | null;
+  mechanisms?: HealthMechFace | null;
+  ledger_today?: HealthLedger | null;
+}
+
+// 家的体检·影子读数 /api/shadows（9-29 服务端新件）——只有读数与条数，**不带她的原文**
+interface ShDesire {
+  D?: number | null;
+  blocked_by?: string | null;
+  ticks_today?: number;
+  fired_today?: number;
+  at?: string | null;
+}
+
+interface ShSingle {
+  tier?: number | null;
+  p?: number | null;
+  blocked_by?: string | null;
+  ticks_today?: number;
+  hits_today?: number;
+  at?: string | null;
+}
+
+interface ShRecall {
+  walks_today?: number;
+  cards_today?: number;
+  at?: string | null;
+}
+
+interface ShHuatou {
+  collected_today?: number;
+  delivered_today?: number;
+  said_today?: number;
+  held_today?: number;
+  at?: string | null;
+}
+
+interface ShGate {
+  samples_24h?: number;
+  delivered?: number;
+  kept?: number;
+  dropped?: number;
+  empty_rate?: number | null;
+}
+
+interface ShadowsResp {
+  ok?: boolean;
+  now?: string;
+  desire_v2?: ShDesire | null;
+  single?: ShSingle | null;
+  recall?: ShRecall | null;
+  huatou?: ShHuatou | null;
+  gate?: ShGate | null;
+}
+
+// 家的体检·机制台账公开段 /api/mech（9-29 服务端新件；私档段服务端已剔）
+interface MechSection {
+  title?: string;
+  text?: string;
+}
+
+interface MechResp {
+  ok?: boolean;
+  generated?: string | null;
+  sections?: MechSection[];
+}
+
+// 夜里·睡眠整理 /api/dream（9-29 服务端新件；牵线只给条数）
+interface DreamHeat {
+  hot?: number;
+  warm?: number;
+  cold?: number;
+}
+
+interface DreamMerge {
+  a?: string;
+  a_ref?: string;
+  b?: string;
+  b_ref?: string;
+  ratio?: number;
+}
+
+interface DreamReplay {
+  day_no?: number;
+  title?: string;
+  mood?: string;
+}
+
+interface DreamNight {
+  date?: string;
+  heat?: DreamHeat | null;
+  merge?: DreamMerge[];
+  link_n?: number;
+  replay?: DreamReplay[];
+}
+
+interface DreamResp {
+  ok?: boolean;
+  nights?: DreamNight[];
+}
+
+// 随手记 /api/notes（9-9 现成，此前 app 没接）
+interface NoteItem {
+  id?: number;
+  text?: string;
+  time?: string;
+}
+
+interface NotesResp {
+  notes?: NoteItem[];
 }
 
 // ── 轻动效（工单 FE-02）：按压反馈只动透明度——合成器逐帧廉价，120Hz 友好，不用毛玻璃不吃重阴影 ──
@@ -1670,6 +1851,20 @@ struct Index {
   @State repDocText: string = '';
   @State traceOpenId: number = -1;         // 点开的行（trace 见全文）
   @State traceMsg: string = '';            // 取数失败一句（诚实，不装空）
+  // ── 9-29 §12 app 显示面（家主令「能显示的都显示，除她的隐私空间」）──
+  // 三页共用只读骨架 InfoPage；取数与文案整形在这边（它手里有门牌与钥匙），组件只管画。
+  @State healthOpen: boolean = false;      // 🩺 家的体检
+  @State healthBusy: boolean = false;
+  @State healthMsg: string = '';
+  @State healthGroups: InfoGroup[] = [];
+  @State nightOpen: boolean = false;       // 🌙 夜里（睡眠整理）
+  @State nightBusy: boolean = false;
+  @State nightMsg: string = '';
+  @State nightGroups: InfoGroup[] = [];
+  @State notesOpen: boolean = false;       // 📝 随手记（她的小本本）
+  @State notesBusy: boolean = false;
+  @State notesMsg: string = '';
+  @State notesGroups: InfoGroup[] = [];
   // ── 姐姐思考中 ──
   @State thinkingSec: number = 0;
   @State thinkPeek: boolean = false;         // 💭 默认折叠（9-9）：流式思考点一下才偷看
@@ -1885,7 +2080,8 @@ struct Index {
     .backgroundColor(this.dk(C_BG))
     .bindContentCover(this.thinkingOpen || this.riverFullOpen || this.readingOpen || this.logsOpen
       || this.statsOpen || this.archiveOpen || this.favOpen || this.wallOpen || this.repOpen
-      || this.imgPreviewUrl !== '' || this.xgEditOpen || this.kbEditOpen, this.CoverHub, {
+      || this.imgPreviewUrl !== '' || this.xgEditOpen || this.kbEditOpen
+      || this.healthOpen || this.nightOpen || this.notesOpen, this.CoverHub, {
       // 系统返回键/侧滑也会走这里：横屏全看被返回键关掉时，顺手把方向转回竖屏
       onWillDismiss: (action: DismissContentCoverAction) => {
         if (this.riverFullOpen) {
@@ -1926,6 +2122,12 @@ struct Index {
           this.xgEditText = '';
         } else if (this.kbEditOpen) {
           this.kbEditOpen = false;   // 9-17 夜：课表编辑器——关闭=放弃本次编辑
+        } else if (this.healthOpen) {
+          this.healthOpen = false;   // 9-29 §12：家的体检（返回键关页）
+        } else if (this.nightOpen) {
+          this.nightOpen = false;    // 9-29 §12：夜里
+        } else if (this.notesOpen) {
+          this.notesOpen = false;    // 9-29 §12：随手记
         } else {
           this.thinkingOpen = false;
         }
@@ -2373,6 +2575,12 @@ struct Index {
       this.XgWordsEditPage()    // 9-17 夜：改这封信（全屏，替代原 120vp 内联小框）
     } else if (this.kbEditOpen) {
       this.KbEditPage()         // 9-17 夜：周课表图形化编辑器
+    } else if (this.healthOpen) {
+      this.HealthPage()         // 9-29 §12：🩺 家的体检（只读；三页共用 InfoPage 骨架）
+    } else if (this.nightOpen) {
+      this.NightPage()          // 9-29 §12：🌙 夜里（睡眠整理）
+    } else if (this.notesOpen) {
+      this.NotesPage()          // 9-29 §12：📝 随手记
     }
   }
 
@@ -3963,6 +4171,65 @@ struct Index {
     return this.wanTxt(p ? p.cn_chars : null);
   }
 
+  // ── 9-29 §12：三页只读信息页（骨架在 pages/InfoPage.ets；这里只做 props 装配）──
+  // 拆出去的好处：这三页的排版/空态/按压反馈都在 InfoPage 一处，本文件只管"取数 + 喂进去"。
+  @Builder
+  HealthPage() {
+    InfoPage({
+      nightPref: this.nightPref,
+      topPad: this.safeTopPad,
+      icon: '🩺',
+      title: '家的体检',
+      busy: this.healthBusy,
+      msg: this.healthMsg,
+      groups: this.healthGroups,
+      onRefresh: () => {
+        this.fetchHealth();
+      },
+      onClose: () => {
+        this.healthOpen = false;
+      }
+    })
+  }
+
+  @Builder
+  NightPage() {
+    InfoPage({
+      nightPref: this.nightPref,
+      topPad: this.safeTopPad,
+      icon: '🌙',
+      title: '夜里',
+      busy: this.nightBusy,
+      msg: this.nightMsg,
+      groups: this.nightGroups,
+      onRefresh: () => {
+        this.fetchDream();
+      },
+      onClose: () => {
+        this.nightOpen = false;
+      }
+    })
+  }
+
+  @Builder
+  NotesPage() {
+    InfoPage({
+      nightPref: this.nightPref,
+      topPad: this.safeTopPad,
+      icon: '📝',
+      title: '随手记',
+      busy: this.notesBusy,
+      msg: this.notesMsg,
+      groups: this.notesGroups,
+      onRefresh: () => {
+        this.fetchNotes();
+      },
+      onClose: () => {
+        this.notesOpen = false;
+      }
+    })
+  }
+
   // ── 档案馆（9-23 V-2「全都看得见」）：开门取数 ──
   private openArchive(): void {
     this.archiveOpen = true;
@@ -4848,6 +5115,57 @@ struct Index {
             .fontColor(this.dk(C_TEXT_3))
             .width('100%')
         }
+      }
+      .padding(12)
+      .backgroundColor(this.dk(C_CARD))
+      .borderRadius(R_MD)
+      .width('100%')
+
+  // ── 9-29 §12：家里的事（三只只读页入口）——家主令「能显示的都显示，除她的隐私空间」──
+      Column({ space: 8 }) {
+        Text('📊 家里的事（只读）')
+          .fontSize(FS_SUB)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.dk(C_TEXT))
+        Row({ space: 8 }) {
+          Text('家的体检')
+            .fontSize(FS_SUB)
+            .fontColor(this.dk(C_WHITE))
+            .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+            .borderRadius(R_PILL)
+            .backgroundColor(this.dk(C_ACCENT))
+            .stateStyles({ pressed: pressDim, normal: pressFull })
+            .onClick(() => {
+              this.openHealth();
+            })
+          Text('夜里')
+            .fontSize(FS_SUB)
+            .fontColor(this.dk(C_WHITE))
+            .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+            .borderRadius(R_PILL)
+            .backgroundColor(this.dk(C_ACCENT))
+            .stateStyles({ pressed: pressDim, normal: pressFull })
+            .onClick(() => {
+              this.openNight();
+            })
+          Text('随手记')
+            .fontSize(FS_SUB)
+            .fontColor(this.dk(C_WHITE))
+            .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+            .borderRadius(R_PILL)
+            .backgroundColor(this.dk(C_ACCENT))
+            .stateStyles({ pressed: pressDim, normal: pressFull })
+            .onClick(() => {
+              this.openNotes();
+            })
+          Blank()
+        }
+        .width('100%')
+        Text('只读：家的账与机制（健康 / 影子读数 / 机制台账 / 当日花费 / 睡眠整理 / 小本本）。'
+          + '她的原文——走神那句、攒着的话、牵线原文、忍住档、私档——不在这三页。')
+          .fontSize(FS_AUX)
+          .fontColor(this.dk(C_TEXT_5))
+          .width('100%')
       }
       .padding(12)
       .backgroundColor(this.dk(C_CARD))
@@ -7644,6 +7962,344 @@ struct Index {
       return '来找过他';
     }
     return ending;
+  }
+
+  // ══ 9-29 §12 app 显示面（家主令「能显示的都显示，除她的隐私空间」）═══════════════
+  // 三页共用 pages/InfoPage 的只读骨架；**取数与文案整形都在这边**（它手里有门牌与钥匙）。
+  // 隐私复核（服务端已保证，展示层再守一道）：
+  //   · 影子读数只出**数**与**条数**——走神那句、攒着的话、忍住档原文一律不取不用；
+  //   · 睡眠整理的牵线**只报条数**（原文归她）；台账**私档段**（密钥/单价）服务端已剔。
+  private openHealth(): void {
+    this.healthOpen = true;
+    this.fetchHealth();
+  }
+
+  private async fetchHealth(): Promise<void> {
+    if (this.healthBusy) {
+      return;
+    }
+    this.healthBusy = true;
+    this.healthMsg = '';
+    const groups: InfoGroup[] = [];
+    // ① 观测层 /api/health（9-28 柔性批；health_api 关着时 404，不影响下面两格）
+    const req = http.createHttp();
+    try {
+      const res = await req.request(HEALTH_URL, {
+        method: http.RequestMethod.GET,
+        header: { 'Authorization': DOOR_AUTH },
+        connectTimeout: HTTP_TIMEOUT_MS,
+        readTimeout: HTTP_TIMEOUT_MS
+      });
+      if (res.responseCode === 200) {
+        this.pushHealthGroups(groups, JSON.parse(res.result as string) as HealthResp);
+      } else if (res.responseCode === 404) {
+        this.healthMsg = '体检口没开：server 的 health_api 关着。下面照旧给影子与台账。';
+      } else {
+        this.healthMsg = `体检没数上来（HTTP ${res.responseCode}）`;
+      }
+    } catch (err) {
+      this.healthMsg = '体检口没推开：' + errMsg(err as Object);
+    } finally {
+      req.destroy();
+    }
+    // ② 影子读数 + ③ 台账公开段（各自单独取，谁挂谁诚实说，不互相连坐）
+    groups.push({ title: '影子读数（今天）', lines: await this.fetchShadowLines() });
+    const mech: InfoGroup[] = await this.fetchMechGroups();
+    for (let i = 0; i < mech.length; i++) {
+      groups.push(mech[i]);
+    }
+    this.healthGroups = groups;
+    this.healthBusy = false;
+  }
+
+  // 观测层 → 人话：开机 / 软失败 / 机制面（门·桥·嵌入·备份）/ 当日账
+  private pushHealthGroups(groups: InfoGroup[], h: HealthResp): void {
+    const up: number | null | undefined = h.server_up_min;
+    groups.push({ title: '这个家（此刻）', lines: [`server 连续在岗 ${up === null || up === undefined ? '—' : `${up}`} 分钟`] });
+    const sf: HealthSoftFail | null | undefined = h.soft_fail;
+    if (sf === null || sf === undefined) {
+      groups.push({ title: '软失败（近 7 天）', lines: ['（这一格没数到）'] });
+    } else {
+      const lines: string[] = [`共 ${sf.total ?? 0} 次降级（不伪装正常，坏在哪记在哪）`];
+      const top: HealthSoftTop[] = sf.top3 ?? [];
+      for (let i = 0; i < top.length; i++) {
+        lines.push(`　${top[i].where ?? '?'}：${top[i].n ?? 0} 次`);
+      }
+      groups.push({ title: '软失败（近 7 天）', lines: lines });
+    }
+    const mf: HealthMechFace | null | undefined = h.mechanisms;
+    if (mf === null || mf === undefined) {
+      groups.push({ title: '机制面（在不在岗）', lines: ['（这一格没数到）'] });
+    } else {
+      const lines: string[] = [];
+      lines.push(`反向隧道：${mf.tunnel === true ? '在跑' : '没在跑'}${mf.tunnel_up === true ? '（门真连着）' : mf.tunnel_up === false ? '（心跳新鲜但门没通）' : ''}`);
+      lines.push(`Garden 桥：${mf.garden_bridge === true ? '在岗' : '不在岗'}`);
+      const em: HealthEmbed | null | undefined = mf.embedding;
+      lines.push(em === null || em === undefined ? '嵌入层：诚实缺席' : `嵌入层：${em.model ?? '?'} @ ${em.endpoint ?? '?'}`);
+      const bk: HealthBackup | null | undefined = mf.last_backup;
+      if (bk === null || bk === undefined) {
+        lines.push('上次自动备份：没查到');
+      } else {
+        lines.push(`上次自动备份：${bk.at ?? '?'}（${bk.age_h ?? '—'} 小时前）`);
+      }
+      groups.push({ title: '机制面（在不在岗）', lines: lines });
+    }
+    const lg: HealthLedger | null | undefined = h.ledger_today;
+    if (lg === null || lg === undefined) {
+      groups.push({ title: '今天的账', lines: ['（这一格没数到）'] });
+    } else {
+      const lines: string[] = [];
+      const hit: number | null | undefined = lg.cache_hit;
+      lines.push(`调用 ${lg.calls ?? 0} 次 · 进 ${this.wanTxt(lg.in_tokens)} / 出 ${this.wanTxt(lg.out_tokens)} tokens`
+        + `（缓存命中 ${hit === null || hit === undefined ? '—' : `${Math.round(hit * 100)}%`}）`);
+      const cost: number | null | undefined = lg.cost_est;
+      lines.push(cost === null || cost === undefined
+        ? '估价：没配单价（私档 _price_* 空着）——只报 tokens，不造假钱'
+        : `估价：约 ¥${cost.toFixed(2)}（单价取自私档，不在这儿回显）`);
+      const sc: HealthLedgerScene[] = lg.scenes ?? [];
+      for (let i = 0; i < sc.length; i++) {
+        lines.push(`　${sc[i].scene ?? '?'}：${sc[i].calls ?? 0} 次 · 进 ${this.wanTxt(sc[i].in)} / 出 ${this.wanTxt(sc[i].out)}`);
+      }
+      groups.push({ title: '今天的账', lines: lines });
+    }
+  }
+
+  // 影子读数 /api/shadows → 人话（**只出数与条数**）
+  private async fetchShadowLines(): Promise<string[]> {
+    const lines: string[] = [];
+    const req = http.createHttp();
+    try {
+      const res = await req.request(SHADOWS_URL, {
+        method: http.RequestMethod.GET,
+        header: { 'Authorization': DOOR_AUTH },
+        connectTimeout: HTTP_TIMEOUT_MS,
+        readTimeout: HTTP_TIMEOUT_MS
+      });
+      if (res.responseCode !== 200) {
+        return [`（没数到：HTTP ${res.responseCode}）`];
+      }
+      const d = JSON.parse(res.result as string) as ShadowsResp;
+      const de: ShDesire | null | undefined = d.desire_v2;
+      if (de === null || de === undefined) {
+        lines.push('欲望：这一格没数到');
+      } else {
+        lines.push(`欲望：D=${de.D === null || de.D === undefined ? '—' : `${de.D}`}`
+          + ` · ${de.blocked_by === null || de.blocked_by === undefined ? '没被挡' : `被${de.blocked_by}挡`}`
+          + ` · 今日 ${de.ticks_today ?? 0} 拍 / 掷中 ${de.fired_today ?? 0}`);
+      }
+      const sg: ShSingle | null | undefined = d.single;
+      if (sg === null || sg === undefined) {
+        lines.push('单触发：这一格没数到');
+      } else {
+        lines.push(`单触发：档 ${sg.tier ?? '—'} · p≈${sg.p ?? '—'}`
+          + ` · ${sg.blocked_by === null || sg.blocked_by === undefined ? '没被挡' : `被「${sg.blocked_by}」挡`}`
+          + ` · 今日 ${sg.ticks_today ?? 0} 拍 / 掷中 ${sg.hits_today ?? 0}`);
+      }
+      const rc: ShRecall | null | undefined = d.recall;
+      lines.push(rc === null || rc === undefined
+        ? '走神：这一格没数到'
+        : `走神：今日 ${rc.walks_today ?? 0} 次（其中翻卡 ${rc.cards_today ?? 0} 次）——她想起的那句是她的，不在这页`);
+      const ht: ShHuatou | null | undefined = d.huatou;
+      lines.push(ht === null || ht === undefined
+        ? '话头：这一格没数到'
+        : `话头：今日攒 ${ht.collected_today ?? 0} / 递到眼前 ${ht.delivered_today ?? 0}`
+        + ` / 真说出 ${ht.said_today ?? 0} / 忍住 ${ht.held_today ?? 0} 条（原话归她）`);
+      const gt: ShGate | null | undefined = d.gate;
+      if (gt === null || gt === undefined) {
+        lines.push('检索门槛：这一格没数到');
+      } else {
+        const er: number | null | undefined = gt.empty_rate;
+        lines.push(`检索门槛（近 24h）：${gt.samples_24h ?? 0} 拍 · 递 ${gt.delivered ?? 0} / 留 ${gt.kept ?? 0} / 丢 ${gt.dropped ?? 0}`
+          + ` · 空手率 ${er === null || er === undefined ? '—' : `${Math.round(er * 100)}%`}`);
+      }
+    } catch (err) {
+      return ['（影子读数没取到：' + errMsg(err as Object) + '）'];
+    } finally {
+      req.destroy();
+    }
+    return lines;
+  }
+
+  // 机制台账公开段 /api/mech → 分组（服务端已剔私档段；这里把表格行压成「名 现值」一行行）
+  private async fetchMechGroups(): Promise<InfoGroup[]> {
+    const out: InfoGroup[] = [];
+    const req = http.createHttp();
+    try {
+      const res = await req.request(MECH_URL, {
+        method: http.RequestMethod.GET,
+        header: { 'Authorization': DOOR_AUTH },
+        connectTimeout: HTTP_TIMEOUT_MS,
+        readTimeout: HTTP_TIMEOUT_MS
+      });
+      if (res.responseCode !== 200) {
+        out.push({ title: '机制台账·公开段', lines: [`（没数到：HTTP ${res.responseCode}）`] });
+        return out;
+      }
+      const d = JSON.parse(res.result as string) as MechResp;
+      const secs: MechSection[] = d.sections ?? [];
+      if (secs.length === 0) {
+        out.push({ title: '机制台账·公开段', lines: ['（台账还没生成——跑 tools/make_mechanism_ledger.py）'] });
+        return out;
+      }
+      for (let i = 0; i < secs.length; i++) {
+        out.push({ title: secs[i].title ?? '台账', lines: this.mechTextToLines(secs[i].text ?? '') });
+      }
+    } catch (err) {
+      out.push({ title: '机制台账·公开段', lines: ['（没取到：' + errMsg(err as Object) + '）'] });
+    } finally {
+      req.destroy();
+    }
+    return out;
+  }
+
+  // markdown 表格行 → 「`名` = 现值」人话行；非表格行原样（缩进两格）
+  private mechTextToLines(text: string): string[] {
+    const out: string[] = [];
+    const rows: string[] = text.split('\n');
+    for (let i = 0; i < rows.length; i++) {
+      const ln: string = rows[i].trim();
+      if (ln === '' || ln.startsWith('|---') || ln.startsWith('| ---')) {
+        continue;
+      }
+      if (!ln.startsWith('|')) {
+        out.push('　' + ln);
+        continue;
+      }
+      const cells: string[] = ln.split('|');
+      const parts: string[] = [];
+      for (let k = 0; k < cells.length; k++) {
+        const c: string = cells[k].trim();
+        if (c !== '') {
+          parts.push(c);
+        }
+      }
+      if (parts.length === 0 || parts[0] === '开关名' || parts[0] === '键名') {
+        continue;   // 表头跳过
+      }
+      let line: string = '　' + parts[0];
+      if (parts.length >= 3) {
+        line += ` ＝ ${parts[2]}`;
+      }
+      if (parts.length >= 5 && parts[4] !== '—' && parts[4] !== '') {
+        line += `　（${parts[4]}）`;
+      }
+      out.push(line);
+    }
+    return out;
+  }
+
+  // 🌙 夜里：睡眠整理（归拢/回望给条目；**牵线只给条数**）
+  private openNight(): void {
+    this.nightOpen = true;
+    this.fetchDream();
+  }
+
+  private async fetchDream(): Promise<void> {
+    if (this.nightBusy) {
+      return;
+    }
+    this.nightBusy = true;
+    this.nightMsg = '';
+    const groups: InfoGroup[] = [];
+    const req = http.createHttp();
+    try {
+      const res = await req.request(DREAM_URL + '?nights=7', {
+        method: http.RequestMethod.GET,
+        header: { 'Authorization': DOOR_AUTH },
+        connectTimeout: HTTP_TIMEOUT_MS,
+        readTimeout: HTTP_TIMEOUT_MS
+      });
+      if (res.responseCode === 200) {
+        const d = JSON.parse(res.result as string) as DreamResp;
+        const nights: DreamNight[] = d.nights ?? [];
+        if (nights.length === 0) {
+          this.nightMsg = '还没有睡过的记录——她夜里安静，也是好觉。';
+        }
+        for (let i = 0; i < nights.length; i++) {
+          groups.push(this.nightToGroup(nights[i]));
+        }
+      } else {
+        this.nightMsg = `夜里没取到（HTTP ${res.responseCode}）`;
+      }
+    } catch (err) {
+      this.nightMsg = '夜里的门没推开：' + errMsg(err as Object);
+    } finally {
+      req.destroy();
+    }
+    this.nightGroups = groups;
+    this.nightBusy = false;
+  }
+
+  private nightToGroup(n: DreamNight): InfoGroup {
+    const lines: string[] = [];
+    const heat: DreamHeat | null | undefined = n.heat;
+    if (heat === null || heat === undefined) {
+      lines.push('热度：这一格没数到');
+    } else {
+      lines.push(`热度分层：热 ${heat.hot ?? 0} / 温 ${heat.warm ?? 0} / 冷 ${heat.cold ?? 0}（若按热度分三档）`);
+    }
+    const mg: DreamMerge[] = n.merge ?? [];
+    if (mg.length === 0) {
+      lines.push('归拢：没找到要归拢的（干净）');
+    } else {
+      for (let i = 0; i < mg.length; i++) {
+        const r: number | undefined = mg[i].ratio;
+        lines.push(`归拢：${mg[i].a_ref ?? '?'}「${mg[i].a ?? ''}」× ${mg[i].b_ref ?? '?'}「${mg[i].b ?? ''}」`
+          + `（相似 ${r === undefined ? '—' : r.toFixed(2)}）`);
+      }
+    }
+    lines.push(`牵线：${n.link_n ?? 0} 条提名（牵的是她攒着的话——原文归她，不在这页）`);
+    const rp: DreamReplay[] = n.replay ?? [];
+    if (rp.length === 0) {
+      lines.push('回望：没有要回望的旧事（干净）');
+    } else {
+      for (let i = 0; i < rp.length; i++) {
+        lines.push(`回望：第${rp[i].day_no ?? '?'}天「${rp[i].title ?? ''}」（心情：${rp[i].mood ?? '—'}）`);
+      }
+    }
+    return { title: `${n.date ?? '那一夜'} 那一夜`, lines: lines };
+  }
+
+  // 📝 随手记：她的小本本（近 30 天，旧到新）
+  private openNotes(): void {
+    this.notesOpen = true;
+    this.fetchNotes();
+  }
+
+  private async fetchNotes(): Promise<void> {
+    if (this.notesBusy) {
+      return;
+    }
+    this.notesBusy = true;
+    this.notesMsg = '';
+    const req = http.createHttp();
+    try {
+      const res = await req.request(NOTES_URL, {
+        method: http.RequestMethod.GET,
+        header: { 'Authorization': DOOR_AUTH },
+        connectTimeout: HTTP_TIMEOUT_MS,
+        readTimeout: HTTP_TIMEOUT_MS
+      });
+      if (res.responseCode === 200) {
+        const d = JSON.parse(res.result as string) as NotesResp;
+        const list: NoteItem[] = d.notes ?? [];
+        const lines: string[] = [];
+        for (let i = 0; i < list.length; i++) {
+          lines.push(`${list[i].time ?? ''}　${list[i].text ?? ''}`);
+        }
+        if (lines.length === 0) {
+          this.notesMsg = '最近 30 天她没有随手记。';
+        }
+        this.notesGroups = [{ title: `最近 30 天（${lines.length} 条）`, lines: lines }];
+      } else {
+        this.notesMsg = `随手记没取到（HTTP ${res.responseCode}）`;
+      }
+    } catch (err) {
+      this.notesMsg = '随手记没取到：' + errMsg(err as Object);
+    } finally {
+      req.destroy();
+    }
+    this.notesBusy = false;
   }
 
   // FE-02 ③（9-13）：长按正文复制——写剪贴板 + 顶部轻提示「已复制」（不弹窗）；
