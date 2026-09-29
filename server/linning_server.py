@@ -617,6 +617,8 @@ DEFAULT_CONFIG = {
     # 丁·B2 拆两开关（9-29 拍板 A1）：drop_echo 删复读/秒回（默认开）；drop_flatter 删「不许讨好」（默认关）。
     "prompt_ban_relax_drop_echo": True,
     "prompt_ban_relax_drop_flatter": False,
+    # 9-29·时间锚结构修：此刻只挂最末、不进历史（关=回"跟尾块一起持久化"的旧行为）
+    "now_line_tail": True,
     "outreach_single": False, "single_tier_h": 2,
     "single_cooldown_min": 5, "single_presence_damp": 0.5,
     "recall_gate": {"min_score": 0.35, "per_kind_per_day": 1,
@@ -4964,6 +4966,25 @@ def _hist_anchor_plan(history, min_minutes=30):
     return out
 
 
+def _place_now_line(messages, late_system, cfg):
+    """9-29·时间锚结构修（家主「时间锚效果不好」查证后）：决定【此刻】挂哪儿。
+
+    开（now_line_tail，默认）→ **只发一张、挂在最末**（他消息之后），**不进历史**（tail_persist
+    也不持久化它），所以永不累积——返回 True，调用方在最后 append。
+    关 → 挂回 late_system（旧行为：随尾块注入、会被 tail_persist 写进历史）。
+    根因：tail_persist 省钱（纯追加链、缓存 ~50%）的代价是把每轮【此刻】留进历史，长会话里堆几十张
+    不同时间的"现在"（9-28 那晚实测 56 张）＋几十份过期位置/日程。让她"从几十张便条里认最新那张"
+    正是 LLM 最不擅长的；9-29 07:23 她的思考实案：**「时间锚没说具体」——她在猜**。
+    API 已实测：末尾系统便条，带/不带 tools 均 200。回滚＝now_line_tail=false（一行）。"""
+    try:
+        tail = bool((cfg or {}).get("now_line_tail", True))
+    except Exception:
+        tail = True
+    if not tail:
+        late_system.append({"role": "system", "content": now_line()})
+    return tail
+
+
 def _maybe_persist_tail(late_system):
     """CACHE-01（9-28 凌晨·DS 官方《上下文硬盘缓存》核对后施工）：尾巴持久化。
     把「每轮变化的块」（此刻/时间锚/天气/想起来的旧事/信箱/位置/日程）插到本轮 user 消息之前、
@@ -8516,9 +8537,9 @@ class Handler(BaseHTTPRequestHandler):
                     f"（今天 {LAST_SCHEDULE.get('at') or ''} 手机上报，小乖已授权）。"
                     "规则：这是今天的安排表、不是此刻的时间（此刻以【此刻 · …】那行为准）；"
                     "涉及他今天安排的问题以此为准；没提到不用主动背日程。"})
-            # 9-29·时间感加固：**「现在几点」放在尾块最末一条**——紧贴他的消息，不被别的块稀释；
-            # 且用独有标记【此刻 · …】（历史里的【时间锚 …】=那时）。见 srv_time.now_line()。
-            late_system.append({"role": "system", "content": now_line()})
+            # 9-29·时间锚结构修（家主 9-29 白天反馈）：【此刻】不再跟着尾块堆进历史——
+            # 开关 now_line_tail（默认开）= 只发一张、挂最末、不进历史；关=回旧行为（随尾块注入）。
+            _now_tail = _place_now_line(messages, late_system, cfg)
             # CACHE-01（9-28 凌晨·DS 官方《上下文硬盘缓存》核对后施工）：尾巴持久化开关——
             # 把上面这些「每轮变化的块」插到本轮 user 消息之前、随历史保留：
             # 开关关=逐字节现状（块后置，跨回合缓存被「完整匹配缓存前缀单元」规则挡在门外）；
@@ -8565,6 +8586,9 @@ class Handler(BaseHTTPRequestHandler):
             # CACHE-01（9-28）：tail_persist 开时块已随历史持久化（插在 user 前），这里不再后置。
             if not _tail_persisted:
                 messages.extend(late_system)
+            if _now_tail:
+                # 9-29：**永远最后一张**——紧跟他那句话，且不随历史累积（这是本次修的核心）
+                messages.append({"role": "system", "content": now_line()})
             # 9-4 自由发挥包：app 带 stream:true 就走 SSE（思考+正文打字机）；否则老路一锤子
             stream_wanted = bool(data.get("stream"))
             sse_ok = False
