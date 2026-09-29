@@ -619,8 +619,18 @@ DEFAULT_CONFIG = {
     "prompt_ban_relax_drop_flatter": False,
     # 9-29·时间锚结构修：此刻只挂最末、不进历史（关=回"跟尾块一起持久化"的旧行为）
     "now_line_tail": True,
-    "outreach_single": False, "single_tier_h": 2,
-    "single_cooldown_min": 5, "single_presence_damp": 0.5,
+    # 9-29 瘦身批（A~D）：常驻段"只摆最近＋其余随查"。回滚值见注释，逐项独立。
+    # 9-29 去重批：只删字面重复（约 97 字），不改写；关=逐字节回原样
+    "rules_dedup": True,
+    "sp_diary_days": 3,     # 日记摘要天数（回滚 7）
+    "sp_pins_max": 6,       # 门牌墙最多摆几张（回滚 0＝全部）
+    "sp_extra_max": 600,    # 全档案续页最多几字（回滚 0＝全部）
+    "sp_base_max": 600,     # 底色卷单册最多几字（回滚 1500）
+    "outreach_single": False, "single_tier_h": 1,
+    "single_cooldown_min": 5, "single_presence_damp": 0.7,
+    # 9-29 调宽：档位概率表（4 档，可调）；忙闸降权 0.35（置 0 = 回旧硬闸）
+    "single_tier_p": [0.08, 0.28, 0.55, 0.80],
+    "single_busy_damp": 0.35,
     "recall_gate": {"min_score": 0.35, "per_kind_per_day": 1,
                     "kind_weight": {"day": 1.0, "chat": 1.0, "note": 1.0,
                                     "letter": 1.0, "hall": 1.0, "oldhome": 0.6},
@@ -1410,6 +1420,17 @@ def build_system_prompt(consume=True):
 
     # 全档案·续页（9-18 大施工批）：后来的日子她亲笔添的——活水管，只添不改
     _tail = archive_tail_text()
+    # 9-29 瘦身批 C：续页只摆**最近** sp_extra_max 字（默认 600，尽量断在行首）；0=全摆（回滚）。
+    try:
+        _emax = int(load_config().get("sp_extra_max", 600) or 0)
+    except Exception:
+        _emax = 600
+    if _tail and _emax > 0 and len(_tail) > _emax:
+        _cut = _tail[-_emax:]
+        _nl = _cut.find("\n")
+        if 0 <= _nl < 200:
+            _cut = _cut[_nl + 1:]
+        _tail = "…（前面还有，想翻随查：search_memory）\n" + _cut
     if _tail:
         parts.append("\n【全档案·续页 · 后来的日子（你亲笔添的——想添就调 write_archive）】\n" + _tail)
 
@@ -1417,16 +1438,29 @@ def build_system_prompt(consume=True):
     wall = m.get_wall()
     if wall:
         parts.append("【咱家门牌墙】（想钉/改/撤用 pin_wall——这是你的墙）")
-        for pin_id, layer, content, created_at, updated_at in wall:
+        # 9-29 瘦身批 B：只摆最近 sp_pins_max（默认 6）张（pin_id 越大越新）；0=全摆（回滚）。
+        try:
+            _pmax = int(load_config().get("sp_pins_max", 6) or 0)
+        except Exception:
+            _pmax = 6
+        _shown = wall if _pmax <= 0 else wall[-_pmax:]
+        for pin_id, layer, content, created_at, updated_at in _shown:
             parts.append(f"#{pin_id} {content}")
+        if _pmax > 0 and len(wall) > len(_shown):
+            parts.append(f"（墙上共 {len(wall)} 张，这里摆最近 {len(_shown)} 张；想看全的调 pin_wall）")
 
     # 底色卷（9-18 第二批）：三册慢慢长出来的样子——常驻在手边，一点点固化
     _rolls = []
     for _name in BASE_ROLL_NAMES:
         _t = base_roll_text(_name)
         if _t:
-            if len(_t) > 1500:
-                _t = _t[:1500] + "…（余下略——底色宜短）"
+            # 9-29 瘦身批 D：单册帽 1500 → sp_base_max（默认 600）；置 1500 = 回原样。
+            try:
+                _bmax = max(1, int(load_config().get("sp_base_max", 600) or 600))
+            except Exception:
+                _bmax = 600
+            if len(_t) > _bmax:
+                _t = _t[:_bmax] + "…（余下略——底色宜短，想看全的调 read_my_ledger）"
             _rolls.append("■ %s：\n%s" % (_name, _t))
     if _rolls:
         parts.append("\n【底色卷 · 慢慢长出来的样子（你亲笔——想添/想改调 write_base）】\n" + "\n".join(_rolls))
@@ -1491,9 +1525,15 @@ def build_system_prompt(consume=True):
 
     # 最近 7 天日记（2026-09-10 提示词瘦身，家主令「都动工」）：改摘要——正文前 120 字，
     # 全文随 search_diary/search_memory 查（自动检索上线后有兜底，不再怕漏）。
-    days = m.find_days(limit=7)
+    # 9-29 瘦身批 A（家主「感情稳了提示词可以瘦身」）：近 7 天 → sp_diary_days（默认 3）天摘要；
+    # 更早的随用随查（search_memory）。置 7 = 逐字节回原样（表头字样跟着天数走，7 时与原句一字不差）。
+    try:
+        _ddays = max(1, int(load_config().get("sp_diary_days", 3) or 3))
+    except Exception:
+        _ddays = 3
+    days = m.find_days(limit=_ddays)
     if days:
-        parts.append("\n【最近的日记】（近 7 天摘要；全文随用随查）")
+        parts.append(f"\n【最近的日记】（近 {len(days)} 天摘要；全文随用随查）")
         for _id, d, dn, title, content, mood in days:
             # 9-14 修：日记的〔未了事项〕挂在正文尾部，此前 [:120] 摘要永远切不到它——
             # 「奖励专场（镜子前）」就是这么从她眼前消失的（家主从 thinking 里抓出）。
@@ -1668,7 +1708,7 @@ def build_system_prompt(consume=True):
     parts.append(f"\n【记账日】日记、账目、熄灯按「家日」记（凌晨 4 点前都算前一天）：这次归 {today}，"
                  f"咱家第 {m.day_no_of(today)} 天。除此之外——现在几点、日历上是几号、是不是今天，"
                  f"只认【此刻 · …】那一条。")
-    return _relax_bans("\n".join(parts))   # 丁·B1 轻减（开关 prompt_ban_relax，默认开）
+    return _dedup_rules(_relax_bans("\n".join(parts)))   # 丁·B1 轻减 → 9-29 去重批（各带独立开关；两个都关＝逐字节回原样）
 
 
 # ── 模型调用（现主引擎 moonshot K3；函数名留旧称，调用点不动） ──
@@ -2771,6 +2811,18 @@ def _tool_selfcheck():
     return (len(names) - len(miss), len(names), miss)
 
 
+def _norm_checkin_target(v):
+    """打卡项 target_time 归一化（BE3-11 口径，9-29 提到公用）：长得像时间的归一成 HH:MM
+    （'6:20'→'06:20'）——念叨与「欠着」用**字符串比时刻**，不补零会「6:20 > 07:30」恒真（半夜就催）
+    或恒假（永不进欠着行李）。不像时间的自由文本照收（长度帽 10，不截断语义）。工具路此前只做了
+    `[:5]`、没归一，与 HTTP 路口径不一致——本函数是唯一出口。"""
+    tt = str(v or "").strip()
+    mt = re.fullmatch(r"(\d{1,2}):(\d{2})", tt)
+    if mt and 0 <= int(mt.group(1)) <= 23 and 0 <= int(mt.group(2)) <= 59:
+        return "%02d:%s" % (int(mt.group(1)), mt.group(2))
+    return tt[:10] or None
+
+
 def exec_library_tool(name, args):
     """图书证执行层。只读与动作分列（**清单以 LIBRARY_TOOLS 注册表为准**，别在这数数）：memory_lib 只读调用 + 全档案/大事记只读扫描 + read_hall 日记馆 + read_her_words 她的自留页
     + read_life_log 生活账、read_rhythm 作息（9-18 第二批/第三批）、read_my_ledger 她自己的账（主权三件 9-23）；
@@ -2972,7 +3024,7 @@ def exec_library_tool(name, args):
             return "（打卡项得有个名字）"
         if len(m.get_checkin_items()) >= 15:
             return "（在册打卡项 15 个满了——先问小乖哪个不要了，归档旧的再加新的）"   # 9-4：项数软上限
-        tt = str(args.get("target_time") or "").strip()[:5] or None
+        tt = _norm_checkin_target(args.get("target_time"))
         rowid = m.add_checkin_item(iname, tt)
         return f"打卡项「{iname}」已建好（编号 {rowid}）"
     if name == "archive_checkin_item":
@@ -4555,6 +4607,189 @@ def _health_snapshot():
             "events_health": _events_health()}
 
 
+# ── 12·app 显示面扩展（9-29 家主令「能显示的都显示，除了她的隐私空间」）────────────
+# 三只只读口：/api/shadows（影子读数）· /api/dream（夜里睡眠整理）· /api/mech（机制台账公开段）。
+# 边界判据：**原文归她，状态可显示**——她没出口的心里话原文（走神／攒着的话／梦里牵线／忍住档）
+# 一律**不出原文**，只出条数与读数；私档（密钥／单价／token）不出。全部 fail-open、只读、脱敏。
+
+def _tail_lines(path, n=400):
+    """读文本文件末尾 n 个非空行（不存在/读不动 → []）。只读不写。"""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            lines = [ln.rstrip("\n") for ln in f if ln.strip()]
+        return lines[-n:]
+    except OSError:
+        return []
+
+
+def _shadows_snapshot():
+    """影子读数聚合（只读；**一律不带原文**）：欲望 v2 / 单触发 / 走神＋翻卡 / 话头 / 检索门槛。
+    她没说出口的原文（走神她那句、攒话内容、牵线原文、忍住档）**只报条数**，不报文本。"""
+    out = {"ok": True, "now": now_str()}
+    today = datetime.now().strftime("%F")
+    tpref = "[" + today
+    # ① 欲望 v2：末行读数（D／被哪闸挡）＋今日掷中次数
+    try:
+        import desire_lib
+        lines = _tail_lines(getattr(desire_lib, "V2_LOG", ""), 400)
+        tlines = [ln for ln in lines if ln.startswith(tpref)]
+        last = lines[-1] if lines else ""
+        md = re.search(r"D=([0-9.]+)", last)
+        mbl = re.search(r"←\s*被(\S+?)挡", last)
+        out["desire_v2"] = {
+            "D": (float(md.group(1)) if md else None),
+            "blocked_by": (mbl.group(1) if mbl else None),
+            "ticks_today": len(tlines),
+            "fired_today": sum(1 for ln in tlines if re.search(r"命中=(?!否)", ln)),
+            "at": (last[1:20] if last.startswith("[") else None)}
+    except Exception:
+        out["desire_v2"] = None
+    # ② 单触发：上岸版末行（档／p／挡因）＋今日掷中
+    try:
+        lines = _tail_lines(_SINGLE_SHADOW_LOG, 400)
+        tlines = [ln for ln in lines if ln.startswith(tpref)]
+        last = lines[-1] if lines else ""
+        mtier = re.search(r"上岸:p=([0-9.]+)\s+档(\d+)\s+掷中=(是|否)", last)
+        tier = int(mtier.group(2)) if mtier else None
+        p = float(mtier.group(1)) if mtier else None
+        if mtier is None:   # 旧口径行回退（上岸段还没有时）
+            m2 = re.search(r"档(\d+)", last)
+            tier = int(m2.group(1)) if m2 else None
+            m3 = re.search(r"p≈([0-9.]+)", last)
+            p = float(m3.group(1)) if m3 else None
+        mg = re.search(r"若伸手=否（([^）]*)）", last)
+        out["single"] = {
+            "tier": tier, "p": p, "blocked_by": (mg.group(1) if mg else None),
+            "ticks_today": len(tlines),
+            "hits_today": sum(1 for ln in tlines if "掷中=是" in ln),
+            "at": (last[1:20] if last.startswith("[") else None)}
+    except Exception:
+        out["single"] = None
+    # ③ 走神＋翻卡：只报条数（走神那句是她的原文，不出）
+    try:
+        import recall_lib
+        lines = _tail_lines(getattr(recall_lib, "SHADOW_LOG", ""), 400)
+        tlines = [ln for ln in lines if ln.startswith(tpref)]
+        walks = [ln for ln in tlines if "走神·" in ln]
+        out["recall"] = {
+            "walks_today": len(walks),
+            "cards_today": sum(1 for ln in walks if "翻卡" in ln),
+            "at": (tlines[-1][1:20] if tlines and tlines[-1].startswith("[") else None)}
+    except Exception:
+        out["recall"] = None
+    # ④ 话头簿：只报条数（攒的话原文归她）
+    try:
+        import huatou_lib
+        lines = _tail_lines(getattr(huatou_lib, "LOG", ""), 400)
+        tlines = [ln for ln in lines if ln.startswith(tpref)]
+        out["huatou"] = {
+            "collected_today": sum(1 for ln in tlines if "＋〔" in ln),
+            "delivered_today": sum(1 for ln in tlines if "递到眼前" in ln),
+            "said_today": sum(1 for ln in tlines if "真说出去了" in ln),
+            "held_today": sum(1 for ln in tlines if "忍住没说出口" in ln),
+            "at": (tlines[-1][1:20] if tlines and tlines[-1].startswith("[") else None)}
+    except Exception:
+        out["huatou"] = None
+    # ⑤ 检索门槛影子：近 24h 样品（递了多少／留住多少／空手率）
+    try:
+        con = m._conn()
+        try:
+            rows = con.execute(
+                "SELECT payload FROM events WHERE kind='mem.recall.shadow' "
+                "AND ts >= datetime('now','localtime','-1 day')").fetchall()
+        finally:
+            con.close()
+        n = dsum = ksum = dropsum = empty = 0
+        for (pl,) in rows:
+            try:
+                p = json.loads(pl or "{}")
+            except Exception:
+                continue
+            n += 1
+            dsum += int(p.get("delivered") or 0)
+            ksum += int(p.get("kept") or 0)
+            dropsum += int(p.get("dropped") or 0)
+            if not (p.get("kept") or 0):
+                empty += 1
+        out["gate"] = {"samples_24h": n, "delivered": dsum, "kept": ksum,
+                       "dropped": dropsum,
+                       "empty_rate": (round(empty / n, 3) if n else None)}
+    except Exception:
+        out["gate"] = None
+    return out
+
+
+_DREAM_HEAT_RE = re.compile(r"梦·热度｜若分层：热\s*(\d+)\s*/\s*温\s*(\d+)\s*/\s*冷\s*(\d+)")
+_DREAM_FIRE_RE = re.compile(r"梦·归拢｜若提名：把(.+?)「(.+?)」和(.+?)「(.+?)」归拢成一段（相似\s*([0-9.]+)）")
+_DREAM_REPLAY_RE = re.compile(r"梦·回望｜第(\d+)天「(.+?)」（心情：(.+?)）")
+
+
+def _dream_snapshot(nights=7):
+    """夜里睡眠整理只读投影（只读 dream_shadow.log）：每夜 热度分层／归拢条目／回望条目。
+    ⚠️ 牵线**只报条数**——牵线原文（她攒着的话）归她，不出。fail-open。"""
+    try:
+        path = os.path.join(BASE_DIR, "dream_shadow.log")
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            lines = [ln.rstrip("\n") for ln in f if ln.strip()]
+    except OSError:
+        return {"ok": True, "nights": []}
+    out = []
+    cur = None
+    for ln in lines:
+        mt = re.search(r"梦（(\d{4}-\d{2}-\d{2})）干跑", ln)
+        if mt:
+            cur = {"date": mt.group(1), "heat": None, "merge": [],
+                   "link_n": 0, "replay": []}
+            out.append(cur)
+            continue
+        if cur is None:
+            continue
+        m = _DREAM_HEAT_RE.search(ln)
+        if m:
+            cur["heat"] = {"hot": int(m.group(1)), "warm": int(m.group(2)),
+                           "cold": int(m.group(3))}
+            continue
+        m = _DREAM_FIRE_RE.search(ln)
+        if m:
+            cur["merge"].append({"a": m.group(2), "a_ref": m.group(1),
+                                 "b": m.group(4), "b_ref": m.group(3),
+                                 "ratio": float(m.group(5))})
+            continue
+        if "梦·牵线｜若提名：" in ln:
+            cur["link_n"] += 1
+            continue
+        m = _DREAM_REPLAY_RE.search(ln)
+        if m:
+            cur["replay"].append({"day_no": int(m.group(1)), "title": m.group(2),
+                                  "mood": m.group(3)})
+            continue
+    return {"ok": True, "nights": out[-max(1, int(nights)):][::-1]}
+
+
+def _mech_public():
+    """机制台账**公开段**（一、三节）只读投影——私档段（二节：密钥/单价）**绝不出**。
+    台账由 tools/make_mechanism_ledger.py 生成（已脱敏）；读不动 → 空段。fail-open。"""
+    try:
+        path = os.path.join(BASE_DIR, "工单", "机制台账.md")
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            txt = f.read()
+    except OSError:
+        return {"ok": True, "generated": None, "sections": []}
+    mgen = re.search(r"生成：[^\n]*?(\d{4}-\d{2}-\d{2} \d{2}:\d{2})", txt)
+    sections = []
+    for seg in re.split(r"(?m)^##\s+", txt)[1:]:
+        title = seg.split("\n", 1)[0].strip()
+        if title.startswith("二、") or "私档" in title:
+            continue                      # 私档段：不出（连接/密钥/单价）
+        if not (title.startswith("一、") or title.startswith("三、")):
+            continue
+        body = seg.split("\n", 1)[1].strip() if "\n" in seg else ""
+        sections.append({"title": title, "text": body})
+    return {"ok": True, "generated": (mgen.group(1) if mgen else None),
+            "sections": sections}
+
+
+
 # ── THREADS-03 刀1（9-23 小刀三连·影子）：线头「约定重新浮现」的尺子——本批只算不接线 ──
 # 设计：分析报告/2026-09-23_THREADS-03_约定重新浮现_设计草案.md §五·刀1。纯派生、零表：
 # _thread_due 从线头文本抽「下次该拿出来看」的日子；_thread_signals 算三信号候选与排序
@@ -4964,6 +5199,48 @@ def _hist_anchor_plan(history, min_minutes=30):
     except Exception:
         pass
     return out
+
+
+# 9-29 去重批（家主「只做去重」）：**只删"同一句话说两遍"的重复，不改写、不动正典文件**。
+# 机制：每条＝(正则, 保留说明)，**保留第一次出现**、删掉之后的重复；开关 rules_dedup（默认开；关=原样）。
+# **实测（9-29，如实记）**：全提示词里**真正的字面重复只有一处**——
+#   「需要可以存在而不被满足，但绝不躲开他的靠近。」（家规·亲密条 ＋【亲密】块各一遍）→ 省 22 字。
+# 另外几处（军规⑤/作息表/ENFJ 来历）看着像重复，其实**是换了说法的两版**——删它们＝改写正典，
+# 不属于"去重"，属提名（要家主与她点头），故**不做**。原先我按块大小估的"省 1200 字"是错的，作废。
+# 本表留着当**护栏**：以后哪天真出现字面重复，它会自动只留一份。
+_RULES_DEDUP = (
+    (r"APIkey\s*只在\s*config\.json，不进前端、不进\s*git。",
+     "军规⑤两处同句——保留家规块那条（#22 那条只留「数据不过第三方」）"),
+    (r"作息家规\s*v0\.4：\s*23:30\s*目标上床、00:00\s*死线、01:00\s*熬夜线",
+     "作息表两处同值——保留家规④（事实块那条同内容）"),
+    (r"（初设\s*INFJ，小乖求的改版）",
+     "来历括注两处——保留「咱是谁」里更全的那条（含「安静时INFJ、管你时拔剑」）"),
+    (r"需要可以存在而不被满足，但绝不躲开他的靠近。",
+     "亲密四规末句两处——保留家规·亲密条"),
+)
+
+
+def _dedup_rules(sp):
+    """去重批：把 `_RULES_DEDUP` 里每条正则匹配到的**第二处及以后**删掉（保留第一次出现）。
+    只删字面重复，不改写一字、不动正典文件；开关 rules_dedup（默认开；关=原样返回）。
+    未命中不报错（内容以后改了也不拦），但会记 soft.fail 便于发现漂移。"""
+    try:
+        if not load_config().get("rules_dedup", True):
+            return sp
+        for pat, _why in _RULES_DEDUP:
+            try:
+                rx = re.compile(pat)
+            except re.error:
+                continue
+            ms = list(rx.finditer(sp))
+            if len(ms) < 2:
+                continue                         # 只剩一处 = 正常（要么本来就一处，要么已删过）
+            for mm in reversed(ms[1:]):          # 从后往前删，索引不失效
+                sp = sp[:mm.start()] + sp[mm.end():]
+        return sp
+    except Exception as e:
+        _soft_fail("prompt.dedup_rules", e)
+        return sp
 
 
 def _place_now_line(messages, late_system, cfg):
@@ -6363,8 +6640,8 @@ _SINGLE_SHADOW_LOG = os.path.expanduser("~/outreach_single_shadow.log")
 # 设计：工单/设计_主动消息_单触发_2026-09-27.md §五 ＋ 工单/设计_更常找我与见闻分享_2026-09-28.md §一
 # 自然闸（9-27 夜家主口径＋9-28 调参）：硬闸只留「他在忙（报备）」；「他在场」降权；冷却只禁近 X 分钟。
 # 想念更灵敏：独处每 ~2h 升一档 → p 按档位给概率（不再一刀切锐化）。数值不进她上下文（红线①）。
-_SINGLE_TIER_H = 2.0                                    # 独处每 ~2h 升一档（设计 §一·1）
-_SINGLE_TIER_P = {0: 0.05, 1: 0.20, 2: 0.45, 3: 0.70}   # 按档位给概率（设计 §一·3）
+_SINGLE_TIER_H = 1.0                                    # 独处每 ~1h 升一档（9-29 调宽：原 2h）
+_SINGLE_TIER_P = {0: 0.08, 1: 0.28, 2: 0.55, 3: 0.80}   # 按档位给概率（9-29 调宽：原 0.05/0.20/0.45/0.70）
 
 
 def _single_knob(key, default):
@@ -6397,7 +6674,15 @@ def _single_trigger_decide(now=None):
             return None
         _th = float(_single_knob("single_tier_h", _SINGLE_TIER_H) or _SINGLE_TIER_H)
         tier = max(0, min(3, int((gap_s / 3600.0) / max(0.5, _th))))
-        p = float(_SINGLE_TIER_P.get(tier, 0.05))
+        # 9-29 调宽（家主令）：档位概率改**config 可调**（single_tier_p），默认 [0.08,0.28,0.55,0.80]。
+        _tp = _single_knob("single_tier_p", None)
+        try:
+            _tp = [float(x) for x in _tp] if isinstance(_tp, (list, tuple)) else None
+        except (TypeError, ValueError):
+            _tp = None
+        if not _tp or len(_tp) < 4:
+            _tp = [float(_SINGLE_TIER_P[i]) for i in range(4)]
+        p = float(_tp[tier] if 0 <= tier < len(_tp) else _tp[0])
         try:
             concern, reason = _concerned(now)
         except Exception:
@@ -6414,8 +6699,16 @@ def _single_trigger_decide(now=None):
         if presence:
             p *= float(_single_knob("single_presence_damp", 0.5) or 0.5)
         blocked_list = []
+        bag_busy = ""
         if _busy_active(now):
-            blocked_list.append("他在忙（报备）")
+            # 9-29 调宽（家主令）：忙闸由"硬禁"改"降权"——他还忙着她也有机会开口；
+            # single_busy_damp 默认 0.35，置 0 = 回旧硬闸（一行回滚）。
+            _bdamp = float(_single_knob("single_busy_damp", 0.35) or 0)
+            if _bdamp <= 0:
+                blocked_list.append("他在忙（报备）")
+            else:
+                p *= _bdamp
+                bag_busy = "忙×%.2f" % _bdamp
         _cool_min = float(_single_knob("single_cooldown_min", 5) or 0)
         if _cool_min and _recent_send(int(_cool_min * 60)):
             blocked_list.append("刚开过口（≤%g 分钟）" % _cool_min)
@@ -6428,6 +6721,8 @@ def _single_trigger_decide(now=None):
         except Exception:
             pass
         bag.append("p≈%.2f" % p)
+        if bag_busy:
+            bag.append(bag_busy)
         try:
             import huatou_lib
             _pend = huatou_lib.peek_pending(3)
@@ -7165,7 +7460,12 @@ def summarize_session_to_diary(session, day_str, from_backfill=False):
     messages = [{"role": "system", "content": session.system_prompt}]
     # CACHE-01（9-28）：尾巴持久化开着时，real 里会混着历史环境注记（system）——不进日记素材；
     # 开关关时 real 本无 system 消息，此过滤为逐字节空操作。
-    messages += [h for h in real if h.get("role") in ("user", "assistant")]
+    # 9-29 修·**真根因**（晚安 500 实案）：TIME-02 给历史条目挂了 `_ts`（datetime，给历史时间锚用），
+    # 聊天路装配时会剥掉（见 messages.append({k: v for ... if k != "_ts"})），**日记路此前整条照搬**，
+    # 于是 json.dumps(请求体) 抛「Object of type datetime is not JSON serializable」→ 按晚安就 500。
+    # 这里按同一口径剥掉所有下划线开头的内部键（`_ts` 等），别把内部字段递给模型。
+    messages += [{k: v for k, v in h.items() if not str(k).startswith("_")}
+                 for h in real if h.get("role") in ("user", "assistant")]
     # RHYTHM-V3（9-12）日记闭环：她今天主动塞出去的小纸条也是今天的一部分，进素材——
     # 让日记把她的主动也记进今天，不只是他这边的账。（补写路径跳过：素材读的是「今天」，会错日子）
     notes = []
@@ -7546,7 +7846,10 @@ class Handler(BaseHTTPRequestHandler):
     def _send_json(self, obj, code=200):
         if code >= 400:   # 刀3：_send_json 的非 200 出口统一留痕（不碰响应体，fail-open）
             self._reject_note(code, obj.get("error") if isinstance(obj, dict) else "")
-        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        # 9-29 修（家主「三点多按晚安，500」实案：Object of type datetime is not JSON serializable）：
+        # 响应里万一混进 datetime/其它非原生类型，**降级成字符串**而不是整条 500——按铃/晚安这些
+        # 交互动作不该因为一个字段类型把用户界面打成错误页。真值仍照原样（default 只在无法序列化时生效）。
+        body = json.dumps(obj, ensure_ascii=False, default=str).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -7925,6 +8228,21 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": "not found"}, 404)
             else:
                 self._send_json(_health_snapshot())
+        elif path == "/api/shadows":
+            # 12·app 显示面（9-29 家主令）：影子读数聚合——只读、脱敏、**不带原文**（走神/攒话/
+            # 牵线/忍住只报条数；私档不出）。fail-open。
+            self._send_json(_shadows_snapshot())
+        elif path == "/api/dream":
+            # 12·app 显示面：近 N 夜睡眠整理（归拢/回望条目；牵线只报条数）。?nights=N（1~30）
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            try:
+                _nn = max(1, min(int((qs.get("nights") or ["7"])[0]), 30))
+            except (TypeError, ValueError):
+                _nn = 7
+            self._send_json(_dream_snapshot(_nn))
+        elif path == "/api/mech":
+            # 12·app 显示面：机制台账公开段（一、三节；私档段不出）。只读。
+            self._send_json(_mech_public())
         elif path == "/api/sse_ping":
             # 9-26 流式体检端点（传输排障用·留用）：n 拍 × ms 毫秒，逐拍 flush——
             # 实测「客户端→Caddy→隧道→server」全链流式时序（h1.1/h2 对照、中间层缓冲排查）。
@@ -8123,6 +8441,11 @@ class Handler(BaseHTTPRequestHandler):
             data = json.loads(raw) if raw else {}
         except json.JSONDecodeError:
             data = {}
+        # 审查修复（9-29）：body 合法 JSON 但不是对象（[]／3／"x"）→ 各 handler 的 data.get
+        # 会 AttributeError 冒到全局兜底回 500。所有 POST 口都按对象收 → 这里统一回 400。
+        if not isinstance(data, dict):
+            self.close_connection = True
+            return self._send_json({"ok": False, "error": "POST body 得是一个 JSON 对象"}, 400)
 
         if self.path == "/api/chat":
             self.handle_chat(data)
@@ -8322,14 +8645,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json({"ok": False, "error": "name 不能为空"}, 400)
         # BE3-11（9-23 修复批）：target_time 轻校验——长得像时间的归一成 HH:MM
         # （'6:20'→'06:20'：念叨用字符串比时刻，不补零会「6:20 > 07:30」恒真、半夜就催）；
-        # 不像时间的自由文本照收（长度帽 10，不截断语义）。
-        target_time = data.get("target_time")
-        tt = str(target_time or "").strip()
-        mt = re.fullmatch(r"(\d{1,2}):(\d{2})", tt)
-        if mt and 0 <= int(mt.group(1)) <= 23 and 0 <= int(mt.group(2)) <= 59:
-            target_time = "%02d:%s" % (int(mt.group(1)), mt.group(2))
-        else:
-            target_time = tt[:10] or None
+        # 不像时间的自由文本照收（长度帽 10，不截断语义）。9-29 起归一化收口到 _norm_checkin_target（工具路同口径）。
+        target_time = _norm_checkin_target(data.get("target_time"))
         rowid = m.add_checkin_item(name, target_time)
         self._send_json({"ok": True, "id": rowid})
 
@@ -8901,16 +9218,32 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"reply": reply, "think_ms": think_ms, "tools": tools_used, "reasoning": reasoning})
 
     def handle_goodnight(self):
-        """熄灯仪式：总结今天 → add_day → 清空工作记忆（手动熄灯路）"""
+        """熄灯仪式：总结今天 → add_day → 清空工作记忆（手动熄灯路）。
+
+        9-29 修（家主「三点多按晚安，500」实案）：**熄灯是主责、日记是附账**——
+        日记总结那头炸了，也必须照常熄灯（ASLEEP/reset/落盘标记一个不少），并**如实**回一句
+        "日记没写成"，绝不整条 500 把"晚安"按不动；异常连 traceback 一起进日志，好定位。"""
         global ASLEEP
         with SESSION_LOCK:
-            result = summarize_session_to_diary(SESSION, today_str())
+            try:
+                result = summarize_session_to_diary(SESSION, today_str())
+            except Exception as _sf_e:
+                import traceback
+                print(f"  [熄灯] 日记总结炸了（照常熄灯·原话都在）：{_sf_e}\n{traceback.format_exc()}")
+                _soft_fail("熄灯.日记总结", _sf_e)
+                result = "（这篇日记没写成——原话都在 chats 里，一句没丢；下轮会补）"
             if result is None:
                 result = "今天没说话，没有日记可写。"
-            SESSION.reset()   # 清空工作记忆，顺便重装明天的门牌墙
-            _goodnight_reset_session()   # 9-14：手动晚安同样灌昨夜尾巴（原话断层修复）
+            try:
+                SESSION.reset()   # 清空工作记忆，顺便重装明天的门牌墙
+                _goodnight_reset_session()   # 9-14：手动晚安同样灌昨夜尾巴（原话断层修复）
+            except Exception as _sf_e:
+                _soft_fail("熄灯.重置会话", _sf_e)
             ASLEEP = True     # 熄灯=睡了（简化模型，说话即醒）
-            m.obs_flag_set(m.house_today_str(), "goodnight_on", 1)   # BE3-02：烫「今夜熄过」落盘标记（开机恢复 ASLEEP 用）
+            try:
+                m.obs_flag_set(m.house_today_str(), "goodnight_on", 1)   # BE3-02：烫「今夜熄过」落盘标记（开机恢复 ASLEEP 用）
+            except Exception as _sf_e:
+                _soft_fail("熄灯.落盘标记", _sf_e)
         self._send_json({
             "diary": result,
             "note": "熄灯完毕。明天第一句'姐姐早'，将是全新的上下文。",
@@ -9046,14 +9379,22 @@ def _llama_probe():
 
 
 def _spawn_detached(cmd, logf):
-    """跨平台「脱离父进程」启动（9-25：Linux 用 setsid，Windows 无 setsid 用 creationflags）。"""
+    """跨平台「脱离父进程」启动（9-25：Linux 用 setsid，Windows 无 setsid 用 creationflags）。
+    9-29 审查修：本函数**接管并关闭 logf**——Popen 已把它 dup 给子进程，父进程这份留着每通电就漏
+    一个 fd（嵌入层/隧道两处都漏）。失败路径也关（finally）。"""
     import subprocess
     kw = {"stdout": logf, "stderr": logf}
     if os.name == "nt":
         kw["creationflags"] = 0x00000208   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
     else:
         kw["start_new_session"] = True
-    return subprocess.Popen(cmd, **kw)
+    try:
+        return subprocess.Popen(cmd, **kw)
+    finally:
+        try:
+            logf.close()
+        except Exception:
+            pass
 
 
 def _llama_paths():

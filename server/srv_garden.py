@@ -163,10 +163,19 @@ def _garden_settle(eid, raw):
         m.consume_world_event(eid)
         print(f"  [Garden] {degrade}（事件#{eid}）：{message[:30]}")
         return "trace"
+    # 9-29 审查修·顺序：先落信 → 再留痕 → 再销账 → **最后按铃**。
+    # 原顺序「按铃 → 留痕 → 销账」：留痕/销账任一抛错 → 事件没消费、租约重来 → 模型重生同一条 →
+    # 出了重复 🌱 信、还按了两次门铃。现在铃在销账之后，销不到账就不按铃（宁可不响，不重复响）。
     m.add_outbox_msg("🌱 " + message)
-    srv_state._srv().notify_letter()   # 运行期反查：沙盘会重绑 s.notify_letter
-    m.add_her_trace(ts, "message", fact, "", eid)
+    try:
+        m.add_her_trace(ts, "message", fact, "", eid)
+    except Exception:
+        pass   # 痕迹是账、不是这条信本身——写不进也别把已经落下的信丢掉
     m.consume_world_event(eid)
+    try:
+        srv_state._srv().notify_letter()   # 运行期反查：沙盘会重绑 s.notify_letter
+    except Exception:
+        pass
     print(f"  [Garden] 来找他：{message[:30]}")
     return "message"
 
@@ -245,8 +254,16 @@ def _garden_wake_once():
     # deepseek=省钱回退档，thinking 同 librarian 关法）；kind=galatea 的唤醒轮开园子工具
     # 专窗（§④：仅七件园子图书证），其余事件维持无工具。
     wake_cfg = _garden_engine_cfg(cfg)
+    # 审查修复（9-29）：原样取 `session().system_prompt` 会走懒拼（consume=True）——园子若在他开口
+    # **之前**先醒来，会把走神/话头/欲望这些「取走即清」的一次性注入吞进园子提示词，他开场就少一件。
+    # 改：会话已拼好 → 直接复用；还没拼 → 用 **consume=False** 的纯静态版（绝不吞注入，也不回写缓存，
+    # 他那一轮照常自己拼、注入照常到他眼前）。失败照旧上抛（调用方 release 事件、回头重领）。
+    _g_sess = srv_state.session()
+    _g_sp = getattr(_g_sess, "_system_prompt", None)
+    if _g_sp is None:
+        _g_sp = srv_state._srv().build_system_prompt(consume=False)
     msgs = [
-        {"role": "system", "content": srv_state.session().system_prompt},   # 取用口（入口属主名）
+        {"role": "system", "content": _g_sp},   # 取用口（入口属主名）
         {"role": "user", "content": _garden_wake_prompt(event, garden_tools=(_kind == "galatea"),
                                                         game_turn=_game_turn)},
     ]

@@ -148,8 +148,10 @@ def _week_roll_adopt(now=None):
             new_head = head.replace("（草稿·待姐姐终审）",
                                     f"（正典·{today.strftime('%Y-%m-%d')} 归卷）")
             try:
-                with open(path, "w", encoding="utf-8") as f:
+                _tmp = path + ".tmp"
+                with open(_tmp, "w", encoding="utf-8") as f:
                     f.write(new_head + _sep + rest)
+                os.replace(_tmp, path)   # 原子写（9-29 审查修：中途被杀不留半截卷——半截卷会被"同名不覆盖"永久锁死）
                 adopted += 1
                 m.obs_bump("week_roll_adopt")
                 print(f"  [周卷] 归卷：{fn}（冷却一周已满，自动转正典）")

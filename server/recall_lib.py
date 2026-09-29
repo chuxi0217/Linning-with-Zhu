@@ -5,11 +5,15 @@
 现状：她的记忆是「问才答」（检索：他给话头 → 搜 → 浮上来）。
 本模块补另一条腿：「不查也来」——走神时旧事自己浮上来（升级研究 §6.7）。
 
-三种漫步（v1）：
+四种漫步（v2·9-29 加第四腿）：
   calendar 日历锚  —— 同月-日的历史日记（「一个月前的今天」）
   random   翻旧日记 —— 日记池随机翻一篇（避开近日翻过的·久违感）
   topic    话题第二跳 —— 近几条对话取词 → FTS 记忆池（day/note/letter）
             不取 top-1（那是检索），取第 2~8 名——「远而不生」
+  card     翻卡    —— 四馆正典卡随机翻一张（「早就确认过的旧事」）
+            9-29 家主令（设计_卡片与自然想起 §二·第 1 步）：卡是家里确认过的事实，
+            读它＝想起，不是代笔。只读正典四馆；**存疑阁不进**（没定论的不当正典说）。
+            加腿后**总频率不变**（四腿分原来的 5% 概率闸）。
 
 纪律：影子期只算只记（~/recall_shadow.log + events 账 recall.walk），不注入。
 开关：recall_shadow（总闸·默认 true）/ recall_inject（注入闸·默认 false·转正才开）
@@ -27,6 +31,7 @@ fail-open：任何异常吞掉，绝不拦心跳。
 import json
 import os
 import random
+import re
 import sqlite3
 import time
 from datetime import datetime
@@ -37,6 +42,11 @@ DB_PATH = os.path.join(BASE_DIR, "咱家的家.db")
 SHADOW_LOG = os.path.expanduser("~/recall_shadow.log")
 STATE_PATH = os.path.expanduser("~/.zanjia_recall_state.json")
 
+# 四馆正典（卡片馆只读；存疑阁故意不在列——没定论的不当"早就确认过"递出去）
+CARDS_DIR = os.path.join(BASE_DIR, "档案馆", "卡片馆")
+_CARD_FILES = (("姐姐志", "正典_姐姐志.md"), ("小乖志", "正典_小乖志.md"),
+               ("共同志", "正典_共同志.md"), ("物与地方", "正典_物与地方.md"))
+
 # 种子词黑名单：虚词 + 高频人名词（搜「姐姐」会命中一切——不当初子）
 _STOP = {
     "的", "了", "是", "我", "你", "他", "她", "不", "在", "有", "和", "就", "都", "也",
@@ -45,7 +55,7 @@ _STOP = {
     "因为", "所以", "但是", "已经", "这个", "那个", "一下", "一点", "真的", "时候",
 }
 
-_TAG = {"calendar": "日历锚", "random": "翻旧日记", "topic": "话题第二跳"}
+_TAG = {"calendar": "日历锚", "random": "翻旧日记", "topic": "话题第二跳", "card": "翻卡"}
 
 # ── 9-25 上岗：注入取用口（取走即清）──
 # 影子期只记日志；转正后 server 开场来取一次，取走就清——一次走神只提一次，不车轱辘反复念。
@@ -351,6 +361,48 @@ def _walk_topic():
     return None
 
 
+def _load_cards():
+    """读四馆正典卡（只读，绝不写；**存疑阁不进**）。
+    解析「### [馆-N] 标题 / - 一句话：」——同 srv_jobs._cards_scan 的家规格式（本模块不引 server 依赖，
+    故自带一份最小解析）。返回 [{"group","id","title","fact"}]；读不动/没一句话的卡=跳过。fail-open。"""
+    out = []
+    for gk, fn in _CARD_FILES:
+        try:
+            with open(os.path.join(CARDS_DIR, fn), encoding="utf-8") as f:
+                txt = f.read()
+        except OSError:
+            continue                      # 缺文件/读不动：该馆跳过（诚实缺席）
+        cur = None
+        for line in txt.splitlines():
+            line = line.strip()
+            mt = re.match(r"^###\s*\[([^\]]+)\]\s*(.*)$", line)
+            if mt:
+                if cur and cur.get("fact"):
+                    out.append(cur)
+                cur = {"group": gk, "id": mt.group(1).strip(),
+                       "title": mt.group(2).strip(), "fact": ""}
+                continue
+            if cur is not None and not cur["fact"] and line.startswith("- 一句话："):
+                cur["fact"] = line[len("- 一句话："):].strip()
+        if cur and cur.get("fact"):
+            out.append(cur)
+    return out
+
+
+def _walk_card():
+    """翻卡：四馆正典随机翻一张——避开近日翻过的（久违感）。没卡/读不动回 None。"""
+    cards = _load_cards()
+    if not cards:
+        return None
+    recent = set(_load_state().get("recent", []))
+    pool = [c for c in cards if f"card#{c['id']}" not in recent] or cards
+    c = random.choice(pool)
+    return {"type": "card", "key": f"card#{c['id']}",
+            "ref": f"【{c['group']}】{c['title']}",
+            "text": (c["fact"] or "").strip().replace("\n", " ")[:80],
+            "why": f"翻到{c['group']}的一张卡"}
+
+
 def tick_and_shadow(now=None):
     """心跳每轮调：概率闸 → 挑一条腿漫步 → 只记日志（+events 账）。fail-open 返回 dict|None。"""
     try:
@@ -363,14 +415,17 @@ def tick_and_shadow(now=None):
         if random.random() >= chance:
             return None
         now = now or datetime.now()
-        kind = random.choices(("calendar", "random", "topic"),
-                              weights=(0.35, 0.35, 0.30))[0]
+        # 9-29 加第四腿「翻卡」——四腿分原来那 5%，**总频率不变**（不会变唠叨）。
+        kind = random.choices(("calendar", "random", "topic", "card"),
+                              weights=(0.30, 0.28, 0.22, 0.20))[0]
         if kind == "calendar":
             cand = _walk_calendar(now)
         elif kind == "random":
             cand = _walk_random()
-        else:
+        elif kind == "topic":
             cand = _walk_topic()
+        else:
+            cand = _walk_card()
         if not cand:
             return None
         _log(f"[{now.strftime('%F %T')}] 走神·{_TAG[kind]} ｜ 种子={cand['why']}\n"
@@ -390,11 +445,12 @@ def tick_and_shadow(now=None):
 
 
 if __name__ == "__main__":
-    # 自检：三种腿各走一次（不过概率闸），样张落日志供家主直接读
+    # 自检：四条腿各走一次（不过概率闸），样张落日志供家主直接读
     now = datetime.now()
     for name, cand in (("日历锚", _walk_calendar(now)),
                        ("翻旧日记", _walk_random()),
-                       ("话题第二跳", _walk_topic())):
+                       ("话题第二跳", _walk_topic()),
+                       ("翻卡", _walk_card())):
         if cand:
             _log(f"[{now.strftime('%F %T')}] 走神·{name}（自检样张） ｜ 种子={cand['why']}\n"
                  f"    → {cand['ref']}：\"{cand['text']}\"")
