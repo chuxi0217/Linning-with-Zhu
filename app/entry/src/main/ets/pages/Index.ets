@@ -9,7 +9,7 @@ import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { geoLocationManager } from '@kit.LocationKit';
 import { connection, http } from '@kit.NetworkKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { window, mediaquery } from '@kit.ArkUI';
+import { window, mediaquery, LengthMetrics } from '@kit.ArkUI';
 import { notificationManager } from '@kit.NotificationKit';
 import { BusinessError, pasteboard } from '@kit.BasicServicesKit';
 import {
@@ -1278,6 +1278,56 @@ function ttClosestPeriod(t1: string, t2: string): number[] {
 }
 // #endregion CAL-02 沙盘转译区
 
+// ═══════════ 📖 Markdown 轻渲染 · 子组件 MdSegText（文件级 · struct Index 同级）═══════════
+// 9-28 真机修：真机上「Text 内 ForEach 生成 Span」不吃（开卷卡「正在开卷……」）——
+// 官方《文本显示 (Text/Span)》：Span 只能作 Text/ContainerSpan/RichEditor 的子组件；
+// 官方《场景化案例》：「Text 不支持自定义组件」（非容器组件，解析子组件时不展开）。
+// 故行内样式改走官方【属性字符串 StyledString】——数据对象，不是子组件树（官方原文：
+// 「拥有 Span 的所有的能力」）；块级排版照旧（标题/列表/引用/分隔线/代码块）。
+// 绑定时机：官方《属性字符串》指南——API 15 起 aboutToAppear 中 setStyledString 初始化即可显示
+//（本机 compatibleSdkVersion 23 ✓）。
+@Component
+struct MdSegText {
+  segs: MdSeg[] = [];
+  baseSize: number = FS_BODY;
+  baseColor: string = '#5c5348';
+  codeColor: string = '#b08968';
+  bold: boolean = false;
+  lh: number = 23;
+  private ctl: TextController = new TextController();
+
+  private styled(): MutableStyledString {
+    const ms: MutableStyledString = new MutableStyledString('');
+    for (let i = 0; i < this.segs.length; i++) {
+      const sg: MdSeg = this.segs[i];
+      const st: TextStyle = new TextStyle({
+        fontSize: LengthMetrics.vp(this.baseSize),   // TextStyle.fontSize 收 LengthMetrics（不是 number）
+        fontColor: sg.c ? this.codeColor : this.baseColor,
+        fontWeight: (sg.b || this.bold) ? FontWeight.Bold : FontWeight.Normal,
+        fontStyle: sg.i ? FontStyle.Italic : FontStyle.Normal
+      });
+      const opt: StyleOptions = {
+        start: 0,
+        length: sg.t.length,
+        styledKey: StyledStringKey.FONT,
+        styledValue: st
+      };
+      ms.appendStyledString(new StyledString(sg.t, [opt]));
+    }
+    return ms;
+  }
+
+  aboutToAppear(): void {
+    this.ctl.setStyledString(this.styled());
+  }
+
+  build() {
+    Text(undefined, { controller: this.ctl })
+      .width('100%')
+      .lineHeight(this.lh)
+  }
+}
+
 @Entry
 @Component
 struct Index {
@@ -1312,9 +1362,9 @@ struct Index {
   }
 
 // ═══════════ 📖 Markdown 轻渲染 · B 段（struct Index 内：缓存 + 渲染）═══════════
-// 粘贴位置：struct Index { ... } 内（建议 private dk() 方法附近、@State chatData 之前）。
 // 说明：①mdOfA/mdOfR 惰性缓存——同一文本只在变化时解析一次（滚/重渲染零成本）；
-//       ②MdDocView 是两处阅读器共用的渲染体（块级排版 + 行内 Span 样式）；
+//       ②MdDocView 是两处阅读器共用的渲染体（块级排版）；行内样式交给子组件 MdSegText
+//         （属性字符串 StyledString——9-28 真机修：Text 里不放 ForEach/Span 子组件树）；
 //       ③颜色全走 this.dk() + 现有色板，夜装自动跟；字号走四步进（20/16/14）。
   private mdKeyA: string = '';
   private mdCacheA: MdBlock[] = [];
@@ -1335,16 +1385,34 @@ struct Index {
     return this.mdCacheR;
   }
 
+  // 9-28 真修②（与 v5 打字机同款坑）：@Builder 按值传参——参数变化不会刷新内部 UI。
+  // 改无参＋this 直读两个 @State：文本一变，本块随父重渲染重建，ForEach 取到最新解析。
+  // 取哪一卷由「当前开的是哪个阅读器」显式判定（不用「非档案馆即周报」的二元假设）——
+  // 两个全屏页互斥，顺序判即安全；将来加第三个 md 阅读口，只在这里添一行。
+  private mdOpenBlocks(): MdBlock[] {
+    if (this.archiveOpen) {
+      return this.mdOfA(this.archDocText);
+    }
+    if (this.repOpen) {
+      return this.mdOfR(this.repDocText);
+    }
+    return [];
+  }
+
   @Builder
-  MdDocView(blocks: MdBlock[]) {
+  MdDocView() {
     Column() {
-      ForEach(blocks, (blk: MdBlock, idx: number) => {
+      ForEach(this.mdOpenBlocks(), (blk: MdBlock, idx: number) => {
         if (blk.k === 1) {
           // 标题：# 与 ## 大字，### 起小一号；字重分级
-          Text(blk.t)
-            .fontSize(blk.lv <= 1 ? FS_TITLE : (blk.lv === 2 ? FS_BODY : FS_SUB))
-            .fontWeight(blk.lv <= 2 ? FontWeight.Bold : FontWeight.Medium)
-            .fontColor(this.dk(C_TEXT))
+          MdSegText({
+            segs: blk.segs,
+            baseSize: blk.lv <= 1 ? FS_TITLE : (blk.lv === 2 ? FS_BODY : FS_SUB),
+            baseColor: this.dk(C_TEXT),
+            codeColor: this.dk(C_ACCENT),
+            bold: blk.lv <= 2,
+            lh: 24
+          })
             .width('100%')
             .margin({ top: idx === 0 ? 0 : 12, bottom: 4 })
         } else if (blk.k === 2) {
@@ -1353,19 +1421,14 @@ struct Index {
             Text(blk.lv > 0 ? '　·' : '·')
               .fontSize(FS_BODY)
               .fontColor(this.dk(C_TEXT_3))
-            Text() {
-              ForEach(blk.segs, (sg: MdSeg, si: number) => {
-                Span(sg.t)
-                  .fontSize(FS_BODY)
-                  .fontColor(sg.c ? this.dk(C_ACCENT) : this.dk(C_TEXT_2))
-                  .fontWeight(sg.b ? FontWeight.Bold : FontWeight.Normal)
-                  .fontStyle(sg.i ? FontStyle.Italic : FontStyle.Normal)
-              }, (sg: MdSeg, si: number) => si + ':' + sg.t)
-            }
-            .layoutWeight(1)
-            .fontSize(FS_BODY)
-            .fontColor(this.dk(C_TEXT_2))
-            .lineHeight(23)
+            MdSegText({
+              segs: blk.segs,
+              baseSize: FS_BODY,
+              baseColor: this.dk(C_TEXT_2),
+              codeColor: this.dk(C_ACCENT),
+              lh: 23
+            })
+              .layoutWeight(1)
           }
           .width('100%')
           .alignItems(VerticalAlign.Top)
@@ -1376,19 +1439,14 @@ struct Index {
             Text('▎')
               .fontSize(FS_BODY)
               .fontColor(this.dk(C_DOT_BORDER))
-            Text() {
-              ForEach(blk.segs, (sg: MdSeg, si: number) => {
-                Span(sg.t)
-                  .fontSize(FS_BODY)
-                  .fontColor(this.dk(C_TEXT_3))
-                  .fontWeight(sg.b ? FontWeight.Bold : FontWeight.Normal)
-                  .fontStyle(sg.i ? FontStyle.Italic : FontStyle.Normal)
-              }, (sg: MdSeg, si: number) => si + ':' + sg.t)
-            }
-            .layoutWeight(1)
-            .fontSize(FS_BODY)
-            .fontColor(this.dk(C_TEXT_3))
-            .lineHeight(23)
+            MdSegText({
+              segs: blk.segs,
+              baseSize: FS_BODY,
+              baseColor: this.dk(C_TEXT_3),
+              codeColor: this.dk(C_ACCENT),
+              lh: 23
+            })
+              .layoutWeight(1)
           }
           .width('100%')
           .alignItems(VerticalAlign.Top)
@@ -1411,20 +1469,15 @@ struct Index {
             .margin({ top: 6 })
         } else {
           // 段落
-          Text() {
-            ForEach(blk.segs, (sg: MdSeg, si: number) => {
-              Span(sg.t)
-                .fontSize(FS_BODY)
-                .fontColor(sg.c ? this.dk(C_ACCENT) : this.dk(C_TEXT_2))
-                .fontWeight(sg.b ? FontWeight.Bold : FontWeight.Normal)
-                .fontStyle(sg.i ? FontStyle.Italic : FontStyle.Normal)
-            }, (sg: MdSeg, si: number) => si + ':' + sg.t)
-          }
-          .width('100%')
-          .fontSize(FS_BODY)
-          .fontColor(this.dk(C_TEXT_2))
-          .lineHeight(23)
-          .margin({ top: 4 })
+          MdSegText({
+            segs: blk.segs,
+            baseSize: FS_BODY,
+            baseColor: this.dk(C_TEXT_2),
+            codeColor: this.dk(C_ACCENT),
+            lh: 23
+          })
+            .width('100%')
+            .margin({ top: 4 })
         }
       }, (blk: MdBlock, idx: number) => idx + ':' + blk.k + ':' + blk.lv + ':' + blk.t)   // key 含全文：防切文档不刷新
     }
@@ -1622,6 +1675,12 @@ struct Index {
   @State thinkPeek: boolean = false;         // 💭 默认折叠（9-9）：流式思考点一下才偷看
   private locPermAsked: boolean = false;
   private scroller: Scroller = new Scroller();
+  // 9-29 修（家主：「打开一个东西，退出来就回到顶点了，尤其是共读」）：
+  // 共读阅读器退出会清 readParas、再开是新列表 → 位置全丢。这里记住「读到第几段」，
+  // 同一本再打开时跳回那段（换书从头）。
+  private readerScroller: Scroller = new Scroller();
+  private readerFirstIdx: number = 0;
+  private readerBookId: number = -1;
   private keySeq: number = 0;
   private panelTimer: number = -1;
   private thinkTimer: number = -1;
@@ -2787,7 +2846,7 @@ struct Index {
       .width('100%')
       .padding({ left: M_PAGE, right: M_PAGE, top: 10, bottom: 4 })
 
-      List({ space: 10 }) {
+      List({ space: 10, scroller: this.readerScroller }) {
         ForEach(this.readParas, (p: string, i: number) => {
           ListItem() {
             Column({ space: 6 }) {
@@ -2852,6 +2911,7 @@ struct Index {
       .width('100%')
       .padding({ left: M_PAGE, right: M_PAGE, bottom: 10 })
       .onScrollIndex((start: number) => {
+        this.readerFirstIdx = start;   // 9-29：本地也记一份——退出再进要回到这里
         this.reportReadPos(start);
       })
       .scrollBar(BarState.Auto)
@@ -4238,7 +4298,7 @@ struct Index {
         .padding({ left: M_PAGE, right: M_PAGE, top: 10, bottom: 6 })
 
         Scroll() {
-          this.MdDocView(this.mdOfA(this.archDocText))
+          this.MdDocView()
         }
         .layoutWeight(1)
         .width('100%')
@@ -4590,7 +4650,7 @@ struct Index {
         .padding({ left: M_PAGE, right: M_PAGE, top: 10, bottom: 6 })
 
         Scroll() {
-          this.MdDocView(this.mdOfR(this.repDocText))
+          this.MdDocView()
         }
         .layoutWeight(1)
         .width('100%')
@@ -7269,6 +7329,15 @@ struct Index {
           }
         }
         this.readParas = paras;
+        // 9-29 修：同一本再打开 → 跳回上次那段；换书 → 从头发。
+        // 等一帧让 List 建好再跳（内容刚到，立即 scrollToIndex 会落空）。
+        if (this.readerBookId === bk.id && this.readerFirstIdx > 0) {
+          const jump: number = this.readerFirstIdx;
+          setTimeout(() => { this.readerScroller.scrollToIndex(jump); }, 80);
+        } else {
+          this.readerFirstIdx = 0;
+        }
+        this.readerBookId = bk.id;
       }
     } catch (err) {
       // 拉不到原文就在全屏里显示原因
