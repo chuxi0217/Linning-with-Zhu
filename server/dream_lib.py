@@ -8,6 +8,10 @@
 #   依据：kiwi-mem（热度分层/被想起续命）＋ DreamVault（治理梦游不治梦/卧室非病房/成分分离）
 #   ＋ Bitterbot（梦模式清单挑三）＋ Mímir（学名注释：Zeigarnik/Spreading Activation）。
 #   纪律：影子只读不写库、不打搅讲话、失败静默。
+#   ⚠️ 隐藏依赖（9-29 ② 评审第二批·写明）：**热度分层依赖 events 影子**——`mem.inject` /
+#   `mem.inject.used` 两串事件。events 记录一关（或被轮转/清理），热度读数会**静默为空**
+#   （读数空≠没有旧事，是"看不见递过什么"）。所以本模块的读数只在 events 开着时有意义；
+#   真要长期留痕，得给"递过/用过"建一张自己的小表（同 desire v2 用独立 state 的办法）。
 import difflib
 import json
 import os
@@ -103,7 +107,18 @@ def heat_dry_run(con, now):
             return 0.0
 
     if not score:
-        _say("梦·热度｜近两周没有递过的旧事，读数空")
+        # 9-29 ②：把"读数空"的**两种原因分开说**——真没递过 vs events 影子关着看不见（隐藏依赖）
+        try:
+            _n_ev = con.execute(
+                "SELECT count(*) FROM events WHERE kind IN ('mem.inject','mem.inject.used') "
+                "AND ts >= ?", (since,)).fetchone()[0]
+        except Exception:
+            _n_ev = -1
+        if _n_ev == 0:
+            _say("梦·热度｜读数空（近两周 **一条 mem.inject 记录都没有**）——注意本读数依赖 events 影子，"
+                 "events 关着时它会静默为空，**不代表没有旧事**")
+        else:
+            _say(f"梦·热度｜近两周没有『被递过』的旧事，读数空（events 里另有 {_n_ev} 条注入记录）")
         return {"hot": 0, "warm": 0, "cold": 0}
     tiers = {"热": [], "温": [], "冷": []}
     for (k, i), d in score.items():

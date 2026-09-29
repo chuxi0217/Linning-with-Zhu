@@ -38,8 +38,19 @@ def _conn():
 
 
 def _last_desire():
-    """从 events 读最近一次 D（没有→初始值）。"""
+    """上一次的 D。
+
+    9-29 ②（评审第二批）**去掉隐藏依赖**：原先只从 `events: desire.tick` 读——events 影子一关
+    （或被轮转/清理），D 就**静默冻结**在初值上，谁也不知道。现在**以独立 state 为准**
+    （`~/.zanjia_desire_state.json` 的 `d` 键，与 v2 用 `V2_STATE` 是同款做法）；
+    events 只当**首次迁移的种子**（老状态文件还没 d 时借一次），再退回 `desire_d0`。fail-open。"""
     try:
+        _d = _load_state().get("d")
+        if _d is not None:
+            return float(_d)
+    except Exception:
+        pass
+    try:   # 迁移种子：老库/老状态里没有 d 时，从 events 那条借一次（借完由 _save_d_v1 接管）
         con = _conn()
         row = con.execute(
             "SELECT payload FROM events WHERE kind='desire.tick' ORDER BY id DESC LIMIT 1"
@@ -50,6 +61,16 @@ def _last_desire():
     except Exception:
         pass
     return float(_cfg("desire_d0", 0.08))
+
+
+def _save_d_v1(d):
+    """v1 的 D 落独立 state（原子写；保留 state 其它键）。fail-open 回 False。9-29 ②。"""
+    try:
+        st = _load_state()
+        st["d"] = round(float(d), 4)
+        return _save_state(st)
+    except Exception:
+        return False
 
 
 def _time_mult(now):
@@ -108,6 +129,8 @@ def tick_and_shadow(now=None):
             exit_type = "②留下"
         else:
             exit_type = "①开口"
+        # 9-29 ②：D 落**独立 state**（原子写）——不把曲线挂在 events 影子上（关了会静默冻结）
+        _save_d_v1(d)
         # W1 脊柱：desire.tick 事件（影子）
         try:
             import events_lib

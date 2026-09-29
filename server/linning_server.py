@@ -753,6 +753,13 @@ def apply_max_tokens(cfg, body):
     return body
 
 
+# ⑩ 评审第二批（9-29）：config 热读缓存——**实测否决，不做**（留着这段当回执，免得下次又有人想加）：
+# 原本打算按 st_mtime_ns 做薄缓存（"63 处 load_config() 省盘 + 单请求内一致"）。但这台机器上
+# **共享盘的 mtime 在连写时不前进**：同一 ~33ms 刻度内连写三次，`st_mtime_ns` 三次完全相同
+# （连 /tmp 都撞过一次）。于是"改盘即重读"不成立——`_t_cache_tail` 连写两次 config 就吃到陈旧值，
+# 沙盘实抓。而套件/手动改 config 都是直接写文件、不走 save_config，缓存必然撒谎。
+# 结论：**宁可多读盘，不许读旧账**。真要做"单请求内一致"，正解是请求级快照（thread-local，
+# 在 do_GET/do_POST 入口抓一份、出口清），不是 mtime 比对——留待专门窗口。⑩ 关闭。
 def load_config():
     if not os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
@@ -1828,25 +1835,33 @@ def last_user_of(messages):
     return "（无）"
 
 
-def _claim_judge(reply, messages, tools_used, claimed_missing):
-    """deepseek-flash 终审。返回 dict(lie,kind,why)；任何失败返回 None（fail-open 放行）。"""
-    cfg = load_config()
+# ── ⑦ 评审第二批（9-29）：flash 终审收口成一个壳 ────────────────────────────────
+# 病灶：`_claim_judge` / `_busy_semantic_judge` / `_sleep_semantic_judge` 各抄了一遍
+# 「取三键 → 拼 body → thinking off 先试、不认再去掉重试 → 取 content」。抽成
+# `_judge_cfg()`（取键）＋ `_flash_judge()`（调用壳）——**超时/重试顺序/温度/解析口径逐字照旧**，
+# 只是不再抄第二遍。（`_caption_image` 是另一路多模态，不并。）
+def _judge_cfg():
+    """终审引擎三键（librarian_* 优先，_deepseek_* 兜底）。缺任一 → (None, None, None)。"""
+    try:
+        cfg = load_config()
+    except Exception:
+        return None, None, None
     base = (cfg.get("librarian_base_url") or cfg.get("_deepseek_base_url") or "").rstrip("/")
     model = cfg.get("librarian_model") or cfg.get("_deepseek_model") or ""
     key = cfg.get("librarian_api_key") or cfg.get("_deepseek_api_key") or ""
     if not (base and model and key):
-        print("  [对账 judge] 三键没配齐——fail-open 放行")
-        return None
-    try:
-        n = m.count_outbox_since("📧", _day_window_start())
-    except Exception:
-        n = 0   # 回执数不到手就不给这层证据，让 judge 只按本轮账单判
-    called = "、".join(sorted({str(t.get("name", "?")) for t in tools_used
-                               if not (t or {}).get("fake")})) or "无"
-    payload = {"model": model, "temperature": 0, "max_tokens": 400,
-               "messages": [{"role": "user", "content": CLAIM_JUDGE_PROMPT.format(
-                   last_user=last_user_of(messages), reply=str(reply)[:800],
-                   called=called, missing="、".join(claimed_missing), n=n)}]}
+        return None, None, None
+    return base, model, key
+
+
+def _flash_judge(prompt, timeout=20, max_tokens=60):
+    """flash 终审调用壳：返回 **(原文, 末次异常)**；缺键/全失败 → (None, 末次异常|None)。
+    thinking off 先试一次、不认再去掉重试一遍——与各原函数同序同参（超时/温度由调用方给）。"""
+    base, model, key = _judge_cfg()
+    if not base:
+        return None, None
+    payload = {"model": model, "temperature": 0, "max_tokens": int(max_tokens),
+               "messages": [{"role": "user", "content": prompt}]}
     last_err = None
     for with_thinking_off in (True, False):   # flash 认 thinking off；别家模型不认就去掉重试
         body = dict(payload)
@@ -1856,14 +1871,37 @@ def _claim_judge(reply, messages, tools_used, claimed_missing):
             req = urllib.request.Request(
                 base + "/chat/completions", data=json.dumps(body).encode("utf-8"),
                 headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"})
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-            txt = (data["choices"][0]["message"].get("content") or "").strip()
+            return (data["choices"][0]["message"].get("content") or "").strip(), None
+        except Exception as e:
+            last_err = e
+    return None, last_err
+
+
+def _claim_judge(reply, messages, tools_used, claimed_missing):
+    """deepseek-flash 终审。返回 dict(lie,kind,why)；任何失败返回 None（fail-open 放行）。"""
+    base, _model, _key = _judge_cfg()
+    if not base:
+        print("  [对账 judge] 三键没配齐——fail-open 放行")
+        return None
+    try:
+        n = m.count_outbox_since("📧", _day_window_start())
+    except Exception:
+        n = 0   # 回执数不到手就不给这层证据，让 judge 只按本轮账单判
+    called = "、".join(sorted({str(t.get("name", "?")) for t in tools_used
+                               if not (t or {}).get("fake")})) or "无"
+    prompt = CLAIM_JUDGE_PROMPT.format(
+        last_user=last_user_of(messages), reply=str(reply)[:800],
+        called=called, missing="、".join(claimed_missing), n=n)
+    txt, last_err = _flash_judge(prompt, timeout=30, max_tokens=400)
+    if txt:
+        try:
             j = json.loads(re.search(r"\{.*\}", txt, re.S).group(0))
             return {"lie": bool(j.get("lie")), "kind": str(j.get("kind", "?")),
                     "why": str(j.get("why", ""))[:60]}
-        except Exception as e:
-            last_err = e
+        except Exception:
+            pass   # 解析不出（不是合法 JSON）→ 按失败放行，与原来同口径
     print(f"  [对账 judge] 调用失败（{last_err}）——fail-open 放行")
     return None
 
@@ -4101,46 +4139,32 @@ def _refusal_gate(channel):
 # 提名线索避单常见字（去/在/回 不入列——太泛滥会烧终审调用；设计稿线索表本就标了开放点）。
 _BUSY_SEMANTIC_CLUES = ["忙", "课", "实验", "球", "睡", "出门", "宿舍",
                         "上课", "自习", "图书馆", "赶", "due", "考", "运动", "锻炼"]
+# 9-29 ⑦ 发现并修的真 bug：下面 JSON 示例里的花括号**必须转义成 {{ }}**——
+# 原来写成裸 `{"say": ...}`，`str.format(text=...)` 会把 `"say"` 当字段名 → ValueError
+# → 被外层 `except` 吞成"无关" → **这个语义终审从来没调用过模型**（`sleep_shadow.log` 一直是空的）。
+# 转义后 format 输出仍是正常 JSON 示例（给模型看的东西一字不变）。
 _BUSY_JUDGE_PROMPT = (
     "他在和姐姐聊天时说了下面这句话。判定这句是不是在向姐姐报备行程状态——只答一种：\n"
     "- 去忙：要去忙/正在忙（离开去做事、上课、运动、实验等）；\n"
     "- 收工：忙完/回来了（在报「我结束了」）；\n"
     "- 无关：都不是（闲聊、提问、其他）。\n"
-    "只输出 JSON：{\"say\": \"去忙\"} 或 {\"say\": \"收工\"} 或 {\"say\": \"无关\"}；"
+    "只输出 JSON：{{\"say\": \"去忙\"}} 或 {{\"say\": \"收工\"}} 或 {{\"say\": \"无关\"}}；"
     "拿不准一律 无关。\n\n他的话：{text}")
 
 
 def _busy_semantic_judge(text):
     """flash 终审：返回 '去忙'/'收工'/'无关'——任何失败/不确定一律 '无关'（宁不设窗）。
-    自测模式（ZANJIA_TEST）不联网：一律 '无关'（沙盘/套件命中提名也不外呼）。"""
+    自测模式（ZANJIA_TEST）不联网：一律 '无关'（沙盘/套件命中提名也不外呼）。
+    9-29 ⑦：调用壳并到 `_flash_judge`（行为逐字不动：20s 超时 / 60 tokens / 同解析）。"""
     if os.environ.get("ZANJIA_TEST"):
         return "无关"
     try:
-        cfg = load_config()
-        base = (cfg.get("librarian_base_url") or cfg.get("_deepseek_base_url") or "").rstrip("/")
-        model = cfg.get("librarian_model") or cfg.get("_deepseek_model") or ""
-        key = cfg.get("librarian_api_key") or cfg.get("_deepseek_api_key") or ""
-        if not (base and model and key):
+        txt, _err = _flash_judge(_BUSY_JUDGE_PROMPT.format(text=str(text)[:120]),
+                                 timeout=20, max_tokens=60)
+        if not txt:
             return "无关"
-        payload = {"model": model, "temperature": 0, "max_tokens": 60,
-                   "messages": [{"role": "user",
-                                 "content": _BUSY_JUDGE_PROMPT.format(text=str(text)[:120])}]}
-        for with_thinking_off in (True, False):
-            body = dict(payload)
-            if with_thinking_off:
-                body["thinking"] = {"type": "disabled"}
-            try:
-                req = urllib.request.Request(
-                    base + "/chat/completions", data=json.dumps(body).encode("utf-8"),
-                    headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"})
-                with urllib.request.urlopen(req, timeout=20) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-                txt = (data["choices"][0]["message"].get("content") or "").strip()
-                say = str(json.loads(re.search(r"\{.*\}", txt, re.S).group(0)).get("say", "无关"))
-                return say if say in ("去忙", "收工") else "无关"
-            except Exception:
-                continue
-        return "无关"
+        say = str(json.loads(re.search(r"\{.*\}", txt, re.S).group(0)).get("say", "无关"))
+        return say if say in ("去忙", "收工") else "无关"
     except Exception:
         return "无关"
 
@@ -7126,45 +7150,28 @@ def _asleep_restore_on_boot():
 _SLEEP_SHADOW_LOG = os.path.expanduser("~/sleep_shadow.log")
 _SLEEP_SHADOW_SEEN = {"at": None}   # 同一条末消息只判一次（守望 60 秒一轮，防重复送审）
 _SLEEP_CLUES = ["睡", "困", "关灯", "熄灯", "躺", "眯", "歇"]   # 提名：含线索才送终审
+# 9-29 ⑦ 同上：JSON 示例的花括号必须转义（裸 {} 会让 str.format 抛 ValueError → 终审变死代码）
 _SLEEP_JUDGE_PROMPT = (
     "他在和姐姐聊天时说了下面这句话（夜里时段）。判定这句是不是在说要去睡/已经躺下——"
     "只答一种：\n"
     "- 要睡：要去睡/已躺下/关灯歇了（在报「睡意」或「收工睡觉」）；\n"
     "- 无关：都不是（闲聊、其他话题）。\n"
-    "只输出 JSON：{\"say\": \"要睡\"} 或 {\"say\": \"无关\"}；拿不准一律 无关。\n\n他的话：{text}")
+    "只输出 JSON：{{\"say\": \"要睡\"}} 或 {{\"say\": \"无关\"}}；拿不准一律 无关。\n\n他的话：{text}")
 
 
 def _sleep_semantic_judge(text):
     """flash 终审：返回 '要睡'/'无关'——任何失败/不确定一律 '无关'（宁不记）。
-    自测模式（ZANJIA_TEST）不联网：一律 '无关'（沙盘/套件也不外呼）。"""
+    自测模式（ZANJIA_TEST）不联网：一律 '无关'（沙盘/套件也不外呼）。
+    9-29 ⑦：调用壳并到 `_flash_judge`（行为逐字不动：20s 超时 / 60 tokens / 同解析）。"""
     if os.environ.get("ZANJIA_TEST"):
         return "无关"
     try:
-        cfg = load_config()
-        base = (cfg.get("librarian_base_url") or cfg.get("_deepseek_base_url") or "").rstrip("/")
-        model = cfg.get("librarian_model") or cfg.get("_deepseek_model") or ""
-        key = cfg.get("librarian_api_key") or cfg.get("_deepseek_api_key") or ""
-        if not (base and model and key):
+        txt, _err = _flash_judge(_SLEEP_JUDGE_PROMPT.format(text=str(text)[:120]),
+                                 timeout=20, max_tokens=60)
+        if not txt:
             return "无关"
-        payload = {"model": model, "temperature": 0, "max_tokens": 60,
-                   "messages": [{"role": "user",
-                                 "content": _SLEEP_JUDGE_PROMPT.format(text=str(text)[:120])}]}
-        for with_thinking_off in (True, False):
-            body = dict(payload)
-            if with_thinking_off:
-                body["thinking"] = {"type": "disabled"}
-            try:
-                req = urllib.request.Request(
-                    base + "/chat/completions", data=json.dumps(body).encode("utf-8"),
-                    headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"})
-                with urllib.request.urlopen(req, timeout=20) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-                txt = (data["choices"][0]["message"].get("content") or "").strip()
-                say = str(json.loads(re.search(r"\{.*\}", txt, re.S).group(0)).get("say", "无关"))
-                return say if say in ("要睡",) else "无关"
-            except Exception:
-                continue
-        return "无关"
+        say = str(json.loads(re.search(r"\{.*\}", txt, re.S).group(0)).get("say", "无关"))
+        return say if say in ("要睡",) else "无关"
     except Exception:
         return "无关"
 
@@ -7965,7 +7972,7 @@ class Handler(BaseHTTPRequestHandler):
             # （那日志正好能被 /api/logs 读）。
             print(f"⚠️ GET {urllib.parse.urlparse(self.path or '').path} 炸了：{e}")
             try:
-                self._send_json({"error": f"server 内部岔子：{str(e)[:200]}"}, 500)
+                self._send_json({"ok": False, "error": f"server 内部岔子：{str(e)[:200]}"}, 500)   # ⑧：错误形状与全站统一（都带 ok）
             except Exception:
                 pass
 
@@ -8043,7 +8050,10 @@ class Handler(BaseHTTPRequestHandler):
             # 工地日志远程查看（9-12 家主令：手机上也能看到工具有没有真的调）。
             # 读 _server.log 尾部 n 行（默认 100，上限 400）原样回。只读不写。
             try:
-                qn = int(self.path.split("n=", 1)[1].split("&", 1)[0])
+                # ⑧ 评审第二批（9-29）：手撕 split 收口成 parse_qs——`n=` 长在别的参数里（如
+                # `?x=n=9`）时 split 版会取错；parse_qs 按参数名取值，取不到就是缺省。
+                _qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                qn = int((_qs.get("n") or [""])[0])
             except (IndexError, ValueError):
                 qn = 100
             qn = max(1, min(qn, 400))
@@ -8097,7 +8107,9 @@ class Handler(BaseHTTPRequestHandler):
             # 共读原文（9-12）：?id= 书卷 → txt 全文（app 拉走后本地切段渲染）。
             # 书是导入物，不进库——文本住 files/books/，库里只有元数据与批注。
             try:
-                bid = int(self.path.split("id=", 1)[1].split("&", 1)[0])
+                # ⑧ 评审第二批（9-29）：手撕 split 收口成 parse_qs（同上，抗参数顺序/同名混淆）
+                _qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                bid = int((_qs.get("id") or [""])[0])
             except (IndexError, ValueError):
                 return self._send_json({"ok": False, "error": "id 得是数字"}, 400)
             fname = None
@@ -8413,7 +8425,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             print(f"⚠️ POST {self.path} 炸了：{e}")
             try:
-                self._send_json({"error": f"server 内部岔子：{str(e)[:200]}"}, 500)
+                self._send_json({"ok": False, "error": f"server 内部岔子：{str(e)[:200]}"}, 500)   # ⑧：错误形状与全站统一（都带 ok）
             except Exception:
                 pass
 

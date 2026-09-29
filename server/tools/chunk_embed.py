@@ -17,18 +17,18 @@ import time
 import urllib.request
 
 # 生产根（双系统，宁拒勿碰家风）：命中且没 --yes → 只干跑
-_PROD_ROOTS = ("/media/<you>/<your-volume>/咱家记忆库", "~/咱家记忆库")
+# 生产哨兵（9-29 ⑳ 评审第二批）：原先按**写死的绝对路径**认生产——镜像脱敏会把路径换成占位符，
+# 守卫就永不命中（形同虚设，评审实抓）。改认**哨兵文件**：`<root>/.zanjia_prod` 在 = 这份是生产。
+# 路径无关（Windows『~/咱家记忆库』/ Linux『/media/.../咱家记忆库』/ 镜像 / 搬过家都认同一份）；
+# 沙盘与演练目录不放这文件即可。哨兵本身 gitignore（每份拷贝各自带，不随仓走）。
+PROD_MARK = ".zanjia_prod"
 
 
 def _is_prod(root):
-    r = os.path.abspath(root).replace("\\", "/").lower()
-    for p in _PROD_ROOTS:
-        if ":" in p.split("/")[0] and os.name == "nt":
-            if os.path.abspath(p).replace("\\", "/").lower() == r:
-                return True
-        elif os.path.isabs(p) and os.path.abspath(p).replace("\\", "/").lower() == r:
-            return True
-    return False
+    try:
+        return os.path.exists(os.path.join(os.path.abspath(root), PROD_MARK))
+    except OSError:
+        return False
 
 
 def _embed(texts, base, key, model, timeout=120):
