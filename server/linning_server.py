@@ -612,6 +612,13 @@ DEFAULT_CONFIG = {
     "inject_use_judge_v2": True,
     "recall_gate_shadow": True,
     "recall_gate_v2": False,
+    # ── 检索层统一（§5 第 5 条 · 批次①·2026-09-29）：把"块层"拉进同一检索入口 ──
+    # 病根：chunks（1606 块＝聊天原话分块/日记）与 oldhome（1397 块＝三个家）在库里有向量，
+    # 却**没接进任何检索路径**（memory_lib 原话："检索接线 chunk_retrieval 另批——本表先静躺"）。
+    # 本批**只记不改**：shadow 落 events: mem.unified.shadow（新规则 vs 现状并排，只带 kind/id/分）。
+    # 读 2 天、不一致率 ≤30% 才切 `retrieval_unified`（批次②）。
+    "retrieval_unified_shadow": True,
+    "retrieval_unified": False,
     # 丁·B1 轻减（9-29 家主圈）：删 7 处③风格类禁令尾巴；关=逐字节回原样。
     "prompt_ban_relax": True,
     # 丁·B2 拆两开关（9-29 拍板 A1）：drop_echo 删复读/秒回（默认开）；drop_flatter 删「不许讨好」（默认关）。
@@ -5641,6 +5648,63 @@ def _recall_gate_res(res, scores, path="mixed", soft=False):
         return res
 
 
+# ── 检索层统一（§5 第 5 条 · 批次①·2026-09-29）：影子先行 ──────────────────────────
+# 现状（cur）：`hybrid_search` 五卷（day/chat/note/letter/hall）＋`_recall_gate_res` 筛 → 真正递出的那批。
+# 新规则（new）：`memory_lib.search_all` 同一入口同一份分，**把块层拉进来**——
+#   `chunk` 1606 块（聊天原话分块／日记／小本本／信）＋`oldhome` 1397 块（三个家）。
+# 本批**只记不改**：落 events: mem.unified.shadow（新 vs 现状并排）。
+# **事件里只有 kind/id/分——一个字原文都不带。**
+_UNIFIED_SCOPE = ("day", "chat", "note", "letter", "hall", "chunk", "oldhome")
+_UNIFIED_LIMIT = 4        # 每卷取几条（与开场 limit 同尺）
+_UNIFIED_CMP_N = 5        # 并排对比的**同预算**：两边各取前 N 条比"同样 5 个坑，选谁"——
+# 不对齐预算的比法会天然偏向"新规则卷多所以条多"，读出来的不一致率是假的（9-29 实测：31 vs 8）。
+
+
+def _unified_shadow(qmsg, or_query, qvec, emodel, cur_res, path="mixed"):
+    """「若按统一入口＋块层会捞到哪些」——与现状并排落账。fail-open，绝不影响交付。
+
+    ⚠️ **同预算对比**（9-29 修）：`cur`/`new` 各截前 `_UNIFIED_CMP_N` 条再算 gained/lost/交集——
+    否则"新规则卷更多 → 条更多"会被误读成"改天换地"。池子大小另记 `*_all_n`。"""
+    try:
+        if not _flag_on("retrieval_unified_shadow"):
+            return
+        new = m.search_all(qmsg, _UNIFIED_SCOPE, limit=_UNIFIED_LIMIT,
+                           qvec=qvec, model=emodel, expr_override=or_query)
+        cur = []
+        for k, rows in (cur_res or {}).items():
+            if not isinstance(rows, list) or k == "favorite":
+                continue
+            for r in rows:
+                try:
+                    cur.append({"kind": str(k), "id": r[0]})
+                except Exception:
+                    continue
+        cur_n = max(1, int(_UNIFIED_CMP_N))
+        cur_top = cur[:cur_n]
+        new_top = new[:cur_n]
+        cur_keys = {f"{c['kind']}:{c['id']}" for c in cur_top}
+        new_keys = {f"{n['kind']}:{n['id']}" for n in new_top}
+        by_kind = {}
+        for n in new:
+            by_kind[n["kind"]] = by_kind.get(n["kind"], 0) + 1
+        try:
+            import events_lib
+            events_lib.record("mem.unified.shadow", "linning", "chat",
+                              {"p": path, "scope": list(_UNIFIED_SCOPE), "cmp_n": cur_n,
+                               # 池子大小（未截断）——看"能捞多少"
+                               "cur_all_n": len(cur), "new_all_n": len(new),
+                               # 同预算清单（各前 N 条）——这才是一致率的尺子
+                               "cur": [f"{c['kind']}:{c['id']}" for c in cur_top],
+                               "new": [f"{n['kind']}:{n['id']}({n['sim']})" for n in new_top],
+                               "gained": sorted(new_keys - cur_keys),
+                               "lost": sorted(cur_keys - new_keys),
+                               "by_kind": by_kind})
+        except Exception as e:
+            _soft_fail("unified.shadow.record", e)
+    except Exception as e:
+        _soft_fail("unified.shadow", e)
+
+
 def _retrieve_mixed(message, limit, path="mixed"):
     """开场记忆检索公共段（auto_mem 与凭据夹共用）：Top-4 长词 OR 串 + 可选查询嵌入。
     返回 hybrid_search 的 dict；<6 字或词元空手返回 None。嵌入失手=退纯词面，绝不上抛。
@@ -5679,6 +5743,9 @@ def _retrieve_mixed(message, limit, path="mixed"):
                           score_out=_scores)
     # 旧事两修·B：检索三件（门槛/去重/偏近）——影子先行，默认不改交付（recall_gate_v2 才真滤）
     res = _recall_gate_res(res, _scores, path=path)
+    # 第 5 条（批次①·2026-09-29）：检索层统一·影子——把块层（chunk 1606 块／oldhome 1397 块）
+    # 拉进**同一入口同一份分**，与现状（上面这份、已过门槛）并排落 events。只记不改。
+    _unified_shadow(qmsg, or_query, qvec, emodel, res, path=path)
     # 9-27 自回声修（抽检实案：检索到他自己刚发的那一条——消息先落库、检索在后）：
     # 谈话窗口内的原话不算「想起」（就在眼前/会话里）。过滤：近 2 分钟的 chat 行
     # ＋与当前消息（及短句带上的上文）前 80 字相同的那条；chat 卷全被滤掉就把键摘掉。

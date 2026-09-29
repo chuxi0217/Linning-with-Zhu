@@ -1620,6 +1620,129 @@ def hybrid_search(query, kinds=("day", "chat", "note", "letter", "hall"), limit=
     return out
 
 
+# ── 检索层统一（§5 第 5 条 · 批次①）：一个入口、一种形状、一份分 ────────────────────
+# 现状病根：检索是"拼接式"——FTS 八卷一根线、chunks（1606 块，M2 语义分块）一根线、
+# oldhome（三个家 1397 块）一根线、按行向量一根线；各算各的分，**块层压根没接进任何检索路径**
+# （memory_lib 里那句"检索接线 chunk_retrieval 另批——本表先静躺"就是这件事）。
+# 本函数＝那条"另批"的入口：各源走**适配器**，统一出 (kind, id, row, sim, src)。
+# **纯加性只读**：不动 `fts_search`/`hybrid_search`/任何现有交付——谁调用、谁才受影响。
+SEARCH_ALL_VEC_FLOOR = 0.35     # 向量低于它不算"想起来"（与 hybrid_search 同口径）
+
+
+def _row_text_of(kind, row):
+    """从各卷行里取正文（跨源去重要比对文本；形状照 _vec_row/fts_search 各家口径）。"""
+    try:
+        if kind in ("day", "hall", "chunk"):
+            return str(row[4] or "")
+        if kind == "chat":
+            return str(row[3] or "")
+        if kind in ("note", "letter"):
+            return str(row[1] or "")
+        if kind == "oldhome":
+            return str(row[3] or "")
+    except Exception:
+        return ""
+    return ""
+
+
+def _near_dup(t1, t2):
+    """两份正文是否"近乎同一段"——前 40 字互为子串就算（块是原话的切片，开头天然相同）。"""
+    if len(t1) < 8 or len(t2) < 8:
+        return False
+    a, b = t1[:40], t2[:40]
+    if a == b:
+        return True
+    return a in t2 or b in t1
+
+
+def search_all(query, kinds, limit=8, qvec=None, model="", expr_override=None,
+               score_out=None, vec_floor=SEARCH_ALL_VEC_FLOOR):
+    """检索层统一入口（批次①）。返回**扁平**列表，按 sim 从大到小：
+        [{"kind": "day", "id": 23, "row": (...), "sim": 0.76, "src": "fts"|"vec"}, ...]
+
+    - **fts 适配器**：`fts_search` 取词面命中（可带 expr_override），sim 取 bm25→(0,1]（取不到=0.0）；
+    - **vec 适配器**：`vector_search` 按余弦补漏（同 (kind,id) 去重），
+      低于 `vec_floor` 的不算"想起来"（与 hybrid_search 同口径）；
+    - 每卷各自最多 `limit` 条（与 fts_search 同尺），**不跨卷硬截断**——排序留给调用方；
+    - `score_out` 传入即回填 {卷: {rowid: 分}}（同 hybrid_search 家风）。
+    只读、fail-open：任一路炸了就当那一路空手，另一路照出。
+    """
+    out = []
+    seen = set()
+    sc_own = score_out if score_out is not None else {}
+    # ① 词面路
+    try:
+        res = fts_search(query, kinds, limit, expr_override=expr_override, score_out=sc_own)
+    except Exception:
+        res = {}
+    for kind in kinds:
+        for row in (res.get(kind) or []):
+            try:
+                _id = row[0]
+            except Exception:
+                continue
+            key = (kind, _id)
+            if key in seen:
+                continue
+            seen.add(key)
+            s = (sc_own.get(kind) or {}).get(_id)
+            out.append({"kind": kind, "id": _id, "row": row,
+                        "sim": float(s) if s is not None else 0.0, "src": "fts"})
+    # ② 语义补漏路
+    if qvec:
+        try:
+            vkinds = tuple(k for k in kinds if k in ("day", "hall", "note", "letter",
+                                                     "oldhome", "chunk"))
+            hits = vector_search(qvec, model, vkinds, topk=max(limit * 2, 8)) if vkinds else []
+        except Exception:
+            hits = []
+        n_added = {}
+        for kind, ref_id, score in hits:
+            # 防御：向量适配器**只得认 scope 内的卷**（别指望底层一定过滤好了——
+            # 沙盘用桩替换 vector_search 时，这条就是唯一的闸）。
+            if kind not in vkinds:
+                continue
+            try:
+                score = float(score)
+            except Exception:
+                continue
+            if score < float(vec_floor):
+                continue
+            key = (kind, int(ref_id))
+            if key in seen:
+                continue
+            if n_added.get(kind, 0) >= limit:
+                continue
+            row = _vec_row(kind, ref_id)
+            if not row:
+                continue
+            seen.add(key)
+            n_added[kind] = n_added.get(kind, 0) + 1
+            out.append({"kind": kind, "id": int(ref_id), "row": row,
+                        "sim": round(score, 4), "src": "vec"})
+            try:
+                sc_own.setdefault(kind, {})[int(ref_id)] = round(score, 4)
+            except Exception:
+                pass
+    out.sort(key=lambda r: (-r["sim"], r["kind"], r["id"]))
+    # ── 跨源近重复合并（9-29 实测抓到的）：同一段话会以"原话（chat/day/note/letter）"和
+    # "它的分块（chunk）"两种形态同时进榜，白占两个坑。
+    # 规则：**chunk 是派生物，先让位给原件**——两轮走：
+    #   ① 先收非 chunk 的（按分降序）；② 再收 chunk，正文与已收的近乎同一段就丢。
+    # ⚠️ 只做"同内容不重复占位"，**不动分、不重排**（两路分怎么校准是批次②的事）。
+    kept = []
+    for _pass in (0, 1):
+        for it in out:
+            if (_pass == 1) != (it["kind"] == "chunk"):
+                continue
+            _t = _row_text_of(it["kind"], it["row"])
+            if any(_near_dup(_t, k[1]) for k in kept):
+                continue
+            kept.append((it, _t))
+    out = [k[0] for k in kept]
+    return out
+
+
 def add_day(date, day_no=None, title="", content="", mood=""):
     """写日记。day_no 不传就自动算。"""
     if day_no is None:
