@@ -235,7 +235,13 @@ def collect(now=None):
         for oid, at, txt in rows:
             t = (txt or "").strip()
             kind = "想念信" if t.startswith("💌") else ("园子" if t.startswith("🌱") else "念叨")
-            body = t[2:] if t[:1] in ("💌", "🌱") else t
+            # 见闻三小件（9-29）：出门的分享是「🌱🌍 」前缀——startswith("🌱") 照样认作园子类 ✓；
+            # 剥前缀改成按整串记号剥（原来写死 [2:]，🌱🌍 是 3 字符会留个残字在正文里）。
+            body = t
+            for _pre in ("🌱🌍 ", "🌱 ", "💌 "):
+                if t.startswith(_pre):
+                    body = t[len(_pre):]
+                    break
             added += 1 if _add(kind, f"说过了：{body[:60]}", f"outbox#{oid}",
                                status="已说", said_at=at, now=now, strict=True) else 0
     except Exception:

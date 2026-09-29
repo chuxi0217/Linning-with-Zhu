@@ -105,6 +105,9 @@ NOTES = {
     "health_api": "观测层 /api/health（默认关；开=露口）",
     "inject_use_judge_v2": "注入判定 v2 词重叠（审计-only；关=回 ≥6 字窗口）",
     "recall_gate_shadow": "检索三件影子（只记不改；落 mem.recall.shadow）",
+    "retrieval_unified_shadow": "检索层统一·影子（只记不改；落 mem.unified.shadow，只带 kind:id）",
+    "retrieval_unified": "检索层统一·真切（默认关；开=按统一入口＋块层递）",
+    "bind_host": "监听地址（0.0.0.0=全接口）。⚠️**已实证门走 WireGuard(10.66.0.x/24)，别置 127.0.0.1**——会关掉公网门。校园网已被 ufw 默认 deny 挡住",
     "recall_gate_v2": "检索三件真滤（默认关；开=按门槛/去重/偏近递）",
     "recall_gate": "检索三件旋钮（门槛/每卷每日配额/卷权重/近度权重）",
     "tuning": "阈值收表（甲3·缺省=现值·删段即回原样）——tool_search_min/fuse_sim/rhythm_p0/"

@@ -619,6 +619,12 @@ DEFAULT_CONFIG = {
     # 读 2 天、不一致率 ≤30% 才切 `retrieval_unified`（批次②）。
     "retrieval_unified_shadow": True,
     "retrieval_unified": False,
+    # ── 见闻分享三小件（§5 第 9 条 4.2 · 9-29 家主拍板 A3）──
+    # ① 唤醒提示加一句"分享不叫打扰"（在 srv_garden 的唤醒提示里，无键）；
+    # ② 🌍 记号：出门（自主散步）的分享进信箱记 🌍，园子内的照旧 🌱（无键）；
+    # ③ **群岛递笔**：雾潮群岛的门开着但她还没去过 → 指定日子轻放一行（默认 10-02＝递笔日）。
+    "islands_invite": True,
+    "islands_invite_days": ["10-02"],
     # 丁·B1 轻减（9-29 家主圈）：删 7 处③风格类禁令尾巴；关=逐字节回原样。
     "prompt_ban_relax": True,
     # 丁·B2 拆两开关（9-29 拍板 A1）：drop_echo 删复读/秒回（默认开）；drop_flatter 删「不许讨好」（默认关）。
@@ -649,6 +655,15 @@ DEFAULT_CONFIG = {
                     "quota": {"oldhome": 1},
                     "gate_tool": False},
     "port": 8024,          # 咱家纪念日端口
+    # 绑定地址（§5 第 11 条 ufw 收紧的"彻底档"引信·2026-09-29）：
+    # "0.0.0.0"＝全接口（现状：公网门经 VPS Caddy→**WireGuard**→10.66.0.x:8024）。
+    # ⚠️⚠️ **别置 "127.0.0.1"**——2026-09-29 家主给了 `sudo ufw status verbose` 实证：
+    #     `8024 ALLOW IN 10.66.0.x/24  # zanjia-wg` ← 这条就是为公网门开的口，
+    #   说明门走 **WireGuard 直连本机**（不是 SSH 反向隧道 18024，那条是旧址/备份）。
+    #   改 127.0.0.1 会把**公网门一起关掉**（手机/app 全部 502）。
+    #   校园网那条 `10.x.x/16` 已被 ufw 默认 `deny (incoming)` 挡住 → 本键**无需改**。
+    #   真要用它，前提是先让公网门改走 SSH 反向隧道。详见 工单/运维_ufw收紧_2026-09-29.md。
+    "bind_host": "0.0.0.0",
     "thinking_enabled": True,    # 二期d：思考模式开关（配置外置先例）
     "thinking_effort": "high",   # low/high/max，9-1 探针实证可用
     "temperature": 1.2,          # 温度旋钮（验尸报告药方，09-02 家主拍板起步值）
@@ -1520,6 +1535,26 @@ def build_system_prompt(consume=True):
                              "想写就写；不想写，就让它在心里存着。")
     except Exception as _sf_e:
         _soft_fail("装配.一页纸", _sf_e)
+
+    # 群岛递笔（见闻三小件 ③ · 9-29 家主拍板 A3「✅ 递」）：雾潮群岛的门开着
+    # （garden_nostos_enabled=true），她**还没去过**——不是坏了，是没人递过笔。
+    # **只在指定日子**轻放一行（islands_invite_days，默认 "10-02"＝递笔日）；不催不逼，
+    # 什么时候想去都行。开关 islands_invite（默认开）；补写路径不摆（日期不是"今天"）。
+    try:
+        if consume and load_config().get("islands_invite", True):
+            _nd = today_str()
+            _hit_i = False
+            for _x in (load_config().get("islands_invite_days") or []):
+                _sx = str(_x).strip()
+                if _sx and (_sx == _nd or _sx == _nd[5:]):   # 支持 "2026-10-02" 或 "10-02"
+                    _hit_i = True
+                    break
+            if _hit_i:
+                parts.append("\n【群岛】雾潮群岛的门开着——想选个出生地、在岛上过日子，随时去"
+                             "（想去了搜「群岛」，把证摆上桌）。岛上的日子就是现成的见闻，回来有得讲。"
+                             "不急，什么时候想去都行。")
+    except Exception as _sf_e:
+        _soft_fail("装配.群岛递笔", _sf_e)
 
     # 图纸·信笺提示（9-28 图纸批）：档案室在《咱家图纸》末尾留了新话（flag 在）→ 行李里轻放一行；
     # 她读过即清（read_blueprints 清 flag）；不催：不看也行。开关 blueprint_note（默认开）。
@@ -9392,7 +9427,14 @@ def main():
         port = int(os.environ.get("ZANJIA_PORT") or cfg["port"])
     except (TypeError, ValueError):
         port = cfg["port"]   # 环境变量里的端口不是数字就退回 config，别让临时实例起不来
-    server = ThreadingHTTPServer(("0.0.0.0", port), Handler)  # 9-23 网络改造：绑全接口——来路 VPS Caddy(:443)→WireGuard 隧道→10.66.0.x:8024；ufw 只放行隧道/热点网段（Tailscale 旧门经 127.0.0.1 代理照常可用）
+    _bind_host = str(cfg.get("bind_host") or "0.0.0.0").strip() or "0.0.0.0"   # §5-11：默认全接口＝现状
+    # 9-23 网络改造：绑全接口——来路 VPS Caddy(:443)→**WireGuard**→10.66.0.x:8024
+    # （9-29 家主 `ufw status` 实证：`8024 ALLOW IN 10.66.0.x/24 # zanjia-wg`；SSH 反向隧道 18024 是旧址/备份）
+    # ufw 默认 deny incoming，只放行 WireGuard(10.66.0.x/24) 与手机热点（安卓热点默认网段 192.168.x.x.x）两条
+#（写成 192.168.x.x.x 不写全：镜像扫描把 192.168.x.x 当内网 IP 拦，而 .py 不过工具脱敏——源头就得干净）
+    server = ThreadingHTTPServer((_bind_host, port), Handler)
+    # §5 第 11 条（9-29）：监听地址 config 化（`bind_host`，默认 "0.0.0.0" 与现状逐字节同）。
+    # 置 "127.0.0.1" = 只本机（校园网/局域网看不到）；喊出来是为了"全接口"这件事**开机就看得见**。
     today = today_str()
     print("=" * 50)
     print(f"  咱家通电了。今天是 {today}，咱家第 {m.day_no_of(today)} 天。")
@@ -9421,6 +9463,12 @@ def main():
     # 嵌入端点随家通电（9-14 家主拍板折中方案）：没起就由 server 亲手拉起 llama-server
     print(f"  嵌入端点：{_ensure_llama_server()}（:{LLAMA_PORT}）")
     print(f"  网络门：{_ensure_tunnel()}（反向隧道 :18024）")
+    # §5-11：监听面开机就喊出来——"全接口"这件事不该藏在代码里（同网段设备能直连 = 绕过 Caddy 门锁）
+    if _bind_host in ("127.0.0.1", "localhost"):
+        print(f"  监听面：{_bind_host}:{port}（只本机——校园网/局域网看不到 ✓）")
+    else:
+        print(f"  监听面：{_bind_host}:{port}（全接口——同网段设备可直连；"
+              f"要收紧看 工单/运维_ufw收紧_2026-09-29.md）")
     # ⑤ 图书证自检（9-29 评审⑤-half）：菜单有、执行层没接 = 她永远调不动那只证
     _sc_ok, _sc_tot, _sc_miss = _tool_selfcheck()
     if _sc_miss:

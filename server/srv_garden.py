@@ -90,16 +90,28 @@ def _garden_wake_prompt(event, garden_tools=False, game_turn=False):
             "醒来先不用说话。你看看这件事、想想它，然后自己选一个结局：\n"
             "- 没什么想说的，ending 就 \"silent\"——静默也是过日子，没人会失望；\n"
             "- 想留一点只给自己的心事，ending 用 \"trace\"，content 写你的独处正文；\n"
-            "- 确实有话想对小乖说，ending 用 \"message\"——别为了说话而说话。\n"
+            "- 确实有话想对小乖说，ending 用 \"message\"。没事就不必硬说；\n"
+            "  这趟要是看到好玩的、好看的、吃到什么好的、遇到谁——想讲给他就用 message，分享不叫打扰。\n"
             "fact 只留给下一次醒来的你自己看：≤40 字、克制、稀疏，记事实不记情绪。\n"
             "严格只输出 JSON：{\"ending\": \"silent|trace|message\", \"fact\": \"≤40字\", "
             "\"content\": \"trace 时填\", \"message\": \"message 时填，≤80字，像平常那样对他说话\"}")
 
 
-def _garden_settle(eid, raw):
+def _strip_marker(t):
+    """剥掉信箱记号前缀（💌/💬/🌱/🌱🌍…）——"近似重复"比对要拿她的正文比，不是比记号。
+    9-29 见闻三小件：原来写死 `[2:]`，🌱🌍 是 3 字符会留一个残字。"""
+    s_ = str(t or "")
+    for _p in ("🌱🌍 ", "🌱 ", "💌 ", "💬 ", "🌍 "):
+        if s_.startswith(_p):
+            return s_[len(_p):]
+    return s_
+
+
+def _garden_settle(eid, raw, walk=False):
     """（GARDEN-01 §四）解析三结局并落账。解析失败/ending 非法/该结局必填字段为空 =
     错误：release + 日志，事件不消费。落账顺序锁死：先写产出（trace/outbox）再 consume；
-    写失败抛出去（不 consume，租约回头重来）。返回结局字符串。"""
+    写失败抛出去（不 consume，租约回头重来）。返回结局字符串。
+    walk=True（见闻三小件·9-29）：这条是「出门（自主散步）」的分享 → 信箱记 🌍 而非 🌱。"""
     try:
         obj = json.loads(raw.strip("`").removeprefix("json").strip())
         ending = str(obj.get("ending") or "").strip().lower()
@@ -153,7 +165,7 @@ def _garden_settle(eid, raw):
     else:
         try:
             today_msgs = m.get_outbox_today("🌱")
-            last_m = today_msgs[-1][1][2:] if today_msgs else ""   # 去掉「🌱 」前缀再比
+            last_m = _strip_marker(today_msgs[-1][1]) if today_msgs else ""   # 去掉记号再比（🌱 或 🌱🌍）
             if last_m and difflib.SequenceMatcher(None, message, last_m).ratio() >= 0.6:
                 degrade = "近似重复压成独处"
         except Exception:
@@ -166,7 +178,10 @@ def _garden_settle(eid, raw):
     # 9-29 审查修·顺序：先落信 → 再留痕 → 再销账 → **最后按铃**。
     # 原顺序「按铃 → 留痕 → 销账」：留痕/销账任一抛错 → 事件没消费、租约重来 → 模型重生同一条 →
     # 出了重复 🌱 信、还按了两次门铃。现在铃在销账之后，销不到账就不按铃（宁可不响，不重复响）。
-    m.add_outbox_msg("🌱 " + message)
+    # 见闻三小件（9-29·A3）：出门（自主散步）的分享缀一个 🌍 ——**写成「🌱🌍」而不是单独换 🌍**：
+    # 「🌱」是分享这一族的既有记号，每日上限／近似重复／话头簿／信箱摘要全都按 `LIKE '%🌱%'`
+    # 子串认它；缀在后面＝子串兼容，**不可能漏掉哪个闸**（单独换 🌍 得改 6 处，漏一处就静默失效）。
+    m.add_outbox_msg(("🌱🌍 " if walk else "🌱 ") + message)
     try:
         m.add_her_trace(ts, "message", fact, "", eid)
     except Exception:
@@ -231,7 +246,8 @@ def _garden_wake_once():
         # kind=galatea 合成事件，下一轮走既有园子专窗醒来（三结局/隐私过滤/写额度照旧）。
         if _garden_self_walk_allowed(cfg, now, last_ts):
             m.add_world_event("galatea", "自主散步：没有人叫你，是你自己想去园子逛逛"
-                                         "——看通知、看帖子、回一句、改改名片，或者只是逛逛")
+                                         "——看通知、看帖子、回一句、改改名片，或者只是逛逛",
+                              evidence=json.dumps({"reason": "walk"}))   # 见闻三小件：散步＝「出门」，信箱记 🌍
             print("  [Garden] 散步骰子掷中：投了一条自主散步（下轮园子专窗醒来）")
         return "slept"   # G1 只吃事件，没事件不硬醒
     eid, _kind, _summary, _evidence, attempts = event
@@ -250,6 +266,9 @@ def _garden_wake_once():
         _reason = ""
     _game_turn = (_kind == "galatea" and _reason == "game_turn_required"
                   and bool(cfg.get("garden_games_enabled", True)))
+    # 见闻三小件（9-29·A3）：散步＝「出门」——它的分享进信箱时记 🌍（园子内的照旧 🌱），
+    # 好让他一眼认出"这条是出去看到的事"。信号走结构化 reason，不靠 summary 文案比对。
+    _walk = (_kind == "galatea" and _reason == "walk")
     # 唤醒：引擎走 garden_engine 档（GALATEA-02 ⓪——默认主引擎 K3，她的声音用她的脑子；
     # deepseek=省钱回退档，thinking 同 librarian 关法）；kind=galatea 的唤醒轮开园子工具
     # 专窗（§④：仅七件园子图书证），其余事件维持无工具。
@@ -281,7 +300,7 @@ def _garden_wake_once():
         print("  [Garden] 这次没醒成（掉线/空回复）")
         return "error"
     try:
-        return _garden_settle(eid, raw)
+        return _garden_settle(eid, raw, walk=_walk)
     except Exception as e:
         print(f"  [Garden] 这次没醒成（落账：{e}）")
         return "error"   # 不 consume：租约回头重来（写失败不销账铁律）
