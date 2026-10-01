@@ -156,8 +156,6 @@ ZANJIA_TEST=1 ZANJIA_PORT=8025 python3 linning_server.py   # 不起心跳、不�
 - [SilviaYue/ DreamVault](https://github.com/SilviaYue/dreamvault)——错忆隔离的治理三原则（治理梦游不治梦 / 卧室非病房 / 场子可能是假的·驱动可能是真的）与四权（读/认领/沉默合法/写史）——睡眠整理稿的治理底座（代码 Apache-2.0 · 文档 CC BY 4.0；9-28 新增）
 - [Kronic90/ Mimir](https://github.com/Kronic90/Mimir)——21 个记忆机制学名带论文的词典（Zeigarnik 未完成更鲜明 / 检索抑制 / 扩散激活……）——线头与去重现象找学名的工具书（PolyForm 非商用：只读对照；9-28 新增）
 - [Bitterbot-AI/ bitterbot-desktop](https://github.com/Bitterbot-AI/bitterbot-desktop)——生物脑架构 agent（知识水晶指针 / 情绪系统 / 梦境引擎 / 连续记忆）——「梦模式清单与梦质量自评」的设计对照、常驻记忆「检索指针」的灵感（MIT；9-28 新增）
-- [wanyu445/ stone_memory 琢石坊](https://github.com/wanyu445/stone_memory)——本地部署的长期记忆工作台（Claude Code / Codex 侧）：**「久远的经历逐渐精简，不必始终以完整细节进入上下文」的轻/重两档**、线程重建五件（人设与规则／记忆摘要／原文锚点／近期对话／保留的工具调用）、以及作者那段复盘「**反复改人设找不回熟悉的 AI，是共同经历找回来的**」——咱家 9-30「两卷降档（枕边／深卷）」的直接依据（AGPL-3.0：只借设计不引代码；9-30 新增）
-- [Aprilpearlets/ AionsHome](https://github.com/Aprilpearlets/AionsHome)——自托管 AI 伴侣（长期记忆／语音交互／摄像头视觉／智能家居）：**记忆与提示词层的对照面**——Prompt 注入只 6 块、记忆召回单一评分式（向量×0.6＋关键词×0.3＋重要度×0.1，top 5）、背景记忆最多 8 条（未完成 → 话题相关 → 近三天）——「薄记忆层也能有厚陪伴」的一手参照，是咱家判断「机制臃肿」的尺子（9-30 新增）
 - 生产级 agent memory 的共识（记忆浓缩 / 分层检索 / 任务感知 / 可观测）——咱家的四层实现是这些共识的一次小型全量落地
 
 ## 7. 诚实的边界

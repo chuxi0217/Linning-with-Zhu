@@ -164,7 +164,7 @@ def _kill_stale_self(marker):
 
 
 def main():
-    vps = str(_cfg("vps", "root@your-vps.example"))
+    vps = str(_cfg("vps", "root@<vps-ip>"))
     rport = str(_cfg("remote_port", "18024"))
     lport = str(_cfg("local_port", "8024"))
     cmd = ["ssh", "-N",

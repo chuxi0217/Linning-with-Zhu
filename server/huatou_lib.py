@@ -305,6 +305,17 @@ def take_huatou(now=None):
         if not _cfg("outreach_inject", False):
             return None
         con = _conn()
+        # 10-01 大扫除批⑧：**超时回收**——「已提」的条目若他此后一直没说话，settle 永远不会
+        #   把它还回『待说』（settle 的条件是「他之后又说过话」）→ 那条永久卡在『已提』，
+        #   既不再被取、也不会重提。超过 huatou_reclaim_h 小时 → 还回『待说』。
+        try:
+            _rh = int(float(_cfg("huatou_reclaim_h", 24)))
+            con.execute("UPDATE huatou SET status='待说', said_at=NULL "
+                        "WHERE status='已提' AND said_at IS NOT NULL "
+                        "AND said_at <= datetime('now','localtime', ?)",
+                        ("-%d hours" % _rh,))
+        except Exception:
+            pass
         rows = con.execute(
             "SELECT id, ts, kind, text FROM huatou WHERE status='待说' ORDER BY id").fetchall()
         if not rows:

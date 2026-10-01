@@ -19,7 +19,7 @@ import srv_state
 # 她不再只能寄不能收。这是 Galatea's Garden 的第一块砖：有人往她邮箱投信/刺激，
 # 她就能读到。家风三条：①没配 smtp_auth_code = 收信通道诚实缺席；②拉信失败只打
 # 日志绝不吵家；③拉到就标记 \Seen（不重复拉），库内读后即标记（letters 同款）。
-INBOX_ADDR = "your-home-mailbox@example.com"
+INBOX_ADDR = "<门牌>@163.com"
 INBOX_IMAP_HOST = "imap.163.com"
 INBOX_INTERVAL = 3600  # 1 小时一拉（9-12 晚家主令：改一小时一次）
 # 10-01 大扫除批⑤：IMAP 连接超时——不加的话，163 的半开连接会让收信线程**永久卡在 socket 读**，

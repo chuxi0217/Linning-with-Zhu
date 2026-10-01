@@ -128,7 +128,7 @@ def get_push_jwt():
 
 
 def send_push(title="咱家", body="姐姐找你"):
-    """V3 场景化推送（push-type 0 = Alert 通知消息；调测期 testMessage）。
+    """V3 场景化推送（push-type 0 = Alert 通知消息；testMessage=false＝正式口径）。
     失败只打日志不抛炸（推送是门铃，不能砸主流程）。返回成功与否。"""
     device_token = m.get_push_token()
     if not device_token:
@@ -147,7 +147,9 @@ def send_push(title="咱家", body="姐姐找你"):
             }
         },
         "target": {"token": [device_token]},
-        "pushOptions": {"testMessage": True},           # 调测期
+        # 10-02 摘调测口径：官方文档「正式上架需 testMessage=false」；测试消息每项目每天限 1000 条，
+        # 家里用量远不到，但这是生产路径，不留调测开关。
+        "pushOptions": {"testMessage": False},
     }).encode("utf-8")
     req = urllib.request.Request(PUSH_SEND_URL, data=payload, headers={
         "Content-Type": "application/json",

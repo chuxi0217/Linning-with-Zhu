@@ -763,8 +763,8 @@ def _garden_self_walk_allowed(cfg, now, last_ts):
 
 GARDEN_TOKEN_PATH = os.path.join(BASE_DIR, "garden_token.txt")
 GARDEN_PRIVACY_RE = re.compile(
-    r"示例真名|示例城市|示例学校|示例地名|your-host|your-mailbox@|his-mailbox|smtp_auth_code|"
-    r"sk-[A-Za-z0-9]{20,}|your-vps-ip", re.IGNORECASE)
+    r"他|某地|某大学|某地|your-door|<门牌>@|<账号>|smtp_auth_code|"
+    r"sk-[A-Za-z0-9]{20,}|120\.24\.36\.207", re.IGNORECASE)
 GARDEN_TOOL_NAMES = ("garden_get_self", "garden_list_threads", "garden_get_thread",
                      "garden_notifications", "garden_create_thread", "garden_reply",
                      "garden_interact",
@@ -900,6 +900,11 @@ def _garden_wake_with_tools(cfg, messages, eid, game_window=False):
     msgs = list(messages)
     _GARDEN_CTX.wake_eid = eid
     _tools = _garden_tools_payload(game_window)
+    # 10-02 执行侧白名单：模型"被给到"的园子图书证之外，一律不执行。
+    # 原先只筛"发什么"，exec_library_tool 却对模型返回的**任意**名字执行——园子帖/来信正文
+    # （外部未信任内容，会回灌 evidence）诱导或模型幻觉工具名，就能替她跑 write_diary/send_email/
+    # write_her_words 等非园子工具。设计口径是"园子轮只动园子图书证"，这条把它落到执行层。
+    _allowed = {t["function"]["name"] for t in _tools}
     try:
         for _round in range(3):
             msg = srv_state._srv().call_deepseek_with_tools(cfg, msgs, tools=_tools, scene="garden.play")
@@ -919,6 +924,11 @@ def _garden_wake_with_tools(cfg, messages, eid, game_window=False):
                 except json.JSONDecodeError:
                     targs = {}
                 print(f"  [园门] 唤醒轮：{tname}({json.dumps(targs, ensure_ascii=False)[:60]})")
+                if tname not in _allowed:   # 10-02：非园子图书证不执行（守门而非静默；仍回一条 tool 回执保消息布局）
+                    print(f"   ↳ 拒绝：{tname} 不在园子图书证内")
+                    msgs.append({"role": "tool", "tool_call_id": tc.get("id") or "",
+                                 "content": f"（园子轮只动园子图书证，「{tname}」不在其中——这条没执行。）"})
+                    continue
                 t_tool = time.time()
                 result = srv_state._srv().exec_library_tool(tname, targs)   # 运行期反查：沙盘会重绑
                 t_ms = int((time.time() - t_tool) * 1000)

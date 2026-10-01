@@ -35,7 +35,7 @@ def build_messages(url_value, with_loc=True):
     msgs = [{"role": "system", "content": s.SESSION.system_prompt}]
     if with_loc:
         msgs.append({"role": "system", "content":
-            "小乖此刻位置：北纬 0.00000，东经 0.00000（今天 21:05 手机随行自动上报，小乖已授权）。"
+            "小乖此刻位置：（位置已隐）（今天 21:05 手机随行自动上报，小乖已授权）。"
             "规则：回答和位置有关的问题时，必须以上面这条坐标为准，并说明它是几点上报的；"
             "不许凭记忆猜位置。话题不涉及位置时，不用主动提坐标。"})
     msgs.append({"role": "user", "content": [

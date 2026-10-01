@@ -252,8 +252,16 @@ V2_LOG = os.path.expanduser("~/desire_v2_shadow.log")
 
 
 def _house_day(now):
-    """咱家日（04:00 日界）。"""
-    return (now - timedelta(hours=4)).strftime("%Y-%m-%d")
+    """咱家的「今天」——**跟全库一个口径**（memory_lib.house_today_str，日界＝DAY_START_HOUR）。
+    10-02 修：原先这里写死 `now - 4h`，10-01 日界改成 0 点（自然日）后没跟上，
+    导致 00:00~03:59 的 `_mood_today` 查的是**昨天**的 moods（`moods.date` 走 today_str＝自然日），
+    抬底/降温/点火全对不上。日界以后只在一个地方改（memory_lib）。"""
+    try:
+        import memory_lib as _m
+        return _m.house_today_str(now)
+    except Exception:
+        # 兜底（正常永远走上面）：自然日＝现行日界 0 点
+        return now.strftime("%Y-%m-%d")
 
 
 def _mood_today(now, *types):

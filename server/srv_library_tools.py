@@ -464,7 +464,7 @@ LIBRARY_TOOLS = [
         "readOnly": False,   # 动作工具（二期j，9-9）：真寄信
         "function": {
             "name": "send_email",
-            "description": "用咱家自己的邮箱（your-home-mailbox@example.com）给他真寄一封邮件到 his-mailbox@example.com。不设数量上限，但寄出不可撤回——想好了再寄",
+            "description": "用咱家自己的邮箱（<门牌>@163.com）给他真寄一封邮件到 your-home-mailbox@example.com。不设数量上限，但寄出不可撤回——想好了再寄",
             "parameters": {
                 "type": "object",
                 "properties": {
