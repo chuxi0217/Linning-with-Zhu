@@ -11,6 +11,7 @@ import os
 import random
 import re
 import sqlite3
+import threading
 import time
 from datetime import datetime
 
@@ -42,6 +43,10 @@ _TAG = {"calendar": "日历锚", "random": "翻旧日记", "topic": "话题第�
 INJECT_WINDOW_S = 12 * 3600      # 12 小时：隔夜的走神不翻旧账
 DELIVERED_KEEP = 50              # 已递集合保留最近 N 个（防状态文件膨胀；够覆盖话头簿重扫窗）
 _LAST = {"cand": None, "at": 0.0}
+# 10-02：state 文件的读-改-写**串行化**。tmp+os.replace 只保证"单次写"原子，不保证"读改写"原子——
+#   心跳线程的 _save_cand 与开场线程的 _clear_cand 交错时，后者会以旧快照落盘、把刚生成的候选 pop 掉
+#   （进程内镜像 _LAST 无人读，救不回）。三处 RMW 都进这把锁。
+_STATE_LOCK = threading.Lock()
 
 
 def take_recall(max_age_s=None):
@@ -165,10 +170,11 @@ def _save_cand(cand):
         _LAST["cand"], _LAST["at"] = cand, at
     except Exception:
         pass
-    st = _load_state()
-    st["cand"] = cand
-    st["cand_at"] = at
-    _save_state(st)
+    with _STATE_LOCK:   # 10-02：读改写串行（防与 _clear_cand/_remember 交错丢更新）
+        st = _load_state()
+        st["cand"] = cand
+        st["cand_at"] = at
+        _save_state(st)
 
 
 def _load_cand():
@@ -191,11 +197,12 @@ def _clear_cand():
     except Exception:
         pass
     try:
-        st = _load_state()
-        if "cand" in st or "cand_at" in st:
-            st.pop("cand", None)
-            st.pop("cand_at", None)
-            _save_state(st)
+        with _STATE_LOCK:   # 10-02：读改写串行（否则会以旧快照落盘、pop 掉刚生成的候选）
+            st = _load_state()
+            if "cand" in st or "cand_at" in st:
+                st.pop("cand", None)
+                st.pop("cand_at", None)
+                _save_state(st)
     except Exception:
         pass
 
@@ -203,11 +210,12 @@ def _clear_cand():
 def _remember(key):
     """记一笔「翻过了」——近日降权用（久违感）。"""
     try:
-        st = _load_state()
-        recent = [k for k in st.get("recent", []) if k != key]
-        recent.append(key)
-        st["recent"] = recent[-12:]
-        _save_state(st)
+        with _STATE_LOCK:   # 10-02：读改写串行
+            st = _load_state()
+            recent = [k for k in st.get("recent", []) if k != key]
+            recent.append(key)
+            st["recent"] = recent[-12:]
+            _save_state(st)
     except Exception:
         pass
 

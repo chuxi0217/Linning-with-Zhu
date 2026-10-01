@@ -300,6 +300,23 @@ def do_apply(con, logpath, queries=50, pool_n=200):
     _log(logpath, f"数据保养真迁移 · {__import__('datetime').datetime.now():%F %T}")
     _log(logpath, f"库：{DB_PATH}（{_mb(st0):.1f} MB）")
 
+    # ⓿ 幂等闸（10-02 修）：已经迁过就别再跑——换个角度重跑会让 `ALTER TABLE vectors RENAME TO
+    #   vectors_text_bak` 撞「同名表已存在」（旧备份还在），并在库里留半截 vectors_v2。
+    #   判据：旧备份表在，或 vectors.vec 已是 BLOB（迁移后形态）。要重迁先按 runbook §六 回滚。
+    try:
+        _tabs = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        _ty = con.execute("SELECT typeof(vec) FROM vectors LIMIT 1").fetchone()
+        _why = (f"旧备份表 {BAK} 还在" if BAK in _tabs
+                else ("vectors.vec 已是 BLOB（迁移后形态）" if (_ty and _ty[0] == "blob") else ""))
+        if _why:
+            con.execute(f"DROP TABLE IF EXISTS {V2}")   # 清掉可能残留的半截 v2
+            con.commit()
+            _log(logpath, f"  ⏭ 已迁移过（{_why}）→ **跳过**（幂等）。"
+                          "要重迁请先按 runbook §六 回滚（改回 text 并把旧表换回来）。")
+            return 0
+    except Exception as e:
+        _log(logpath, f"  ⚠️ 幂等闸检查失手（{e}）→ 照常继续")
+
     # ① 基线
     base, pool, qs = _baseline(con, logpath, queries, pool_n)
 

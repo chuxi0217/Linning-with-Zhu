@@ -66,7 +66,11 @@ def auto_snapshot(tag=""):
         dst = os.path.join(srv.SNAPSHOT_DIR, f"咱家的家_自动备份_{ts}_{tag}.db")
         _snapshot_db(m.DB_PATH, dst)   # 9-27 修：源走 memory_lib 库路径（随沙盘重绑）；9-18 后院深搜修：sqlite 备份 API（开机/跨天同一张手）
         snaps = sorted(f for f in os.listdir(srv.SNAPSHOT_DIR) if f.startswith("咱家的家_自动备份_"))
-        for old in snaps[:-srv.SNAPSHOT_KEEP]:
+        # 10-02 修边界：`snaps[:-0]` == `snaps[:0]` == []（SNAPSHOT_KEEP=0 时轮转静默失效、
+        #   快照无限堆）→ 显式按 KEEP 取值：keep<=0 视为"不留"。
+        _keep = int(srv.SNAPSHOT_KEEP)
+        _old = snaps[:-_keep] if _keep > 0 else snaps
+        for old in _old:
             try:
                 os.remove(os.path.join(srv.SNAPSHOT_DIR, old))
             except OSError:
@@ -89,12 +93,15 @@ def _weekly_db_check(now=None):
         if now.weekday() != 0 or _DBCK_STATE.get("day") == now.strftime("%Y%m%d"):
             return
         _DBCK_STATE["day"] = now.strftime("%Y%m%d")   # 先置再跑：验炸了也不当日重跑
+        # 10-02 修：连接用 try/finally 关——原先 PRAGMA/COUNT 一抛错就跳过 conn.close() 漏连接。
         conn = m._conn()
-        c = conn.cursor()
-        row = c.execute("PRAGMA quick_check").fetchone()
-        days = c.execute("SELECT COUNT(*) FROM days").fetchone()[0]
-        chats = c.execute("SELECT COUNT(*) FROM chats").fetchone()[0]
-        conn.close()
+        try:
+            c = conn.cursor()
+            row = c.execute("PRAGMA quick_check").fetchone()
+            days = c.execute("SELECT COUNT(*) FROM days").fetchone()[0]
+            chats = c.execute("SELECT COUNT(*) FROM chats").fetchone()[0]
+        finally:
+            conn.close()
         ok = bool(row) and str(row[0]).lower() == "ok"
         m.obs_bump("db_check_ok" if ok else "db_check_fail")
         print(f"  [体检] 周一体检{'通过' if ok else '发现异常：' + str(row[0] if row else '无回音')}"

@@ -57,6 +57,10 @@ def _inbox_fetch_once():
             typ2, msg_data = conn.fetch(num, "(BODY.PEEK[])")
             if typ2 != "OK":
                 continue
+            # 10-02 防形状：fetch 对已删/异常邮件可能回 [None] 或空表——原先直接 msg_data[0][1]
+            #   会抛 IndexError/TypeError 打断**整轮**（本轮剩下未读信都不拉了）。跳过这一封即可。
+            if not msg_data or not msg_data[0] or msg_data[0][1] is None:
+                continue
             raw = msg_data[0][1]
             msg = message_from_bytes(raw)
             from_addr = str(msg.get("From") or "")
