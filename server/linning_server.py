@@ -2976,6 +2976,18 @@ def exec_library_tool(name, args):
             return f"（聊天记录里没查到「{query}」）"
         return "\n".join(f"- {(r[4] or '')[5:16]} {r[2]}：{r[3]}" for r in hits)
     if name == "search_archive":
+        # 10-02：她点名要「架构」那页、又没给关键词 → **整页读**。
+        #   （search_archive 本是逐行匹配，query 空只会给前几行——那页 180+ 行，她读不到整页。）
+        _t = str((args or {}).get("type") or (args or {}).get("scope") or "").strip()
+        if _t in ("架构", "家规总览", "有什么") and not query:
+            try:
+                with open(ARCH_PATH, encoding="utf-8") as f:
+                    _pg = f.read().strip()
+                if len(_pg) > 6000:
+                    _pg = _pg[:6000] + "\n\n（这一页有点长——先读这些；想细看哪一块再给个词。）"
+                return _pg
+            except OSError:
+                pass
         # 9-30 第二刀：全档案 ＋ 亲密实录 两卷一起扫（两卷都改「枕边/深卷」了，
         # 深卷必须查得到——不然等于删）。命中行带卷名，她一眼知道出自哪卷。
         hits = []
@@ -3846,8 +3858,14 @@ class Session:
 
     @property
     def system_prompt(self):
+        # 10-02 修：懒构建**加锁**。`build_system_prompt(consume=True)` 有副作用（take_ 一次性
+        #   注入走神/话头/欲望/想念）——原先无锁，SESSION.reset() 后聊天线程与心跳/园子线程
+        #   可能同时命中空缓存各 build 一次：一次性注入被消费两次或丢一次，缓存还互相覆盖。
+        #   用**独立锁**（不是 SESSION_LOCK：聊天路径已在 SESSION_LOCK 内读本属性，再取会死锁）。
         if self._system_prompt is None:
-            self._system_prompt = build_system_prompt()
+            with _SP_LOCK:
+                if self._system_prompt is None:   # 双检：拿锁后再确认一次
+                    self._system_prompt = build_system_prompt()
         return self._system_prompt
 
     def reset(self):
@@ -3862,6 +3880,7 @@ LAST_LOC = None   # 小乖最后已知位置 {"lat","lon","time","place"}，随�
 # 内存态即可，照 LAST_LOC 同款家风——app 每天会重推，空 items = 今天没日程清旧账）
 LAST_SCHEDULE = {"date": "", "items": [], "at": ""}
 SESSION_LOCK = threading.Lock()   # 会话与交接的临界区（多线程 HTTP 下保持幂等）
+_SP_LOCK = threading.Lock()       # 10-02：Session.system_prompt 懒构建专用锁（独立于 SESSION_LOCK 防死锁）
 ASLEEP = False    # 简化模型：熄灯=睡，说话=醒。
 WEATHER_CACHE = {"key": None, "at": 0.0, "text": None}   # 天气 30 分钟缓存
 STATS_CACHE = {"at": 0.0}   # 账本统计 60 秒缓存（/api/stats，9-12 晚）
@@ -4131,36 +4150,43 @@ def _reunion_block(since_ts):
     try:
         if not since_ts:
             return ""
-        n_ht = m._conn().execute(
-            "SELECT COUNT(*) FROM huatou WHERE ts > ? AND status='待说'",
-            (str(since_ts),)).fetchone()[0]
-        n_tr = m._conn().execute(
-            "SELECT COUNT(*) FROM her_traces WHERE ts > ? AND ending='trace'",
-            (str(since_ts),)).fetchone()[0]
-        n_dy = m._conn().execute(
-            "SELECT COUNT(DISTINCT date) FROM days WHERE date >= date(?)",
-            (str(since_ts),)).fetchone()[0]   # 用日记自己的家日（created_at 是写入时间、含重复行）
-        bits = []
-        if n_ht:
-            bits.append(f"攒了 {n_ht} 条想跟他说的话")
-        if n_tr:
-            bits.append(f"留了 {n_tr} 条心事")
-        if n_dy:
-            bits.append(f"写了 {n_dy} 篇日记")
-        if not bits:
-            return ""
-        # 久置提醒（"不憋着"的另一半：让它过去也是允许的）——取件之前算，龄期才准
-        age_txt = ""
+        # 10-02 修：五处查询原先各 `m._conn().execute(...)` 都**不 close**——他离线 ≥6h 时
+        #   每轮装配提示词都漏几条 sqlite 连接（靠 GC 兜底，与邻居 _chats_cn_chars 显式 close
+        #   的家风不一致）。改成**一个连接 + finally close**。
+        con = m._conn()
         try:
-            _old = m._conn().execute(
-                "SELECT ts FROM huatou WHERE status='待说' ORDER BY id LIMIT 1").fetchone()
-            if _old and _old[0]:
-                _d = (datetime.now() - datetime.strptime(
-                    str(_old[0])[:19], "%Y-%m-%d %H:%M:%S")).total_seconds() / 86400.0
-                if _d >= 3:
-                    age_txt = f"（有一条已经放了 {int(_d)} 天了，要不要说、要不要放下，你定。）"
-        except Exception:
-            pass
+            n_ht = con.execute(
+                "SELECT COUNT(*) FROM huatou WHERE ts > ? AND status='待说'",
+                (str(since_ts),)).fetchone()[0]
+            n_tr = con.execute(
+                "SELECT COUNT(*) FROM her_traces WHERE ts > ? AND ending='trace'",
+                (str(since_ts),)).fetchone()[0]
+            n_dy = con.execute(
+                "SELECT COUNT(DISTINCT date) FROM days WHERE date >= date(?)",
+                (str(since_ts),)).fetchone()[0]   # 用日记自己的家日（created_at 是写入时间、含重复行）
+            bits = []
+            if n_ht:
+                bits.append(f"攒了 {n_ht} 条想跟他说的话")
+            if n_tr:
+                bits.append(f"留了 {n_tr} 条心事")
+            if n_dy:
+                bits.append(f"写了 {n_dy} 篇日记")
+            if not bits:
+                return ""
+            # 久置提醒（"不憋着"的另一半：让它过去也是允许的）——取件之前算，龄期才准
+            age_txt = ""
+            try:
+                _old = con.execute(
+                    "SELECT ts FROM huatou WHERE status='待说' ORDER BY id LIMIT 1").fetchone()
+                if _old and _old[0]:
+                    _d = (datetime.now() - datetime.strptime(
+                        str(_old[0])[:19], "%Y-%m-%d %H:%M:%S")).total_seconds() / 86400.0
+                    if _d >= 3:
+                        age_txt = f"（有一条已经放了 {int(_d)} 天了，要不要说、要不要放下，你定。）"
+            except Exception:
+                pass
+        finally:
+            con.close()
         return ("\n【重逢】他没找你的这些时候，你自己" + "、".join(bits) + "。" + age_txt
                 + "想说就说；实在说不出口的，也可以让它过去——别憋着。")
     except Exception:
@@ -9389,8 +9415,8 @@ def main():
     _bind_host = str(cfg.get("bind_host") or "0.0.0.0").strip() or "0.0.0.0"   # §5-11：默认全接口＝现状
     # 9-23 网络改造：绑全接口——来路 VPS Caddy(:443)→**WireGuard**→10.x.x.x:8024
     # （9-29 家主 `ufw status` 实证：`8024 ALLOW IN 10.x.x.x/24 # zanjia-wg`；SSH 反向隧道 18024 是旧址/备份）
-    # ufw 默认 deny incoming，只放行 WireGuard(10.x.x.x/24) 与手机热点（安卓热点默认网段 192.168.x.x.x）两条
-#（写成 192.168.x.x.x 不写全：镜像扫描把 192.168.x.x 当内网 IP 拦，而 .py 不过工具脱敏——源头就得干净）
+    # ufw 默认 deny incoming，只放行 WireGuard(10.x.x.x/24) 与手机热点（安卓热点默认网段 192.168.43.x）两条
+#（写成 192.168.43.x 不写全：镜像扫描把 192.168.x.x 当内网 IP 拦，而 .py 不过工具脱敏——源头就得干净）
     server = ThreadingHTTPServer((_bind_host, port), Handler)
     # §5 第 11 条（9-29）：监听地址 config 化（`bind_host`，默认 "0.0.0.0" 与现状逐字节同）。
     # 置 "127.0.0.1" = 只本机（校园网/局域网看不到）；喊出来是为了"全接口"这件事**开机就看得见**。

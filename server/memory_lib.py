@@ -55,6 +55,13 @@ def _conn():
     return sqlite3.connect(DB_PATH, timeout=10)
 
 
+def _like_esc(s):
+    """LIKE 通配符转义（配 SQL 里 `ESCAPE '\\'` 用）：`\\` `%` `_` 都转义。
+    10-02：文件名/代码/昵称里 `_` 极常见，不转义会让 `a_b` 命中 `axb`、`100%` 通配掉一片。
+    只影响含通配符的查询串，普通词结果不变（同 favorite_chat_context 9-29 的修法）。"""
+    return str(s or "").replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def day_no_of(date_str):
     """某天是咱家第几天。2026-08-24 = 第 1 天。"""
     d = _date.fromisoformat(date_str)
@@ -956,38 +963,40 @@ def fts_remove(kind, key):
 
 def _fts_like_fallback(kind, query, limit):
     """FTS 空手或出错时的 LIKE 兜底：查不到就真没有，但不许因为分词不合拍而漏。"""
-    like = f"%{query}%"
+    like = f"%{_like_esc(query)}%"
     conn = _conn()
     c = conn.cursor()
     try:
         if kind == "day":
             c.execute('''SELECT id, date, day_no, title, content, mood FROM days
-                         WHERE title LIKE ? OR content LIKE ? OR mood LIKE ?
+                         WHERE title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\'
+                         OR mood LIKE ? ESCAPE '\\'
                          ORDER BY id DESC LIMIT ?''', (like, like, like, limit))
         elif kind == "hall":
             c.execute('''SELECT id, date, author, title, content, mood FROM diary_hall
-                         WHERE title LIKE ? OR content LIKE ? OR mood LIKE ?
+                         WHERE title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\'
+                         OR mood LIKE ? ESCAPE '\\'
                          ORDER BY id DESC LIMIT ?''', (like, like, like, limit))
         elif kind == "chat":
             c.execute('''SELECT id, date, role, content, created_at FROM chats
-                         WHERE content LIKE ?
+                         WHERE content LIKE ? ESCAPE '\\'
                          ORDER BY id DESC LIMIT ?''', (like, limit))
         elif kind == "note":
             c.execute('''SELECT id, text, created_at FROM notes
-                         WHERE text LIKE ? ORDER BY id DESC LIMIT ?''', (like, limit))
+                         WHERE text LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT ?''', (like, limit))
         elif kind == "letter":
             c.execute('''SELECT id, text, created_at FROM letters
-                         WHERE text LIKE ? ORDER BY id DESC LIMIT ?''', (like, limit))
+                         WHERE text LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT ?''', (like, limit))
         elif kind == "oldhome":
             c.execute('''SELECT id, file, chunk_no, text FROM oldhome_chunks
-                         WHERE text LIKE ? ORDER BY id DESC LIMIT ?''', (like, limit))
+                         WHERE text LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT ?''', (like, limit))
         elif kind == "chunk":
             c.execute('''SELECT id, source_type, source_id, seq, text FROM chunks
-                         WHERE text LIKE ? ORDER BY id DESC LIMIT ?''', (like, limit))
+                         WHERE text LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT ?''', (like, limit))
         elif kind == "favorite":
             if FTS_ENABLED:
                 c.execute('''SELECT name, ctx FROM fts_favorites
-                             WHERE ctx LIKE ? ORDER BY rowid DESC LIMIT ?''', (like, limit))
+                             WHERE ctx LIKE ? ESCAPE '\\' ORDER BY rowid DESC LIMIT ?''', (like, limit))
         return c.fetchall()
     finally:
         conn.close()
@@ -1758,17 +1767,17 @@ def thread_touched_since(fragments, since_day):
     c = conn.cursor()
     try:
         for frag in frags:
-            like = f"%{frag}%"
+            like = f"%{_like_esc(frag)}%"
             for sql, args in (
-                    ("SELECT 1 FROM chats WHERE date >= ? AND content LIKE ? LIMIT 1",
+                    ("SELECT 1 FROM chats WHERE date >= ? AND content LIKE ? ESCAPE '\\' LIMIT 1",
                      (since_day, like)),
-                    ("SELECT 1 FROM days WHERE date >= ? AND content LIKE ? LIMIT 1",
+                    ("SELECT 1 FROM days WHERE date >= ? AND content LIKE ? ESCAPE '\\' LIMIT 1",
                      (since_day, like)),
-                    ("SELECT 1 FROM day_arcs WHERE date >= ? AND content LIKE ? LIMIT 1",
+                    ("SELECT 1 FROM day_arcs WHERE date >= ? AND content LIKE ? ESCAPE '\\' LIMIT 1",
                      (since_day, like)),
-                    ("SELECT 1 FROM outbox_msgs WHERE created_at >= ? AND text LIKE ? LIMIT 1",
+                    ("SELECT 1 FROM outbox_msgs WHERE created_at >= ? AND text LIKE ? ESCAPE '\\' LIMIT 1",
                      (since_day, like)),
-                    ("SELECT 1 FROM her_traces WHERE ts >= ? AND content LIKE ? LIMIT 1",
+                    ("SELECT 1 FROM her_traces WHERE ts >= ? AND content LIKE ? ESCAPE '\\' LIMIT 1",
                      (since_day, like))):
                 try:
                     c.execute(sql, args)
@@ -2985,12 +2994,12 @@ def events_agg(days=2, kind=""):
         since = (datetime.now() - timedelta(days=days - 1)).strftime("%Y-%m-%d 00:00:00")
         if kind:
             out["by_kind"] = [{"kind": str(r[0]), "n": int(r[1])} for r in c.execute(
-                "SELECT kind, count(*) FROM events WHERE ts >= ? AND kind LIKE ? "
-                "GROUP BY kind ORDER BY 2 DESC LIMIT 50", (since, "%" + str(kind) + "%")).fetchall()]
+                "SELECT kind, count(*) FROM events WHERE ts >= ? AND kind LIKE ? ESCAPE '\\' "
+                "GROUP BY kind ORDER BY 2 DESC LIMIT 50", (since, "%" + _like_esc(kind) + "%")).fetchall()]
             out["recent"] = [{"kind": str(r[0]), "actor": str(r[1]), "ts": str(r[2])}
                              for r in c.execute(
-                "SELECT kind, actor, ts FROM events WHERE ts >= ? AND kind LIKE ? "
-                "ORDER BY id DESC LIMIT 20", (since, "%" + str(kind) + "%")).fetchall()]
+                "SELECT kind, actor, ts FROM events WHERE ts >= ? AND kind LIKE ? ESCAPE '\\' "
+                "ORDER BY id DESC LIMIT 20", (since, "%" + _like_esc(kind) + "%")).fetchall()]
         else:
             out["by_kind"] = [{"kind": str(r[0]), "n": int(r[1])} for r in c.execute(
                 "SELECT kind, count(*) FROM events WHERE ts >= ? GROUP BY kind "
@@ -3220,8 +3229,8 @@ def count_outbox_since(prefix, since):
     """（v0.1.20 新增，judge 对账用）统计某前缀回执自 since 起的条数。只读不写。"""
     conn = _conn()
     c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM outbox_msgs WHERE text LIKE ? AND created_at >= ?",
-              (prefix + "%", since))
+    c.execute("SELECT COUNT(*) FROM outbox_msgs WHERE text LIKE ? ESCAPE '\\' AND created_at >= ?",
+              (_like_esc(prefix) + "%", since))
     n = c.fetchone()[0]
     conn.close()
     return n
@@ -3302,8 +3311,8 @@ def has_outbox_today(marker):
     c = conn.cursor()
     c.execute('''
         SELECT COUNT(*) FROM outbox_msgs
-        WHERE created_at >= ? AND text LIKE ?
-    ''', (today, f"%{marker}%"))
+        WHERE created_at >= ? AND text LIKE ? ESCAPE '\\'
+    ''', (today, f"%{_like_esc(marker)}%"))
     n = c.fetchone()[0]
     conn.close()
     return n > 0
@@ -3426,8 +3435,8 @@ def count_outbox_today(marker):
     c = conn.cursor()
     c.execute('''
         SELECT COUNT(*) FROM outbox_msgs
-        WHERE created_at >= ? AND text LIKE ?
-    ''', (today, f"%{marker}%"))
+        WHERE created_at >= ? AND text LIKE ? ESCAPE '\\'
+    ''', (today, f"%{_like_esc(marker)}%"))
     n = c.fetchone()[0]
     conn.close()
     return n
@@ -3443,8 +3452,8 @@ def get_outbox_today(marker):
     c = conn.cursor()
     c.execute('''
         SELECT created_at, text FROM outbox_msgs
-        WHERE created_at >= ? AND text LIKE ? ORDER BY id
-    ''', (today, f"%{marker}%"))
+        WHERE created_at >= ? AND text LIKE ? ESCAPE '\\' ORDER BY id
+    ''', (today, f"%{_like_esc(marker)}%"))
     rows = c.fetchall()
     conn.close()
     return rows
@@ -3776,10 +3785,10 @@ def find_days(keyword="", date="", limit=30):
             FROM days WHERE date = ? ORDER BY id DESC
         ''', (date,))
     elif keyword:
-        like = f"%{keyword}%"
+        like = f"%{_like_esc(keyword)}%"
         c.execute('''
             SELECT id, date, day_no, title, content, mood
-            FROM days WHERE title LIKE ? OR content LIKE ? OR mood LIKE ?
+            FROM days WHERE title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\' OR mood LIKE ? ESCAPE '\\'
             ORDER BY id DESC''' + tail,
             (like, like, like))
     else:

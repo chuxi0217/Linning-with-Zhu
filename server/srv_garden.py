@@ -547,15 +547,7 @@ def _wake_merged_once(now=None):
         _rec_spend()
         return "error"
     ts = now.strftime("%Y-%m-%d %H:%M:%S")
-    # ── 去园子：交给既有园子窗（事件还给旧链，一步不重写）──
-    if "garden" in doing:
-        if _eid:
-            m.release_world_event(_eid)
-        _gw = getattr(srv_state._srv(), "_garden_wake_once", None)   # 运行期反查：沙盘会替身
-        _ret = (_gw() if callable(_gw) else _garden_wake_once()) if _eid else "garden"
-        _rec_spend()
-        return _ret
-    # ── say / trace / note / silent：先写产出 ──
+    # ── say 先落地（10-02 修：say 与 garden 可同时选——原先走 garden 就 return，message 被丢）──
     _land = getattr(srv_state._srv(), "_her_outgoing", None)
     said = False
     if "say" in doing and message:
@@ -564,6 +556,30 @@ def _wake_merged_once(now=None):
             said = True
         except Exception as e:
             print(f"  [醒来] 信没落下（{e}）")
+    # ── 去园子：交给既有园子窗（事件还给旧链，一步不重写）──
+    if "garden" in doing:
+        if _eid:
+            m.release_world_event(_eid)
+        _gw = getattr(srv_state._srv(), "_garden_wake_once", None)   # 运行期反查：沙盘会替身
+        # ★ 10-02 修（两处）：①原先只在有事件（_eid）时才调 `_garden_wake_once`——没事件时她
+        #   「选了园子」却**什么都没发生**；②更糟：这一支不落 her_traces → 顶上的「最短间隔闸」
+        #   （读 get_last_trace_ts）不前进 → 每 5 分钟又醒一次、**每轮烧一次模型**。
+        #   现在：不管有没有事件都调；园子窗回 slept（没逛成）就补一条 silent trace 让闸前进。
+        _ret = _gw() if callable(_gw) else _garden_wake_once()
+        if _ret == "slept":
+            try:
+                m.add_her_trace(ts, "silent", "想去园子逛逛，这轮没逛成", "", None)
+            except Exception:
+                pass
+        if said:
+            try:
+                srv_state._srv().notify_letter()
+            except Exception:
+                pass
+        _rec_spend()
+        print(f"  [醒来] 合一：garden{' + say' if said else ''}（园子窗={_ret}）")
+        return ("say" if said else _ret)
+    # ── trace / note / silent：写产出 ──
     _ending = "message" if said else ("trace" if ("trace" in doing or "note" in doing) else "silent")
     try:
         m.add_her_trace(ts, _ending, note, (content if "trace" in doing else ""), _eid)

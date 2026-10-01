@@ -43,7 +43,7 @@ SAMPLE_CHUNKS = 3      # 每卷打印样例数：最短/中位/最长三点，�
 # 块长分布分桶：太短 / 中短 / 舒适区 / 稍长 / 过长（整数域 [lo, hi)，400 整归第三桶）
 CHUNK_BUCKETS = [(0, 150), (150, 250), (250, 401), (401, 600), (600, 10 ** 9)]
 
-PROD_DIR = "~/咱家记忆库"   # 生产目录（Windows 侧）：--dump-jsonl 禁写（只读副本才允许干活）
+PROD_DIR = "d:/咱家记忆库"   # 生产目录（Windows 侧）：--dump-jsonl 禁写（只读副本才允许干活）
 # Linux 侧生产目录（双系统同一道闸，宁拒勿碰生产）：
 #   ① 本脚本所在仓库根——脚本在 <仓库根>/tools/ 下，根下 档案馆/、photos/、咱家的家.db 全是生产卷；
 #   ② 已知 Linux 生产根（server :8024 跑的那份；磁盘挂载路径若变，同步改这行）。
@@ -334,7 +334,7 @@ def build_report(vol_stats, hist, skipped, oversize, args, db_path, vec_dist):
     lines = []
     lines.append("# 分块脚本 v0 干跑报告（2026-09-18）\n")
     lines.append("- 脚本：`tools/chunk_corpus.py`（纯标准库，只读干跑，不联网、不动库）")
-    lines.append(f"- 库副本：`{db_path}`（从生产 `~/咱家记忆库/咱家的家.db` sqlite3 backup 拷入沙盘，只读打开）")
+    lines.append(f"- 库副本：`{db_path}`（从生产 `d:/咱家记忆库/咱家的家.db` sqlite3 backup 拷入沙盘，只读打开）")
     lines.append(f"- 参数：`--sample {args.sample if args.sample is not None else '全量'}`")
     lines.append("- 说明：本报告由脚本生成（数字、未决问题、建议都随脚本版本）；复跑可随时重生成。\n")
 

@@ -367,16 +367,9 @@ def tick_v2_shadow(now=None, present=None):
         growth_h = base * fac
         if present:
             growth_h *= 0.5                     # 他在场未互动＝减速，不是被喂饱
-        refractory_h = float(_cfg("desire_v2_refractory_h", 1.5))
-        since_fire_h = None
-        if st.get("last_fire"):
-            try:
-                since_fire_h = (now - datetime.strptime(
-                    st["last_fire"], "%Y-%m-%d %H:%M:%S")).total_seconds() / 3600
-                if 0 <= since_fire_h < refractory_h:
-                    growth_h *= 0.5             # 不应期（减速，不是硬闸）
-            except Exception:
-                since_fire_h = None
+        # 10-02：**删掉主路径的「不应期 ×0.5」**——它锚 `st["last_fire"]`，而降状态后全库
+        #   已无人写 `last_fire`（grep 只见读）→ 这段恒不触发，是死逻辑，`desire_v2_refractory_h`
+        #   也成死键。真正的"满足后减速"由下面 `_SAT` 影子另锚 `last_satisfy`（会写）承担。
         # ── B：点火 / 喂饱（输入全是她的笔）──
         mood_warm = _mood_today(now, "踏实", "开心")      # 降温 / 喂饱信号
         mood_want = _mood_today(now, "欲望")               # 抬起点
@@ -490,7 +483,6 @@ def tick_v2_shadow(now=None, present=None):
                         f"在场={'是' if present else '否'} | 心情={mstr} | "
                         + ((" ".join(_ex) + " | ") if _ex else "")
                         + f"{'命中=③(→0.2)' if fired else '状态式·不掷骰'} | "
-                        f"since_fire={_fmt_since(now, st.get('last_fire'))} "
                         f"since_sat={_fmt_since(now, st.get('last_satisfy'))}"
                         + _dnew_line
                         + (f" | trace: {' '.join(gates)}" if _cfg("desire_v2_trace", True) else "")
