@@ -156,6 +156,14 @@ ZANJIA_TEST=1 ZANJIA_PORT=8025 python3 linning_server.py   # 不起心跳、不�
 - [SilviaYue/ DreamVault](https://github.com/SilviaYue/dreamvault)——错忆隔离的治理三原则（治理梦游不治梦 / 卧室非病房 / 场子可能是假的·驱动可能是真的）与四权（读/认领/沉默合法/写史）——睡眠整理稿的治理底座（代码 Apache-2.0 · 文档 CC BY 4.0；9-28 新增）
 - [Kronic90/ Mimir](https://github.com/Kronic90/Mimir)——21 个记忆机制学名带论文的词典（Zeigarnik 未完成更鲜明 / 检索抑制 / 扩散激活……）——线头与去重现象找学名的工具书（PolyForm 非商用：只读对照；9-28 新增）
 - [Bitterbot-AI/ bitterbot-desktop](https://github.com/Bitterbot-AI/bitterbot-desktop)——生物脑架构 agent（知识水晶指针 / 情绪系统 / 梦境引擎 / 连续记忆）——「梦模式清单与梦质量自评」的设计对照、常驻记忆「检索指针」的灵感（MIT；9-28 新增）
+- **RRF（Reciprocal Rank Fusion）**——`score = Σ 1/(k + rank)`（k=60）：两路名次融合的算法依据；咱家检索层批次二「词面与语义公平融合」就是照它做（纯算法，LangChain `EnsembleRetriever` 亦为默认实现；10-02 新增）
+- [run-llama/ llama_index](https://github.com/run-llama/llama_index) · [langchain-ai/ langchain](https://github.com/langchain-ai/langchain)——**父子索引 / Small-to-Big Retrieval**（`ParentDocumentRetriever`）：小块检索、回**原文**回答、同 parent 去重；咱家 `chunks.source_type/source_id` 本就是父指针，批次二把它用起来（MIT：只借设计；10-02 新增）
+- [mem0ai/ mem0](https://github.com/mem0ai/mem0)——Add → 抽事实＋实体链接 → Recall 的记忆层范式；咱家 facts 表与「她的笔」的对照参考（Apache-2.0：只借设计；10-02 新增）
+- [MMX920/ ebbingflow](https://github.com/MMX920/ebbingflow)——Event(原子)→Episode(片段)→Saga(主线) 三层 ＋ 证据链 `source_msg_id` 回链 ＋ HybridScorer（意图路由／时间衰减／RRF／配额）：咱家「证据回链＋多轨融合＋意图路由」的直接参考答案（10-02 新增）
+- [ZifaMem](https://arxiv.org/abs/2607.17564)——面向陪伴的结构化记忆（人格／偏好／**情绪连续性**）：记忆生命周期 reinforce/weaken/decay、boundary 作一等记忆——咱家「记忆生命周期」候选的依据（10-02 新增）
+- [Sleep-time Compute](https://arxiv.org/abs/2504.13171)（Letta × UC Berkeley）——空闲时段让模型预先推理/整理以降 test-time 成本：咱家「夜间预整理（她的梦）产物回流检索」的依据（10-02 新增）
+- [Stanford Generative Agents](https://arxiv.org/abs/2304.03442)——记忆流 ＋ `recency × importance × relevance` 检索分 ＋ reflection：咱家权表「加 importance 维度、衰减改连续指数」的参考（10-02 新增）
+- [asg017/ sqlite-vec](https://github.com/asg017/sqlite-vec)——纯 C、零依赖的 SQLite 向量扩展（`vec0` 虚表）：将来向量到十万级时，最不破坏「单文件的家」的升级路（MIT；本批未引，10-02 新增）
 - 生产级 agent memory 的共识（记忆浓缩 / 分层检索 / 任务感知 / 可观测）——咱家的四层实现是这些共识的一次小型全量落地
 
 ## 7. 诚实的边界
