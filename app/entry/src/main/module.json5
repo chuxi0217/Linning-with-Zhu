@@ -14,7 +14,7 @@
       {
         // Push Kit 门铃（9-2 #13）：client_id 必须直接写值，不能用 $ 引用资源
         "name": "client_id",
-        "value": "push-client-id"
+        "value": "<推送客户端ID>"
       }
     ],
     "abilities": [

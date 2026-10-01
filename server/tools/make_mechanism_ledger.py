@@ -108,7 +108,7 @@ NOTES = {
     "recall_gate_shadow": "检索三件影子（只记不改；落 mem.recall.shadow）",
     "retrieval_unified_shadow": "检索层统一·影子（只记不改；落 mem.unified.shadow，只带 kind:id）",
     "retrieval_unified": "检索层统一·真切（默认关；开=按统一入口＋块层递）",
-    "bind_host": "监听地址（0.0.0.0=全接口）。⚠️**已实证门走 WireGuard(10.66.0.x/24)，别置 127.0.0.1**——会关掉公网门。**ufw 已收紧**（默认 deny incoming，只放行 WG 10.66.0.x/24 与手机热点）：同网段/校园网进不来",
+    "bind_host": "监听地址（0.0.0.0=全接口）。⚠️**已实证门走 WireGuard(10.x.x.x/24)，别置 127.0.0.1**——会关掉公网门。**ufw 已收紧**（默认 deny incoming，只放行 WG 10.x.x.x/24 与手机热点）：同网段/校园网进不来",
     "recall_gate_v2": "检索三件真滤（默认关；开=按门槛/去重/偏近递）",
     "recall_gate": "检索三件旋钮（门槛/每卷每日配额/卷权重/近度权重）",
     "tuning": "阈值收表（甲3·缺省=现值·删段即回原样）——tool_search_min/fuse_sim/rhythm_p0/"

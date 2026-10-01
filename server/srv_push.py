@@ -26,7 +26,7 @@ import srv_state
 # 鉴权（V3 只认服务账号 JWT，client_credentials 换的 token 稳定吃 80200001）：
 # 服务账号密钥文件由小乖从 API Console 下载存本目录 push_service_account.json（值不打印不落日志）。
 # PS256 = RSASSA-PSS(SHA256) 纯标准库手写——军规不装第三方包（PyJWT/cryptography 都不用）。
-PUSH_PROJECT_ID = "push-project-id"
+PUSH_PROJECT_ID = "<推送项目ID>"
 PUSH_SA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "push_service_account.json")
 PUSH_SEND_URL = f"https://push-api.cloud.huawei.com/v3/{PUSH_PROJECT_ID}/messages:send"
 PUSH_JWT_CACHE = {"jwt": None, "exp": 0}   # JWT 缓存，过期前 5 分钟重签

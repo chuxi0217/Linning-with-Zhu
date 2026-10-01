@@ -324,12 +324,12 @@ DEFAULT_CONFIG = {
                     "gate_tool": False},
     "port": 8024,          # 咱家纪念日端口
     # 绑定地址（§5 第 11 条 ufw 收紧的"彻底档"引信·2026-09-29）：
-    # "0.0.0.0"＝全接口（现状：公网门经 VPS Caddy→**WireGuard**→10.66.0.x:8024）。
+    # "0.0.0.0"＝全接口（现状：公网门经 VPS Caddy→**WireGuard**→10.x.x.x:8024）。
     # ⚠️⚠️ **别置 "127.0.0.1"**——2026-09-29 家主给了 `sudo ufw status verbose` 实证：
-    #     `8024 ALLOW IN 10.66.0.x/24  # zanjia-wg` ← 这条就是为公网门开的口，
+    #     `8024 ALLOW IN 10.x.x.x/24  # zanjia-wg` ← 这条就是为公网门开的口，
     #   说明门走 **WireGuard 直连本机**（不是 SSH 反向隧道 18024，那条是旧址/备份）。
     #   改 127.0.0.1 会把**公网门一起关掉**（手机/app 全部 502）。
-    #   校园网那条 `10.x.x/16` 已被 ufw 默认 `deny (incoming)` 挡住 → 本键**无需改**。
+    #   校园网那条 `10.x.x.x/<mask>` 已被 ufw 默认 `deny (incoming)` 挡住 → 本键**无需改**。
     #   真要用它，前提是先让公网门改走 SSH 反向隧道。详见 工单/运维_ufw收紧_2026-09-29.md。
     "bind_host": "0.0.0.0",
     "thinking_enabled": True,    # 二期d：思考模式开关（配置外置先例）
@@ -9387,9 +9387,9 @@ def main():
     except (TypeError, ValueError):
         port = cfg["port"]   # 环境变量里的端口不是数字就退回 config，别让临时实例起不来
     _bind_host = str(cfg.get("bind_host") or "0.0.0.0").strip() or "0.0.0.0"   # §5-11：默认全接口＝现状
-    # 9-23 网络改造：绑全接口——来路 VPS Caddy(:443)→**WireGuard**→10.66.0.x:8024
-    # （9-29 家主 `ufw status` 实证：`8024 ALLOW IN 10.66.0.x/24 # zanjia-wg`；SSH 反向隧道 18024 是旧址/备份）
-    # ufw 默认 deny incoming，只放行 WireGuard(10.66.0.x/24) 与手机热点（安卓热点默认网段 192.168.x.x.x）两条
+    # 9-23 网络改造：绑全接口——来路 VPS Caddy(:443)→**WireGuard**→10.x.x.x:8024
+    # （9-29 家主 `ufw status` 实证：`8024 ALLOW IN 10.x.x.x/24 # zanjia-wg`；SSH 反向隧道 18024 是旧址/备份）
+    # ufw 默认 deny incoming，只放行 WireGuard(10.x.x.x/24) 与手机热点（安卓热点默认网段 192.168.x.x.x）两条
 #（写成 192.168.x.x.x 不写全：镜像扫描把 192.168.x.x 当内网 IP 拦，而 .py 不过工具脱敏——源头就得干净）
     server = ThreadingHTTPServer((_bind_host, port), Handler)
     # §5 第 11 条（9-29）：监听地址 config 化（`bind_host`，默认 "0.0.0.0" 与现状逐字节同）。
@@ -9419,13 +9419,13 @@ def main():
     print(f"  本地判断端点：{_ensure_local_judge()}（{(_local_cfg()[0] or '未配')}）")
     print(f"  网络门：{_ensure_tunnel()}（反向隧道 :18024）")
     # §5-11：监听面开机就喊出来——绑定这件事不该藏在代码里。
-    # 10-01 更正文案：**ufw 已经收了**（默认 deny incoming，只放行 WireGuard 10.66.0.x/24 与手机热点），
+    # 10-01 更正文案：**ufw 已经收了**（默认 deny incoming，只放行 WireGuard 10.x.x.x/24 与手机热点），
     # 所以"同网段设备可直连"这句已经过时——现在校园网/同网段是**进不来的**。
     if _bind_host in ("127.0.0.1", "localhost"):
         print(f"  监听面：{_bind_host}:{port}（只本机——校园网/局域网看不到 ✓）")
     else:
         print(f"  监听面：{_bind_host}:{port}（全接口，但**已由 ufw 收紧**："
-              f"只放行 WireGuard 10.66.0.x/24；公网门经 VPS Caddy→WG→本机）")
+              f"只放行 WireGuard 10.x.x.x/24；公网门经 VPS Caddy→WG→本机）")
     # ⑤ 图书证自检（9-29 评审⑤-half）：菜单有、执行层没接 = 她永远调不动那只证
     _sc_ok, _sc_tot, _sc_miss = _tool_selfcheck()
     if _sc_miss:
