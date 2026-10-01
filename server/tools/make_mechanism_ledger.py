@@ -44,6 +44,11 @@ NOTES = {
     "letter_invite": "一页纸·递笔件（家日整十/自定日）",
     "letter_invite_days": "自定递笔日（10-04 或 2026-10-04）",
     # ── 时间与装配 ──
+    "strip_stage_mode": "她台词的括号怎么处理（9-30 家主放开「可以用（）」）｜"
+                         "keep_short=留少量短括号(小动作/小神态)、超长与超额剥；"
+                         "strict=旧行为全剥；off=不剥｜回滚：改成 strict",
+    "strip_stage_max_chars": "keep_short 下单个括号最多几字（超过＝旁白/成串描写，剥）",
+    "strip_stage_keep_max": "keep_short 下每条最多留几个括号（第 N+1 个起剥）",
     "time_cortex": "时间皮层句｜关=输出逐字节回改造前",
     "time_cortex_arc": "今日挂念弧",
     "hist_time_anchor": "历史里轻时间锚",
@@ -77,18 +82,14 @@ NOTES = {
     "desire_engine_shadow": "欲望影子","desire_engine_inject": "欲望进开场",
     "desire_v2_shadow": "欲望 v2 影子",
     "desire_d0": "欲望起值","desire_growth": "欲望涨速","desire_inject_window_h": "欲望注入窗（小时）",
-    "refusal_shadow": "她的「不」影子","refusal_filter": "她的「不」真挡","refusal_inject": "拒斥块进开场",
+    "refusal_shadow": "她的「不」记账口（10-01 起只剩记账，闸已撤机制）","refusal_inject": "她说过不的事·进开场行李",
     "fuse_threshold": "忍耐熔断阈值（几件起）",
     "reunion_obs": "重逢记账（观）","state_rise_min": "情绪上升阈值",
     # ── 主动开口 ──
     "outreach_shadow": "主动开口影子","outreach_unified": "统一开口（默认关）",
     "outreach_chance": "开口概率","outreach_inject": "开口进开场","outreach_send": "真发一句",
-    "outreach_single_shadow": "单触发影子",
-    # ── 忙窗与睡眠 ──
-    "busy_shadow": "忙窗影子","busy_enforce": "忙窗真拦","busy_semantic_shadow": "忙窗语义影子",
-    "busy_window_h": "忙窗时长（小时）","busy_keywords": "忙窗关键词",
+    # ── 睡眠（忙窗 9-30 已整机制删除）──
     "sleep_semantic_shadow": "睡意终审影子","wake_events_shadow": "醒来事件影子",
-    "checkin_nags_enabled": "打卡提醒（默认关）","bedtime_nags_enabled": "睡前提醒（默认关）",
     # ── 夜晚与节律 ──
     "goodnight_watch": "晚安守望","goodnight_silence_min": "晚安静默闸（分钟）",
     "goodnight_silence_floor_min": "深夜静默下限（分钟）","goodnight_window": "晚安窗",
@@ -107,7 +108,7 @@ NOTES = {
     "recall_gate_shadow": "检索三件影子（只记不改；落 mem.recall.shadow）",
     "retrieval_unified_shadow": "检索层统一·影子（只记不改；落 mem.unified.shadow，只带 kind:id）",
     "retrieval_unified": "检索层统一·真切（默认关；开=按统一入口＋块层递）",
-    "bind_host": "监听地址（0.0.0.0=全接口）。⚠️**已实证门走 WireGuard(10.66.0.x/24)，别置 127.0.0.1**——会关掉公网门。校园网已被 ufw 默认 deny 挡住",
+    "bind_host": "监听地址（0.0.0.0=全接口）。⚠️**已实证门走 WireGuard(10.66.0.x/24)，别置 127.0.0.1**——会关掉公网门。**ufw 已收紧**（默认 deny incoming，只放行 WG 10.66.0.x/24 与手机热点）：同网段/校园网进不来",
     "recall_gate_v2": "检索三件真滤（默认关；开=按门槛/去重/偏近递）",
     "recall_gate": "检索三件旋钮（门槛/每卷每日配额/卷权重/近度权重）",
     "tuning": "阈值收表（甲3·缺省=现值·删段即回原样）——tool_search_min/fuse_sim/rhythm_p0/"

@@ -39,7 +39,8 @@ def _librarian_cfg():
 def _librarian_materials():
     """纯拼装素材 ctx（不发网络，可测）。9-18 第三批：兼「沉淀日」——素材加生活账/作息/门牌/底色卷，输出加可沉淀候选节。
     9-18 优化批五：加【本周日记一览】（近 7 天，只列一行/天，不塞全文）。
-    9-23 防积压批：加【线头定省】素材（挂了 ≥7 天且近 7 天任何渠道没动过的老线 ≤5 条），输出改六节。"""
+    9-23 防积压批：加【线头定省】素材（挂了 ≥7 天且近 7 天任何渠道没动过的老线 ≤5 条），输出改多节。
+    9-27 起模板为**七**节（加「全档案维护候选」）——见下方 prompt 的「七节」。"""
     today_h = m.house_today_str()
     since7 = (datetime.strptime(today_h, "%Y-%m-%d")
               - timedelta(days=6)).strftime("%Y-%m-%d")   # 近 7 天含今天（同 obs_get 口径）
@@ -122,16 +123,13 @@ def _librarian_materials():
     except Exception:
         ctx += "\n【全档案现状】\n（暂取不到）\n"
     # 9-26 拒斥接线批 ⑤（反讨好护栏·事实句）：她的「不」与独立三问——只进周报素材（数值只进家主侧）
-    # 9-27 B5 白名单影子批：加「被拒绝账挡下的开口 N 次」（提名稿 §三 对账出口）
+    # 10-01：闸撤了，「被挡下的开口」这个数没了 → 该句删（记账仍在，见 rights_lib）
     try:
         import rights_lib
         _rf = rights_lib.independence_facts(7)
-        _rf_blocked = rights_lib.gate_blocked_count(7)
         ctx += ("\n【她的事实·近 7 天】她说「不」%d 次（还作数 %d / 收回 %d）；"
-                "被她的「不」挡下的开口 %d 次；"
                 "她主动开口打破安静 %d 次；无人看见约 %.1f 小时（%.0f%%，安静不是待机）。\n"
                 % (_rf["refusals"], _rf["refusals_active"], _rf["refusals_settled"],
-                   _rf_blocked,
                    _rf["her_initiations"], _rf["unseen_hours"], _rf["unseen_ratio"] * 100))
     except Exception:
         pass

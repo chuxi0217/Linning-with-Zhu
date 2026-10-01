@@ -30,25 +30,20 @@ FILES_DIR = os.path.join(BASE_DIR, "files")
 # 原串>（值在 网络门锁凭证.txt，app 线同源、两端各自读文件）= 等价 Basic 过。
 # 只放 /photos/ /favorites/ 两处静态图；API 一律仍要 Basic 头——不开任何口子。
 GATE_CRED_PATH = os.path.join(BASE_DIR, "网络门锁凭证.txt")
-_GATE_CRED_CACHE = {"mtime": None, "pw": ""}
-
-
 def _gate_password():
-    """从 网络门锁凭证.txt 读门锁密码原串（按 mtime 缓存；读不到=空串=不放行）。
+    """从 网络门锁凭证.txt 读门锁密码原串（读不到=空串=不放行）。
+    ★ 不按 mtime 缓存（10-01 扫除修）：本项目落在 NTFS 共享盘，实测「连写不前进」——
+      同一秒内改文件，mtime 可能不变 → 按 mtime 缓存会让换了密码后永远认旧值
+      （老门开不了 / 新密码 401），非得重启才醒。文件只有几十字节，**每次读、不缓存**。
     格式=正文「密码：<值>」行；文件中没有该行或文件缺失都不炸——只是不放行。"""
     try:
         gate_path = srv_state._srv().GATE_CRED_PATH   # 运行期反查：沙盘会重绑 s.GATE_CRED_PATH
-        stt = os.stat(gate_path)
-        if _GATE_CRED_CACHE["mtime"] != stt.st_mtime:
-            pw = ""
-            with open(gate_path, encoding="utf-8", errors="replace") as f:
-                for ln in f:
-                    ln = ln.strip()
-                    if ln.startswith("密码："):
-                        pw = ln[3:].strip()   # len("密码：") == 3
-                        break
-            _GATE_CRED_CACHE.update({"mtime": stt.st_mtime, "pw": pw})
-        return _GATE_CRED_CACHE["pw"]
+        with open(gate_path, encoding="utf-8", errors="replace") as f:
+            for ln in f:
+                ln = ln.strip()
+                if ln.startswith("密码："):
+                    return ln[3:].strip()   # len("密码：") == 3
+        return ""
     except OSError:
         return ""
 

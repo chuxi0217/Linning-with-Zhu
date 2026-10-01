@@ -3,10 +3,14 @@
 """db_maint —— 数据库保养 · 先量后动（工单 §5 第 6 条；设计《数据保养（向量紧凑＋队列清理）》）
 
 **默认只读 dry-run**：不改一个字节，只报"能省多少"＋用**真向量**实测 float16 精度。
-迁移实施（写库）是另一步、要家主点窗口；本脚本现在**只量**。
 
-    python3 tools/db_maint.py            # 量（默认）
-    python3 tools/db_maint.py --samples 400   # 抽样条数（精度实测用）
+    python3 tools/db_maint.py                  # 量（默认，只读）
+    python3 tools/db_maint.py --samples 400    # 抽样条数（精度实测用）
+    python3 tools/db_maint.py --apply [--log 分析报告/x.log]   # 真迁移（照 runbook：先停 server）
+
+`--apply` 按 `工单/运维_数据保养迁移_runbook_2026-10-01.md` §三-2 走：
+对账基线 → 建 vectors_v2 → 逐行转 f16（死模型行不进）→ 硬门槛对账 → **原子换名** → 清残渣。
+**任一门槛不过 → 就地停、不换名**（回滚见 runbook §六）。写库前必须已停 server（embed worker 在写）。
 
 量的四项（对应设计稿 §三）：
   ① 向量紧凑：vec 现以**文本**存（json 数组）→ 换 float16 BLOB 能省多少；顺带量"死模型"残留。
@@ -15,7 +19,7 @@
   ③ embed_queue 残渣：done 超 7 天的行。
   ④ 小表轮转：obs_daily 超 180 天、idem_cache 超 7 天的行。
 
-只读纪律：全程 SELECT；不开事务写、不建表、不 VACUUM。fail-open：某项量不动就打"（量不动）"。
+只读纪律（dry-run）：全程 SELECT；不开事务写、不建表、不 VACUUM。fail-open：某项量不动就打"（量不动）"。
 """
 import argparse
 import json
@@ -225,15 +229,208 @@ def sec_small_tables(con):
     return 0
 
 
+# ══════════════ 真迁移（--apply；照 runbook §三-2 逐条） ══════════════
+
+ARCHIVE_DIR = os.path.join(BASE_DIR, "档案馆")
+V2 = "vectors_v2"
+BAK = "vectors_text_bak"
+
+
+def _log(logpath, text):
+    print(text)
+    if logpath:
+        try:
+            with open(logpath, "a", encoding="utf-8") as f:
+                f.write(text + "\n")
+        except Exception:
+            pass
+
+
+def _decode_any(raw):
+    """BLOB=float16／str=JSON 两种存法都认（与 memory_lib._vec_load 同口径）。"""
+    if isinstance(raw, (bytes, bytearray, memoryview)):
+        b = bytes(raw)
+        return list(struct.unpack("<%de" % (len(b) // 2), b))
+    try:
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
+def _sample_pool(con, n, model=LIVE_MODEL):
+    """随机抽 n 条现役模型的 chunk/oldhome 行 → [(id, vec)]。"""
+    rows = con.execute(
+        "SELECT id, dim, vec FROM vectors WHERE model=? AND kind IN ('chunk','oldhome') "
+        "ORDER BY RANDOM() LIMIT ?", (model, int(n))).fetchall()
+    out = []
+    for _id, dim, raw in rows:
+        v = _decode_any(raw)
+        if v and len(v) == int(dim):
+            out.append((int(_id), v))
+    return out
+
+
+def _top5(q, pool):
+    scored = sorted(((_cos(q, v), _id) for _id, v in pool), key=lambda x: x[0], reverse=True)
+    return [i for _s, i in scored[:5]]
+
+
+def _baseline(con, logpath, queries=50, pool_n=200):
+    """① 对账基线：50 条查询 × 200 条候选池算 top-5，存 档案馆/迁移对账_前_<ts>.json。
+    口径写明「抽样池近似」，不冒充全量。"""
+    pool = _sample_pool(con, pool_n)
+    qs = _sample_pool(con, queries)
+    base = {}
+    for qid, qv in qs:
+        base[str(qid)] = _top5(qv, pool)
+    ts = __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")
+    os.makedirs(ARCHIVE_DIR, exist_ok=True)
+    path = os.path.join(ARCHIVE_DIR, f"迁移对账_前_{ts}.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"口径": "抽样池近似（非全量）", "pool": [i for i, _ in pool],
+                   "queries": [i for i, _ in qs], "top5": base}, f, ensure_ascii=False)
+    _log(logpath, f"  ① 基线：{len(qs)} 查询 × {len(pool)} 候选池 → {path}")
+    return base, pool, qs
+
+
+def do_apply(con, logpath, queries=50, pool_n=200):
+    """照 runbook §三-2：基线→建 v2→逐行转→硬门槛→原子换名→清残渣。任一门槛不过就地停。"""
+    st0 = os.path.getsize(DB_PATH)
+    _log(logpath, "=" * 78)
+    _log(logpath, f"数据保养真迁移 · {__import__('datetime').datetime.now():%F %T}")
+    _log(logpath, f"库：{DB_PATH}（{_mb(st0):.1f} MB）")
+
+    # ① 基线
+    base, pool, qs = _baseline(con, logpath, queries, pool_n)
+
+    # ② 建 vectors_v2（同结构 + UNIQUE）
+    con.execute(f"DROP TABLE IF EXISTS {V2}")
+    con.execute(f'''CREATE TABLE {V2} (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind TEXT NOT NULL, ref_id INTEGER NOT NULL, model TEXT NOT NULL,
+        dim INTEGER NOT NULL, vec BLOB NOT NULL,
+        created_at TEXT DEFAULT (datetime('now','localtime')),
+        UNIQUE (kind, ref_id, model))''')
+    con.commit()
+    _log(logpath, f"  ② 建 {V2} ✓")
+
+    # ③ 逐行转（死模型行不进）
+    rows = con.execute("SELECT id, kind, ref_id, model, dim, vec FROM vectors ORDER BY id").fetchall()
+    n_all = len(rows)
+    moved = skipped_dead = bad = 0
+    for i, (_id, kind, ref_id, model, dim, raw) in enumerate(rows, 1):
+        if model != LIVE_MODEL:
+            skipped_dead += 1
+            continue
+        v = _decode_any(raw)
+        if not v:
+            bad += 1
+            continue
+        # **带货主键 id**：迁移后 rows 的 id 与旧表一一对应（对账按 id 取回同一行；代码侧按
+        # (kind,ref_id,model) 查，不依赖 id，但保住它让对账/回滚都简单）
+        con.execute(f"INSERT OR REPLACE INTO {V2} (id, kind, ref_id, model, dim, vec) VALUES (?,?,?,?,?,?)",
+                    (int(_id), kind, int(ref_id), model, int(dim), struct.pack("<%de" % len(v), *v)))
+        moved += 1
+        if i % 500 == 0:
+            _log(logpath, f"     … {i}/{n_all}")
+    con.commit()
+    _log(logpath, f"  ③ 转完：进 v2 {moved} 行；死模型跳过 {skipped_dead}；解析失败 {bad}")
+
+    # ④ 硬门槛
+    ok = True
+    orig = dict(con.execute(
+        "SELECT model||'/'||kind, count(*) FROM vectors WHERE model=? GROUP BY model, kind",
+        (LIVE_MODEL,)).fetchall())
+    now = dict(con.execute(
+        f"SELECT model||'/'||kind, count(*) FROM {V2} GROUP BY model, kind").fetchall())
+    if orig != now:
+        ok = False
+        _log(logpath, f"  ✗ 条数不符：原 {orig} ≠ v2 {now}")
+    else:
+        _log(logpath, f"  ✓ 条数一致（{sum(now.values())} 行 / {len(now)} 组）")
+    bad_len = con.execute(f"SELECT count(*) FROM {V2} WHERE length(vec) <> dim*2").fetchone()[0]
+    if bad_len:
+        ok = False
+    _log(logpath, f"  {'✓' if not bad_len else '✗'} length(vec)==dim*2（不符 {bad_len} 行）")
+
+    pool2 = []
+    for pid, _v in pool:
+        r = con.execute(f"SELECT vec FROM {V2} WHERE id=?", (pid,)).fetchone()
+        if r and r[0] is not None:
+            pool2.append((pid, _decode_any(r[0])))
+    hit = tot_q = 0
+    miss = []
+    for qid, _qv in qs:
+        r = con.execute(f"SELECT vec FROM {V2} WHERE id=?", (qid,)).fetchone()
+        if not r or r[0] is None:
+            continue
+        qv2 = _decode_any(r[0])
+        tot_q += 1
+        if _top5(qv2, pool2) == base.get(str(qid)):
+            hit += 1
+        else:
+            miss.append(qid)
+    rate = (hit / tot_q) if tot_q else 0.0
+    _log(logpath, f"  {'✓' if rate >= 0.99 else '✗'} top-5 一致率 {hit}/{tot_q} = {rate:.4f}"
+                 f"（门槛 ≥0.99）{'；不一致：' + str(miss[:20]) if miss else ''}")
+    if rate < 0.99:
+        ok = False
+
+    mx = 0.0
+    for pid, v in pool[:20]:
+        r = con.execute(f"SELECT vec FROM {V2} WHERE id=?", (pid,)).fetchone()
+        if not r or r[0] is None:
+            continue
+        q = _decode_any(r[0])
+        for a, b in zip(v, q):
+            mx = max(mx, abs(a - b))
+    _log(logpath, f"  {'✓' if mx < 1e-3 else '✗'} 抽样 20 行 float16 往返 max|Δ| = {mx:.3e}（<1e-3）")
+    if mx >= 1e-3:
+        ok = False
+
+    if not ok:
+        _log(logpath, "  ⛔ 有门槛未过 → **就地停、不换名**（数据没动；回滚见 runbook §六）")
+        return 1
+
+    # ⑤ 原子换名（一个事务）
+    con.execute("BEGIN")
+    con.execute(f"ALTER TABLE vectors RENAME TO {BAK}")
+    con.execute(f"ALTER TABLE {V2} RENAME TO vectors")
+    con.commit()
+    st1 = os.path.getsize(DB_PATH)
+
+    # ⑥ 清残渣
+    q_old = con.execute("SELECT count(*) FROM embed_queue WHERE done=1 AND created_at < datetime('now','localtime',?)",
+                        (f"-{QUEUE_KEEP_DAYS} days",)).fetchone()[0]
+    con.execute("DELETE FROM embed_queue WHERE done=1 AND created_at < datetime('now','localtime',?)",
+                (f"-{QUEUE_KEEP_DAYS} days",))
+    i_old = con.execute("SELECT count(*) FROM idem_cache WHERE created_at < datetime('now','localtime',?)",
+                        (f"-{IDEM_KEEP_DAYS} days",)).fetchone()[0]
+    con.execute("DELETE FROM idem_cache WHERE created_at < datetime('now','localtime',?)",
+                (f"-{IDEM_KEEP_DAYS} days",))
+    con.commit()
+    _log(logpath, f"  ⑤ 换名 ✓（旧表留作 {BAK}，3 天后再 DROP）")
+    _log(logpath, f"  ⑥ 清残渣：embed_queue −{q_old} 行；idem_cache −{i_old} 行")
+    _log(logpath, f"  库 {_mb(st0):.1f} MB → {_mb(st1):.1f} MB（VACUUM 另计）")
+    _log(logpath, "  ✅ 迁移完成。回滚：ALTER TABLE vectors RENAME TO vectors_f16;"
+                  f" ALTER TABLE {BAK} RENAME TO vectors; 再把 config.vec_format 置回 text。")
+    _log(logpath, "=" * 78)
+    return 0
+
+
 def main():
-    ap = argparse.ArgumentParser(description="数据库保养 · 只读 dry-run（量能省多少）")
+    ap = argparse.ArgumentParser(description="数据库保养：默认只读 dry-run；--apply 真迁移（照 runbook）")
     ap.add_argument("--samples", type=int, default=200, help="精度实测抽样条数（默认 200）")
+    ap.add_argument("--apply", action="store_true", help="真迁移（写库！先停 server；照 runbook §三-2）")
+    ap.add_argument("--log", default="", help="日志落盘路径（--apply 建议带上）")
     a = ap.parse_args()
     if not os.path.exists(DB_PATH):
         print(f"找不到库：{DB_PATH}")
         return 1
     con = sqlite3.connect(DB_PATH)
     try:
+        if a.apply:
+            return do_apply(con, a.log)
         st = sec_db_size(con)
         tot_text, tot_f16 = sec_vectors(con, a.samples)
         sec_queue(con)
@@ -244,7 +441,7 @@ def main():
             after = st - (tot_text - tot_f16)
             print(f"  库 {_mb(st):.1f} MB → 约 {_mb(after):.1f} MB"
                   f"（省 ~{_mb(tot_text - tot_f16):.1f} MB，另可 VACUUM 收页）")
-        print("  ⚠️ 本轮**只量不改**；真迁移＝另一步（备份→建 vectors_v2→逐行转→对账→原子换名），要家主点窗口。")
+        print("  ⚠️ 本轮**只量不改**；真迁移＝`--apply`（备份→建 vectors_v2→逐行转→对账→原子换名）。")
         print("=" * 78)
     finally:
         con.close()

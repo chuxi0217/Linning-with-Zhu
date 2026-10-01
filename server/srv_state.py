@@ -32,24 +32,12 @@ def asleep():
     return bool(_srv().ASLEEP)
 
 
-def set_asleep(v):
-    _srv().ASLEEP = bool(v)
-
-
 def last_loc():
     return _srv().LAST_LOC
 
 
-def last_schedule():
-    return _srv().LAST_SCHEDULE
-
-
 def session():
     return _srv().SESSION
-
-
-def session_lock():
-    return _srv().SESSION_LOCK
 
 
 def places():
@@ -59,6 +47,3 @@ def places():
 def weather_cache():
     return _srv().WEATHER_CACHE
 
-
-def stats_cache():
-    return _srv().STATS_CACHE

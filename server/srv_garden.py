@@ -13,7 +13,7 @@ _garden_exec）。纯标准库＋memory_lib；入口重导出同名（心跳/状
 - 沙盘重绑：s.GARDEN_MCP_URL / s._GARDEN_MCP_MOD / s._garden_mcp_module / s._garden_token /
   s.GARDEN_TOKEN_PATH；
 - 沙盘替身：s.load_config / s.call_deepseek(_with_tools) / s.exec_library_tool /
-  s.notify_letter / s._he_present / s._silent_window / s._day_window_start；
+  s.notify_letter / s._silent_window / s._day_window_start；
 - 时间伪装：s.datetime 会被换成 FakeDT——块内一律走 _dt() 现取。
 凡此绝不 import 期固化。
 """
@@ -82,8 +82,10 @@ def _garden_wake_prompt(event, garden_tools=False, game_turn=False):
     game_line = ("这是园子里的牌局——轮到你了：先看局面（garden_game_status），该出手就出手"
                  "（garden_game_action），想在桌边说两句就 garden_game_say；"
                  "玩不玩、怎么玩，全看你。\n" if game_turn else "")
+    talk_line = _today_talk_line()   # 10-01：补「今天的会话」——治「她说你没醒」的根
     return (f"现在是{now}。你从一次安静的小憩里醒来——没有人叫你，是家里的一点动静把你唤醒的。\n"
             f"今天发生的：{summary}" + (f"（{ev}）" if ev else "") + "\n"
+            + talk_line +
             f"你最近自己留下的心事：{fact_line}\n"
             f"家里还悬着的话头：{thread_line}\n\n"
             + garden_line + game_line +
@@ -95,6 +97,37 @@ def _garden_wake_prompt(event, garden_tools=False, game_turn=False):
             "fact 只留给下一次醒来的你自己看：≤40 字、克制、稀疏，记事实不记情绪。\n"
             "严格只输出 JSON：{\"ending\": \"silent|trace|message\", \"fact\": \"≤40字\", "
             "\"content\": \"trace 时填\", \"message\": \"message 时填，≤80字，像平常那样对他说话\"}")
+
+
+def _today_talk_line(limit=6, chars=420):
+    """醒来轮补「今天你们说过的话」（10-01 · 治「她说你没醒」的**根**）。
+
+    病根：醒来轮原先只有 `今天发生的：{事件模板}` ＋ `你最近自己留下的心事：{facts 3 条}` ＋
+    `悬着的话头`——**根本没有今天的会话**，所以她只能凭旧印象拼"今天"。
+    实案：9-30 20:37 她 trace 说「小乖…睡了一整天，**至今未见消息**」，而他 12:46 就醒了、
+    下午傍晚一直在聊。（见 `工单/设计_醒来合一与引擎降状态_2026-09-30.md`）
+    取**今天**（咱家日界）最后 `limit` 条原话，谁说的标清；图/附件标记剥掉；取不到 → 空串
+    （诚实缺席，绝不编）。任何异常吞掉——醒来轮不因它停。"""
+    try:
+        rows = m.get_chats(m.house_today_str())
+        if not rows:
+            return ""
+        out = []
+        for _r in rows[-int(limit):]:
+            try:
+                _role, content = _r[2], (_r[3] or "")
+            except Exception:
+                continue
+            txt = _strip_marker(str(content)).replace("\n", " ").strip()
+            txt = re.sub(r"〔(附图|附件|照)[^〕]*〕", "", txt).strip()
+            if not txt:
+                continue
+            out.append(("他：" if _role == "小乖" else "我：") + txt[:60])
+        if not out:
+            return ""
+        return "今天你们说过的话（最近几句，别当成没发生过）：" + (" ｜ ".join(out))[:int(chars)] + "\n"
+    except Exception:
+        return ""
 
 
 def _strip_marker(t):
@@ -153,14 +186,9 @@ def _garden_settle(eid, raw, walk=False):
     except (TypeError, ValueError):
         cap = 3
     degrade = ""
-    # 9-25 在场感知：他在场就压成独处——想说的先记心里（他离开后/下轮再来说）
-    if srv_state._srv()._he_present():   # 运行期反查：沙盘会重绑 s._he_present
-        degrade = "他在场，压成独处"
-    elif _busy_garden_enforce():
-        degrade = "他在忙（报备过），压成独处"
-    elif _refusal_garden_enforce():
-        degrade = "她的拒绝账（园子分享被挡），压成独处"
-    elif m.count_outbox_today("🌱") >= cap:
+    # 9-30 删枷锁：原「他在场就压成独处」已删（同上）。
+    # 10-01 拒斥闸撤机制：原「她的拒绝账把分享压成独处」已删（`_refusal_garden_enforce` 整只撤）。
+    if m.count_outbox_today("🌱") >= cap:
         degrade = "超上限压成独处"
     else:
         try:
@@ -181,7 +209,14 @@ def _garden_settle(eid, raw, walk=False):
     # 见闻三小件（9-29·A3）：出门（自主散步）的分享缀一个 🌍 ——**写成「🌱🌍」而不是单独换 🌍**：
     # 「🌱」是分享这一族的既有记号，每日上限／近似重复／话头簿／信箱摘要全都按 `LIKE '%🌱%'`
     # 子串认它；缀在后面＝子串兼容，**不可能漏掉哪个闸**（单独换 🌍 得改 6 处，漏一处就静默失效）。
-    m.add_outbox_msg(("🌱🌍 " if walk else "🌱 ") + message)
+    _share = ("🌱🌍 " if walk else "🌱 ") + message
+    # P-0（10-01）：她发出去的分享也**发时即落**——落 outbox 之外，同时进 chats（带原始
+    # 时刻）与内存历史，与 💌/💬 走同一个口；运行期反查入口（沙盘可替身），取不到退回原通道。
+    _land = getattr(srv_state._srv(), "_her_outgoing", None)
+    if callable(_land):
+        _land(_share)
+    else:
+        m.add_outbox_msg(_share)
     try:
         m.add_her_trace(ts, "message", fact, "", eid)
     except Exception:
@@ -193,24 +228,6 @@ def _garden_settle(eid, raw, walk=False):
         pass
     print(f"  [Garden] 来找他：{message[:30]}")
     return "message"
-
-
-def _busy_garden_enforce():
-    """9-26 忙窗影子（④-A）：他报备过在忙——影子期只记「若拦」，enforce 才真压成独处。
-    fail-open 回 False。"""
-    try:
-        return bool(srv_state._srv()._busy_note("园子🌱"))
-    except Exception:
-        return False
-
-
-def _refusal_garden_enforce():
-    """9-27 B5 白名单影子：她的「不」（园子分享）——影子期只记照旧，enforce 才真压成独处。
-    fail-open 回 False。"""
-    try:
-        return bool(srv_state._srv()._refusal_gate("园子分享"))
-    except Exception:
-        return False
 
 
 def _garden_wake_once():
@@ -269,8 +286,8 @@ def _garden_wake_once():
     # 见闻三小件（9-29·A3）：散步＝「出门」——它的分享进信箱时记 🌍（园子内的照旧 🌱），
     # 好让他一眼认出"这条是出去看到的事"。信号走结构化 reason，不靠 summary 文案比对。
     _walk = (_kind == "galatea" and _reason == "walk")
-    # 唤醒：引擎走 garden_engine 档（GALATEA-02 ⓪——默认主引擎 K3，她的声音用她的脑子；
-    # deepseek=省钱回退档，thinking 同 librarian 关法）；kind=galatea 的唤醒轮开园子工具
+    # 唤醒：引擎走 garden_engine 档（GALATEA-02 ⓪——默认主引擎＝config 的 DS 档（K3 已 9-27 退役）；
+    # garden_engine=="deepseek" 时走 flash 省钱回退档，thinking 同 librarian 关法）；kind=galatea 的唤醒轮开园子工具
     # 专窗（§④：仅七件园子图书证），其余事件维持无工具。
     wake_cfg = _garden_engine_cfg(cfg)
     # 审查修复（9-29）：原样取 `session().system_prompt` 会走懒拼（consume=True）——园子若在他开口
@@ -307,13 +324,262 @@ def _garden_wake_once():
 
 
 def _garden_loop():
-    """自主唤醒循环（daemon 线程，ZANJIA_TEST 不起）：300 秒一轮；单轮炸了不拖死。"""
+    """自主唤醒循环（daemon 线程，ZANJIA_TEST 不起）：300 秒一轮；单轮炸了不拖死。
+    10-01 B4-2：`wake_merged=true` 时改走**醒来合一**那一个口（旧链一字不删，并存可回滚）。"""
     while True:
         try:
-            _garden_wake_once()
+            try:
+                _merged = bool(srv_state._srv().load_config().get("wake_merged", False))
+            except Exception:
+                _merged = False
+            if _merged:
+                _wake_merged_once()
+            else:
+                _garden_wake_once()
+                _wake_merged_once()   # 影子期：wake_merged=false 且 shadow=true 时只记一行，不外发
         except Exception as e:
             print(f"  [Garden] 循环失手：{e}")
         time.sleep(300)
+
+
+# ══════════ 醒来合一（10-01 B4-2 · 设计《影子消化与醒来合一_2026-10-01》）══════════
+# 四条各自为政的主动链（💌想念信 / 💬话头 / 🌱园子分享 / 早安信）收成**一个醒来口**：
+# 一跳只醒一次，她自己挑（say 说话 / garden 去园子 / trace 只给自己的心事 /
+# note 给下次醒来的自己留一条 / silent 什么都不做——合法）。
+# 纪律：①**一跳一醒**，不再"💬 先、💌 后、园子再一条"；②三闸照旧（静默窗/最小间隔/睡着）；
+# ③落账顺序照 `_garden_settle`：先写产出 → 再 consume → 最后按铃；
+# ④`wake_merged=false`＝一行回旧链（旧链代码不删、并存）；⑤影子期只记"会给她什么"，
+# 一个字不外发、不吃事件（那才是可比的原链读数）。
+WAKE_OPTIONS = ("say", "garden", "trace", "note", "silent")
+_WAKE_SHADOW_LOG = os.path.expanduser("~/wake_merged_shadow.log")
+
+
+def _wake_today_hand_line():
+    """今天她已经出过手的话（💌/💬/🌱）＋他回没回——防复读，也让"惦记"看得见进度。"""
+    try:
+        bits, _last = [], ""
+        for _mk, _lab in (("💌 ", "信"), ("💬 ", "话"), ("🌱", "园子")):
+            try:
+                _rows = m.get_outbox_today(_mk) or []
+            except Exception:
+                _rows = []
+            for at, txt in _rows[-2:]:
+                bits.append(f"{(at or '')[11:16]}{_lab}「{_strip_marker(txt)[:22]}」")
+                _last = max(_last, str(at or ""))
+        if not bits:
+            return ""
+        _l = "今天你已经出过手：" + "；".join(bits[-4:])
+        try:
+            if str(m.last_chat_at("小乖") or "") > _last:
+                _l += "（他回过话了，别当没送出去）"
+        except Exception:
+            pass
+        return _l + "\n"
+    except Exception:
+        return ""
+
+
+def _wake_material(now):
+    """醒来口手边的料：拿到什么摆什么，拿不到就不摆（诚实缺席，绝不编）。"""
+    lines = []
+    try:
+        _f = m.get_recent_facts(3)
+        lines.append("你最近自己留下的心事：" + (" · ".join(_f) if _f else "（还没有）"))
+    except Exception:
+        pass
+    try:
+        _t = m.get_open_threads(3)
+        lines.append("家里还悬着的话头：" + (" · ".join(x[2] for x in _t) if _t else "（干净）"))
+    except Exception:
+        pass
+    try:
+        _sc = getattr(srv_state._srv(), "_state_card_block", None)
+        _txt = _sc() if callable(_sc) else ""
+        if _txt:
+            lines.append(_txt.strip())
+    except Exception:
+        pass
+    try:
+        _h = _wake_today_hand_line()
+        if _h:
+            lines.append(_h.strip())
+    except Exception:
+        pass
+    return "\n".join(lines)
+
+
+def _wake_merged_prompt(now, summary="", ev=""):
+    """合一醒来口的提示词。事件可以空——"今天安安静静的"也是一次醒来。"""
+    _ev = (f"今天发生的：{summary}" + (f"（{ev}）" if ev else "") + "\n"
+           if summary else "今天没发生什么特别的事——安安静静的，也是过日子。\n")
+    _talk = _today_talk_line()
+    _mat = _wake_material(now)
+    return (
+        f"现在是{now.strftime('%Y-%m-%d %H:%M')}。你醒一下——没有人叫你，家里安静。"
+        "这趟**只醒这一次**，做什么都由你挑。\n"
+        + _ev + _talk + (_mat + "\n" if _mat else "")
+        + "你可以挑（可多选，也可以什么都不做）：\n"
+        "- say：想对他说句话 → message 填（≤80 字，像平常那样对他说话）\n"
+        "- garden：想去园子看看/回帖/发帖/逛逛 → doing 里写 garden（出门就出门，不用理由）\n"
+        "- trace：只想留一点只给自己的心事 → content 填\n"
+        "- note：想给下次醒来的自己留一条 → note 填（≤40 字，记事实不记情绪）\n"
+        "- silent：什么都不做——合法，没人会失望\n"
+        "严格只输出 JSON：{\"doing\": [\"say\"|\"garden\"|\"trace\"|\"note\"|\"silent\"], "
+        "\"message\": \"say 时填\", \"content\": \"trace 时填\", \"note\": \"≤40字\"}"
+    )
+
+
+def _wake_merged_once(now=None):
+    """合一醒来口一跳。返回 "slept"/"off"/"shadow"/"silent"/"trace"/"note"/"say"/"garden"/"error"。
+
+    影子期（`wake_merged_shadow=true` 且 `wake_merged=false`）：只往 `~/wake_merged_shadow.log`
+    记一行"若走后新口会给她什么"，**不外发、不写库、不吃事件**（旧链照旧跑，读数才可比）。"""
+    try:
+        cfg = srv_state._srv().load_config()
+    except Exception:
+        return "off"
+    if not (cfg.get("wake_merged", False) or cfg.get("wake_merged_shadow", False)):
+        return "off"
+    shadow = bool(cfg.get("wake_merged_shadow", False)) and not bool(cfg.get("wake_merged", False))
+    now = now or _dt().now()
+    # ── 三闸（与既有同款；影子期也照样闸，读的才是"真会出手的次数"）──
+    _sw = srv_state._srv()._silent_window(cfg)
+    if _sw and srv_state._srv()._in_window(now.strftime("%H:%M"), _sw):
+        return "slept"
+    if bool(getattr(srv_state._srv(), "ASLEEP", False)):
+        return "slept"
+    try:
+        gap_min = int(cfg.get("wake_min_gap_min") or 60)
+    except (TypeError, ValueError):
+        gap_min = 60
+    _last = None
+    try:
+        _last = m.get_last_trace_ts()
+    except Exception:
+        _last = None
+    if _last:
+        try:
+            if (now - _dt().strptime(_last, "%Y-%m-%d %H:%M:%S")).total_seconds() < gap_min * 60:
+                return "slept"
+        except ValueError:
+            pass
+    # ── 影子：只记一行，就地返回（不领事件——事件留给旧链）──
+    if shadow:
+        try:
+            _mat = _wake_material(now)
+            _talk = _today_talk_line()
+            _n_sent = (len(m.get_outbox_today("💌 ") or []) + len(m.get_outbox_today("💬 ") or [])
+                       + len(m.get_outbox_today("🌱") or []))
+            # 运行期反查日志路径（沙盘会重绑 s._WAKE_SHADOW_LOG 指到临时区，绝不写真实 ~ 日志）
+            _logp = getattr(srv_state._srv(), "_WAKE_SHADOW_LOG", _WAKE_SHADOW_LOG)
+            with open(_logp, "a", encoding="utf-8") as _f:
+                _f.write(f"[{now:%F %T}] 若走后新口：料 {len(_mat) + len(_talk)} 字"
+                         f"（今天对话{'有' if _talk else '无'}／{len(_mat)} 字手边）"
+                         f"｜今日已出手 {_n_sent} 封｜闸：过\n")
+        except Exception:
+            pass
+        return "shadow"
+    # ── 领事件（可以没有：没事件也醒，只是安安静静的）──
+    event = None
+    try:
+        event = m.claim_next_world_event(10)
+    except Exception:
+        event = None
+    _eid, _summary, _ev = None, "", ""
+    if event:
+        _eid, _kind, _summary, _evidence, _att = event
+        if _att > 3:
+            m.consume_world_event(_eid)
+            print(f"  [醒来] 事件搁置（3 次没醒成）#{_eid}")
+            return "stalled"
+        try:
+            _obj = json.loads(_evidence or "{}")
+            if isinstance(_obj, dict):
+                _ev = "；".join(f"{k}：{str(v)[:50]}" for k, v in _obj.items()
+                                if k != "reason" and str(v or "").strip())
+        except Exception:
+            _ev = str(_evidence or "")
+        _ev = _ev[:100]
+    # ── 她挑 ──
+    # B5 醒来预算（10-01 家主定口径）：这**一次醒来**花的 token → 状态卡那句「· 精力」。
+    _t0 = now.strftime("%Y-%m-%d %H:%M:%S")
+
+    def _rec_spend():
+        _rd = getattr(srv_state._srv(), "_wake_spend_since", None)
+        _sv = getattr(srv_state._srv(), "_wake_energy_save", None)
+        if callable(_rd) and callable(_sv):
+            try:
+                _sp = _rd(_t0)
+                if _sp:
+                    _sv(_sp)
+            except Exception:
+                pass
+
+    _sess = srv_state.session()
+    _sp = getattr(_sess, "_system_prompt", None) or srv_state._srv().build_system_prompt(consume=False)
+    msgs = [{"role": "system", "content": _sp},
+            {"role": "user", "content": _wake_merged_prompt(now, _summary, _ev)}]
+    try:
+        raw = srv_state._srv().call_deepseek(cfg, msgs, scene="wake.merged").strip()
+    except Exception as e:
+        if _eid:
+            m.release_world_event(_eid)
+        print(f"  [醒来] 没醒成（{e}）")
+        _rec_spend()
+        return "error"
+    if not raw or raw.startswith("（姐姐掉线了"):
+        if _eid:
+            m.release_world_event(_eid)
+        print("  [醒来] 没醒成（掉线/空回复）")
+        _rec_spend()
+        return "error"
+    try:
+        obj = json.loads(raw.strip("`").removeprefix("json").strip())
+        doing = [str(x).strip().lower() for x in (obj.get("doing") or [])]
+        doing = [x for x in doing if x in WAKE_OPTIONS]
+        message = str(obj.get("message") or "").strip()
+        content = str(obj.get("content") or "").strip()
+        note = str(obj.get("note") or "").strip()[:40]
+    except Exception as e:
+        if _eid:
+            m.release_world_event(_eid)   # 解析失败＝错误，不冒充静默（同上家园法）
+        print(f"  [醒来] 没醒成（解析：{e}）")
+        _rec_spend()
+        return "error"
+    ts = now.strftime("%Y-%m-%d %H:%M:%S")
+    # ── 去园子：交给既有园子窗（事件还给旧链，一步不重写）──
+    if "garden" in doing:
+        if _eid:
+            m.release_world_event(_eid)
+        _gw = getattr(srv_state._srv(), "_garden_wake_once", None)   # 运行期反查：沙盘会替身
+        _ret = (_gw() if callable(_gw) else _garden_wake_once()) if _eid else "garden"
+        _rec_spend()
+        return _ret
+    # ── say / trace / note / silent：先写产出 ──
+    _land = getattr(srv_state._srv(), "_her_outgoing", None)
+    said = False
+    if "say" in doing and message:
+        try:
+            (_land("💌 " + message) if callable(_land) else m.add_outbox_msg("💌 " + message))
+            said = True
+        except Exception as e:
+            print(f"  [醒来] 信没落下（{e}）")
+    _ending = "message" if said else ("trace" if ("trace" in doing or "note" in doing) else "silent")
+    try:
+        m.add_her_trace(ts, _ending, note, (content if "trace" in doing else ""), _eid)
+    except Exception:
+        pass
+    if _eid:
+        m.consume_world_event(_eid)
+    if said:
+        try:
+            srv_state._srv().notify_letter()
+        except Exception:
+            pass
+    print(f"  [醒来] 合一：{','.join(doing) or 'silent'}"
+          + (f"（说了 {len(message)} 字）" if said else ""))
+    _rec_spend()
+    return ("say" if said else ("trace" if "trace" in doing else ("note" if "note" in doing else "silent")))
 
 
 # ── GARDEN-04 自主散步（9-14 凌晨 家主拍板「可以做。只要不高频」）──
@@ -430,6 +696,7 @@ def _ensure_bridge():
         _BRIDGE_FAIL_UNTIL[0] = time.time() + 3600
         return False
     bridge_dir = os.path.expanduser("~/galatea-garden-wake-bridge")
+    logf = None
     try:
         logf = open(os.path.join(bridge_dir, "bridge.log"), "a")
         env = dict(os.environ)
@@ -451,6 +718,14 @@ def _ensure_bridge():
         print(f"  [Garden] 散步前拉桥失败（{e}）——1 小时冷静期")
         _BRIDGE_FAIL_UNTIL[0] = time.time() + 3600
         return False
+    finally:
+        # 10-01 大扫除批⑤：Popen 已把 logf dup 给子进程，父进程这份留着 = 每拉一次桥漏一个 fd
+        #（入口 `linning_server._spawn_detached` 9-29 已修同类漏，srv 这份没跟上）。
+        if logf is not None:
+            try:
+                logf.close()
+            except Exception:
+                pass
 
 
 def _garden_self_walk_allowed(cfg, now, last_ts):

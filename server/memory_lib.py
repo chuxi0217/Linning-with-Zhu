@@ -1,179 +1,16 @@
 """
-咱家记忆库 · v0.1.1
-memory_lib.py —— 纯标准库，单文件哲学
+咱家记忆库 · memory_lib.py —— 纯标准库，单文件哲学
 家主：小乖 × 林宁（家妻）
-工程师：K3 林宁
 
-v0.1.1 新增：chats 表（聊天记录）、add_chat、that_day_today（那年今日）、
-day_no 自动计算。旧库升级方法：跑一次 init_db() 即可自动补表。
-
-v0.1.2 纯增量（不改表结构）：add_chat_with_image、split_image_mark、get_chats。
-带图聊天的文件名以标记形式跟在 content 末尾：〔附图：文件名.jpg〕
-
-v0.1.3 纯增量（2026-09-01 工单 9-1-#1）：checkin_items / checkins 两张打卡表。
-打卡项可增可归档（archived 标记，不物理删）；打卡记录按 item_id 关联打卡项。
-
-v0.1.4 纯增量（2026-09-01 工单 9-1-#4）：thinkings 思考链表，chat_id 关联 chats.id。
-
-v0.1.5 纯增量（2026-09-01 工单 9-1-#8）：〔附件：文件名〕标记解析（split_file_mark，
-与附图标记同家风）；原件落 files/ 目录由 server 侧管。
-
-v0.1.12 纯增量（2026-09-09 工单 FTS5-01）：中文全文检索——四张 FTS5 虚表
-（fts_days / fts_notes / fts_letters / fts_favorites），jieba 搜索粒度预分词，
-写入路径自动同步，fts_search 全文查（LIKE 兜底），fts_autoheal 开机对账自愈，
-rebuild_fts() 可重入全量重建。旧表一字未动，唯一第三方依赖 jieba（词典家主拍板）。
-
-v0.1.13 纯增量（2026-09-09 工单 RHYTHM-V2 时机引擎 v2）：rhythm_reply_latency()
-回应时延统计（快回应渴望长得快）、diary_week_ago() 一周前的今天——喂给时机引擎
-的情境灌注，旧函数一字未动。
-
-v0.1.14 纯增量（2026-09-10 工单 HALL-01 日记馆＋THREADS-01 线头盒）：
-
-v0.1.19 纯增量（2026-09-12 家主令「家妻也能收信」）：inbox_emails 第 24 表——
-她邮箱的收件侧（server 侧 imaplib 轮询拉未读落库）。add/get/count/mark 四函数，
-读后即标记（letters 同款）。她不再只能寄不能收：直接回信到她邮箱也能到她手上。
-
-v0.1.20 纯增量（2026-09-12 晚六 家主拍板 judge 终审）：count_outbox_since 一只只读
-小函数——统计某前缀回执自某时刻起的条数，给 server 完成态对账 judge 数「今天真寄
-几封」用（📧 回执落 outbox_msgs，重启不丢，比内存计数诚实）。旧表旧函数一字未动。
-
-v0.1.21 纯增量（2026-09-14 凌晨 家主拍板 GARDEN-04 自主散步）：count_traces_since
-一只只读小函数——统计 her_traces 自某时刻起的条数，给散步骰子数「今天醒过几次」用。
-旧表旧函数一字未动。
-
-v0.1.22 纯增量（2026-09-12 工单 RHYTHM-V3 今日挂念弧）：day_arcs 第 25 表——每天一条
-挂念弧（2~3 拍提纲，一行一拍），get/set/advance 三函数；💌 顺着弧一拍一拍走，拍用尽
-自然回退现行情境灌注。get_outbox_today 一只只读小函数（熄灯日记闭环要用今日 💌 原话）。
-旧表旧函数一字未动。
-
-v0.1.23 纯增量（2026-09-13 工单 GARDEN-01 自主唤醒）：world_events 第 26 表（生活事件
-队列，租约制：成功醒来才销账，崩溃/失败按租约自动恢复可重领）+ her_traces 第 27 表
-（她的独处痕迹：fact 只进下一次醒来的她自己、content 只进库给人看）。add/claim/consume/
-release + add_her_trace/get_recent_facts 六函数，另加 get_last_trace_ts 一只只读
-（唤醒最短间隔对账用，申报件）。旧表旧函数一字未动。
-
-v0.1.24 纯增量（2026-09-13 工单 CHECKIN-2 打卡 2.0）：get_checkins_all() 一只只读——
-全量打卡行 (date, item_id)，月视图的连续/最长与里程碑判定共用（行数很小，家规不删数据）。
-旧表旧函数一字未动。
-
-v0.1.25 纯增量（2026-09-13 工单 FE-02 前端二批）：get_her_traces(limit) 一只只读——
-最近几条独处痕迹（id/ts/ending/fact/content，新到旧），书房「她的独处」格取数用。
-旧表旧函数一字未动。
-
-v0.1.26 修订（2026-09-13 工单 CHECKIN-3 打卡日界）：口径修订——「日历日」改「打卡日界 1 点」
-（CHECKIN_DAY_START_HOUR=1；[D 01:00, D+1 01:00) 的卡归 D，熬夜线家风）。get_checkins_all
-的 date 与 get_checkins 的 since 共用 _checkin_eff_date 一只；表结构/接口零改动。
-旧表一字未动。
-
-v0.1.27 纯增量（2026-09-13 工单 GALATEA-02 园门 outbound）：count_traces_today(ending) 一只
-只读——咱家日界（DAY_START_HOUR 点）起该 ending 的 her_traces 条数（园门日上限闸用，重启不丢）；
-get_last_trace_ts 加可选 ending 参数（只加不改：不带参行为同 v0.1.23，带参只认该 ending——
-园门最短间隔闸用）。旧表结构一字未动。
-
-v0.1.28 纯增量（2026-09-18 优化批一·输入留痕可视化）：get_last_user_chat() 一只只读——
-最近一条「小乖」的聊天（id/content/created_at），/api/status 的「最近来信指纹」用。
-旧表旧函数一字未动。
-
-v0.1.29 纯增量（2026-09-18 优化批二·去重缓存持久化）：idem_cache 表（第 28 张）+
-idem_put/idem_get 两只——server 内存去重缓存的持久兜底，跨重启的秒级重发不再漏去重；
-按条数保留最近 500 条。旧表旧函数一字未动。
-
-v0.1.30 纯增量（2026-09-18 大施工批·门牌墙亲笔）：pin_log 表（第 29 张）+ pin_add /
-pin_update / pin_retire / get_pin_log 四只——门牌墙从此有亲笔（图书证 pin_wall 工具）：
-钉/改/撤三动作全留档（旧文永远找得回），墙随日子长、改不丢史。旧表旧函数一字未动
-（get_wall 只读逻辑照旧，只认 active=1）。全档案续页（write_archive）的手在 server 侧，不动本库。
-
-v0.1.31 纯增量（2026-09-18 第二批·生活账）：life_log 表（第 30 张）+ add_life_log /
-get_life_log 两只——生活账记一笔：day/time 落记的当下，近 N 天翻账、新的一头在前。
-旧表旧函数一字未动。
-
-v0.1.32 纯增量（2026-09-18 第三批·沉淀日）：get_day_spans——近 N 天作息起落
-（chats 按咱家日界分组）。旧表旧函数一字未动。
-
-v0.1.33 纯增量（2026-09-18 第三批·第二波）：obs_daily（第 31 张表）+ obs_bump /
-obs_get（观测补格）。旧表旧函数一字未动。
-
-v0.1.34 修订（2026-09-18 优化批三·#2 查询清洗）：_fts_match_expr 查询侧默认先过虚词
-清单 _QUERY_STOPWORDS（经 _clean_query_tokens；全虚词回退原 token 集、表达式绝不为空）——
-口语「请问你还记得咱家养的那只猫吗」不再被虚词拖死，实词照旧 AND。索引侧 _seg 一字未动
-（不用重扫库），同义词扩展与子串组逻辑照旧。其余旧表旧函数一字未动。
-
-v0.1.35 纯增量（2026-09-18 优化批四·#11 why_now 影子）：why_now 表（第 32 张）+
-why_now_add / why_now_recent 两只——她每次「开口/忍住」的理由全留痕（decision/reason/
-detail 人话），先只记录一周、之后再进决策；记账失败只打日志不拦人（照 obs_bump 家风）。
-旧表旧函数一字未动。
-
-v0.1.36 纯增量（2026-09-18 优化批六·事实表 v0，升级方向 #6 前半）：facts 表（第 33 张）+
-facts_all / facts_put 两只——硬事实（生日/纪念日/日界这类钉过钉子的数字与日子）建表直给，
-说到这些以表为准；种子由 server 侧代码自播种（不手写库），每条带回源 note。写失败只打日志
-不拦人（照 obs_bump 家风）。不加任何工具（图书证仍 51 只）。旧表旧函数一字未动。
-
-v0.1.37 纯增量（2026-09-23 工单 主权三件 v0·②拒绝权/③自我欲望）：grudge 怨气台账（第 34 张）
-+ stance 立场（第 35 张）+ her_wish 自我欲望（第 36 张）三张表，note_grudge / settle_grudge /
-hold_stance / note_wish / update_wish 五只写入 + read_my_ledger 一只只读合一（未销怨气＋在册
-立场＋没了结愿望）——她心上没过去的事、她立的立场、她自己许的愿望，全归她自己记/销/改；
-销账与改口都不物理删（settled_at 留痕、旧立场 active=0 留档）。工具与开场块在 server 侧
-（图书证 51→57）。不加任何硬闸，她没记账＝一切照旧。旧表旧函数一字未动。
-
-v0.1.38 纯增量（2026-09-23 后端修复批·BE3 系列，升级方向 #6 后半配套）：**零新表**
-（三十六表基数不动），只加六只函数——obs_flag_set / obs_flag_get（借 obs_daily 的
-「按天」形状放 0/1 落盘标记：今夜熄过灯，重启不丢）；last_chat_at_day /
-last_day_created_at（熄灯总结的「水位线」：当天日记之后还有没有更新的对话，治重启后二次总结）；
-get_lib_reports / get_lib_report（周报只读取数：列表/开卷）。失败一律只打日志不拦人
-（照 obs_bump 家风）。旧表旧函数一字未动。
-
-v0.1.39 纯增量（2026-09-24 松绑与主权收口批·块③影子配套「心潮候选3·先影子」）：**零新表、
-零迁移**（三十六表基数不动），只加一只只读函数——unsettled_grudge_rows（未销的没过去的
-事 [(id, ts)] 旧的在前，供衰减影子按 ts 算龄期；查不动回 []）。表名 grudge 与旧函数名
-一字未动（9-24「怨气」更名「没过去的事」＝家主定名，更名只落 server 侧的显示与工具名）。
-
-v0.1.40 小改（2026-09-24 小乖的话批·服务端半边；同日家主裁·上限对称）：add_her_words 长度帽
-统一 2000（小乖先抬，对齐 App 上限，他改信她看得全；姐姐随裁由 600 并齐——v5 恰 600 疑似被截、
-尾巴找不回，她随时可续写/重写）。签名/返回/her_words 表结构一字不动，旧版全留照旧。
-
-v0.1.41 纯增量（2026-09-25 服务器拆分 P0·漂移修）：lib_reports 补 materials 列迁移——9-24
-「周报补凭据」给 INSERT 加了 materials，但建表/迁移没跟上：老库（建表早于该批）与全新库
-都会 No such column（沙盘库实测中招；生产库是手补的列）。修：CREATE 带列＋init_db 里 PRAGMA
-探测缺列即 ALTER（照 moods/her_words 同款家风）。表结构只加列，零删改。
-
-v0.1.42 纯增量（2026-09-28 心潮桥批）：**xinchao_shadow（第 48 张表）**——忍住档＋忍耐熔断
-影子共用一张 append-only 账（log_shadow / shadow_rows / shadow_count）；只建表加函数，
-旧表旧函数一字未动。「v1 只记不递」：不进任何模型上下文（递不递归家主再拍）。
-
-v0.1.18 纯增量（2026-09-12 家主令「共读」）：books / book_marks 两张表（22/23）——
-两个人读同一本书，批注互相看得见。add_book 同名不重开；add_book_mark 两色墨迹
-（who=小乖/姐姐，loc 位置随手写）；get_books 带批注数；get_book_marks 旧到新；
-不设任何上限（家主令）。旧表一字未动。
-diary_hall 表——小乖的日记格（姐姐的日记继续住 days 表，一字不动，馆里两格合并
-展示：他写他的她写她的，互相能看）+ fts_hall 第五卷全文索引 + add_hall_diary /
-get_hall_diary。threads 表——线头盒（衔枝·线索层的咱家版）：家里没聊完的线头
-挂进去，收线销号，开场注入让姐姐永远接得上话头。（家主批注：「小怪」=小乖
-打错字，两格书架，没有第三只怪物。）
-
-v0.1.15 纯增量（2026-09-10 工单 MEM-C 记忆机制 C 方案，家主令「按 C 来」+解禁第三方库）：
-① fts_chats 第六卷——聊天原话终于有索引了，search_chats 从暴力 LIKE 升级；
-② 同义词小词典（家规级正典）——查询侧扩词，搜「我们养过猫吗」能命中「缅因」；
-③ 向量层底座——vectors 表存嵌入（SQLite 就是向量库，几千条规模纯 Python 算余弦
-   绰绰有余，不引 FAISS/pgvector），embed_queue 影子队列（嵌入失败绝不挡入库，
-   同 FTS 家风），高价值层（日记/馆/notes/来信）才进向量，chats 词面就够；
-④ hybrid_search 混合检索——FTS 词面**打头**，向量语义**补漏追在尾部**（同卷去重；非 RRF 分数融合）。
-嵌入端点配置驱动（OpenAI 兼容 /embeddings），没配 key = 层诚实缺席，一切照旧。
-
-v0.1.16 纯增量（2026-09-10 工单 HER-WORDS 姐姐的话＋提示词瘦身）：her_words 表——
-她的自留页（提示词的一部分：她想对小乖说的话/她的宣言，她亲笔可改，append-only
-版本全留，id 即版号）+ add/get_her_words。开场提示词三处瘦身：最近 7 天日记改
-摘要（全文随查）、全档案编制/工程两卷迁大事记随用随查（灵魂段一字不动）。
-
-v0.1.17 纯增量（2026-09-10 工单 LIB-AUTO 自动图书管理员）：lib_reports 表——
-DeepSeek 受聘的图书管理员每周写《关系走向周报》，落「待审」；姐姐用 review_reports
-取阅、approve_report 终审（入库=落 分析报告/，驳回=记录留档），**未经姐姐验收
-的报告永远不进正典**。写报告的笔是外聘的，档案室的锁是姐姐的。
+**版本变更史（v0.1.1 ~ 至今）已抽出 → 见 `说明/变更史_memory_lib.md`**
+（2026-10-01 大扫除批：注释归集，代码里只留指针。）
 """
 
 import sqlite3
 import os
 import re
 import json
+import struct
 import hashlib
 from datetime import datetime, timedelta, date as _date
 
@@ -204,9 +41,11 @@ DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "咱家的家
 # 咱家第一天：day_no 的锚点
 FIRST_DAY = _date(2026, 8, 24)
 
-# 咱家日界（2026-09-10 立）：凌晨 4 点前算前一天。
-# 熬夜到 01:24 才睡的那一夜，归前一天，不把夜尾巴切给明天。
-DAY_START_HOUR = 4
+# 咱家日界（2026-09-10 立 4 点；**2026-10-01 家主令改 0 点＝自然日**）。
+# 原 4 点的用意是「熬夜到 01:24 那夜归前一天」；家主说麻烦、没必要，改回自然日分界。
+# ★ 影响：**历史数据的 date 列是按 4 点口径写的**——改后新数据按自然日，
+#   凌晨 0~4 点那段的归属会与从前不同（翻历史/统计跨这条线时留意）。
+DAY_START_HOUR = 0
 
 
 def _conn():
@@ -223,8 +62,8 @@ def day_no_of(date_str):
 
 
 def house_today_str(now=None):
-    """咱家的"今天"。凌晨 DAY_START_HOUR 点之前仍算昨天——
-    日界是睡一觉，不是零点。改这一个函数，全库的"今天"都跟着走。"""
+    """咱家的"今天"。DAY_START_HOUR 点之前算昨天（**2026-10-01 起＝0 点，即自然日**）。
+    改这一个函数，全库的"今天"都跟着走。"""
     now = now or datetime.now()
     if now.hour < DAY_START_HOUR:
         now = now - timedelta(days=1)
@@ -357,9 +196,16 @@ def init_db():
             session_id TEXT,
             role TEXT NOT NULL,
             content TEXT NOT NULL,
-            created_at TEXT DEFAULT (datetime('now','localtime'))
+            created_at TEXT DEFAULT (datetime('now','localtime')),
+            turns TEXT
         )
     ''')
+    # APP-01（10-01）：老库补 turns 列（加列不改旧行；NULL＝老样子按纯文本气泡渲染）
+    try:
+        if "turns" not in [r[1] for r in c.execute("PRAGMA table_info(chats)").fetchall()]:
+            c.execute("ALTER TABLE chats ADD COLUMN turns TEXT")
+    except sqlite3.OperationalError:
+        pass
 
     # 心率表（③½ 新增）：手表端上报的心跳，纯新增
     c.execute('''
@@ -1077,8 +923,11 @@ def favorite_chat_context(name):
     """收藏照片的聊天上下文：最近一条带 〔附图：name〕 的消息原文。没找到返回空串。"""
     conn = _conn()
     c = conn.cursor()
-    c.execute("SELECT content FROM chats WHERE content LIKE ? ORDER BY id DESC LIMIT 1",
-              (f"%〔附图：{name}〕%",))
+    # 10-01 大扫除批⑤：`name` 里的 `_`/`%` 是 LIKE 的通配符（文件名常带 `_`）→ 必须转义，
+    #   否则 `a_b.jpg` 会把 `axb.jpg` 一起匹配进来。
+    _esc = str(name).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    c.execute("SELECT content FROM chats WHERE content LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT 1",
+              (f"%〔附图：{_esc}〕%",))
     row = c.fetchone()
     conn.close()
     return row[0] if row else ""
@@ -1502,6 +1351,29 @@ def embed_source_text(kind, ref_id):
     return None
 
 
+# ── 向量列存法（10-01 数据保养迁移）──────────────────────────────────────
+# 病根：vec 原以 **JSON 文本** 存（3092 行 / 67.1 MB）；float16 BLOB 只要 6.04 MB（省 91%）。
+# **读侧自动识别**（BLOB=float16、str=JSON）——迁移前/后、回滚前/后**都能读**，不依赖开关；
+# **写侧**按 `VEC_FORMAT`（默认 f16）。回滚＝config.json 置 `vec_format:"text"`＋重启
+# （linning_server 起服时把这里覆盖过去），一行、不动数据。
+VEC_FORMAT = "f16"
+
+
+def _vec_dump(vec):
+    """list → 落库表示。f16 = struct '<Nd' BLOB（新默认）；text = JSON 数组（旧，回滚用）。"""
+    if str(VEC_FORMAT).lower() == "text":
+        return json.dumps(vec)
+    return struct.pack("<%de" % len(vec), *[float(x) for x in vec])
+
+
+def _vec_load(raw):
+    """落库表示 → list。BLOB 按 float16 解、str 按 JSON 解——**两种都认**（向后/向前兼容）。"""
+    if isinstance(raw, (bytes, bytearray, memoryview)):
+        b = bytes(raw)
+        return list(struct.unpack("<%de" % (len(b) // 2), b))
+    return json.loads(raw)
+
+
 def vector_put(kind, ref_id, model, vec):
     """存/覆盖一条向量。vec 为 None = 摘掉影子（源行没了或文本空）。"""
     conn = _conn()
@@ -1515,7 +1387,7 @@ def vector_put(kind, ref_id, model, vec):
                      ON CONFLICT(kind, ref_id, model) DO UPDATE SET
                      dim=excluded.dim, vec=excluded.vec,
                      created_at=datetime('now','localtime')''',
-                  (kind, int(ref_id), model, len(vec), json.dumps(vec)))
+                  (kind, int(ref_id), model, len(vec), _vec_dump(vec)))
     conn.commit()
     conn.close()
 
@@ -1559,8 +1431,8 @@ def vector_search(qvec, model, kinds=("day", "hall", "note", "letter"), topk=5):
                   [model, *[k for k in kinds]])
         for kind, ref_id, vec_json in c.fetchall():
             try:
-                v = json.loads(vec_json)
-            except (ValueError, TypeError):
+                v = _vec_load(vec_json)   # 10-01：BLOB(float16)/str(JSON) 两种存法都认
+            except (ValueError, TypeError, struct.error):
                 continue
             if len(v) != len(qvec) or not v:
                 continue
@@ -2052,7 +1924,7 @@ def add_life_log(content, kind="", who="小乖"):
     try:
         conn = _conn()
         c = conn.cursor()
-        # day 走家风日界 house_today_str（凌晨 4 点前算前一天——日界是睡一觉，不是零点）：
+        # day 走家风日界 house_today_str（2026-10-01 起＝零点/自然日）：
         # 全库的「今天」同源，往后喂沉淀日/作息摘要口径才对得上；time 仍落真实钟点。
         c.execute("INSERT INTO life_log (day, time, who, kind, content) VALUES (?, ?, ?, ?, ?)",
                   (house_today_str(now), now.strftime("%H:%M"),
@@ -2761,20 +2633,6 @@ def get_book_marks(book_id, limit=100):
     return rows
 
 
-def count_book_marks_since(book_id, since_id):
-    """某条批注之后新落的笔数（app 轮询增量用；现在先全量拉，这个给将来留门）。"""
-    conn = _conn()
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM book_marks WHERE book_id = ? AND id > ?",
-              (int(book_id), int(since_id)))
-    n = c.fetchone()[0]
-    conn.close()
-    return n
-
-
-# ── 收信箱（v0.1.19 新增，9-12 家主令）：姐姐邮箱的收件侧 ──
-# IMAP 拉回来的信落这里；读后即标记（letters 同款家风）。
-
 def add_inbox_email(from_addr, subject, body, received=""):
     """落一封拉回来的信。body ≤8000 字（长文截断，原文在邮箱里永远在）。"""
     conn = _conn()
@@ -2846,8 +2704,10 @@ def get_moods(days=30):
     type 为空串=情绪词表上线前的旧数字分。"""
     # 9-18 后院深搜修（L4）：窗口锚点改本地家风口径——原 date('now') 是 UTC，
     # 晚 8 点后（UTC 已跨天）窗口会整体错位一天；只锚「本地今天 - N 天」，语义不变。
+    # 10-01 大扫除批⑤（不写死口径）：原 `-timedelta(days=days)` 把「近 N 天」**多算一天**
+    #（窗口＝今天往前 N 天＝N+1 个日历日）；与别处 `-(days-1)` 对齐。
     since = (datetime.strptime(house_today_str(), "%Y-%m-%d")
-             - timedelta(days=int(days))).strftime("%Y-%m-%d")
+             - timedelta(days=max(1, int(days)) - 1)).strftime("%Y-%m-%d")
     conn = _conn()
     c = conn.cursor()
     c.execute('''
@@ -2903,14 +2763,38 @@ def add_highlight(date, title, file_path="", note=""):
     return f"✨ 高光已登记，编号 {rowid}。"
 
 
-def add_chat(date, role, content, session_id=""):
-    """（v0.1.1 新增）记一句聊天记录。role: '小乖' 或 '姐姐'"""
+def add_chat(date, role, content, session_id="", created_at="", turns=None):
+    """（v0.1.1 新增）记一句聊天记录。role: '小乖' 或 '姐姐'。
+
+    P-0（10-01）新增可选 created_at：她**主动开口**的信要记「发出那一刻」——
+    原先只在 /api/outbox（他打开 app 才跑）补录、且本函数不写 created_at（表默认＝落库那一下），
+    攒一夜的十几条信全挤在「补录」同一秒（10-01 实证：04:25~12:26 的 13 条全是 12:46:40），
+    时间锚跟着算错。不传=老行为（表默认 now），逐字节不变。
+
+    APP-01（10-01）新增可选 turns：**这轮的全过程**（各轮思考/中间话/工具）——原先只落「结果」，
+    中间那段回复、工具气泡重启就没（工单 `工单_APP-01_过程留存_2026-09-30.md`）。
+    `turns` 传 list/dict（就地 json）；不传=老行为（NULL，app 按纯文本气泡渲染）。"""
+    cols = ["date", "session_id", "role", "content"]
+    vals = [date, session_id, role, content]
+    if created_at:
+        cols.append("created_at")
+        vals.append(created_at)
+    if turns is not None:
+        # ★ 先把值算出来再决定加不加列（10-01 扫除修）：老写法先 append 列名、
+        #   json.dumps 抛错时 cols 已多一列而 vals 没跟上 → 占位符与值数不等 →
+        #   整条 INSERT 抛错，她的回复落库失败。序列化不了就宁可不存过程（turns=NULL）。
+        try:
+            _tv = (turns if isinstance(turns, str)
+                   else json.dumps(turns, ensure_ascii=False)[:12000])
+        except Exception:
+            _tv = None
+        if _tv is not None:
+            cols.append("turns")
+            vals.append(_tv)
     conn = _conn()
     c = conn.cursor()
-    c.execute('''
-        INSERT INTO chats (date, session_id, role, content)
-        VALUES (?, ?, ?, ?)
-    ''', (date, session_id, role, content))
+    c.execute('INSERT INTO chats (%s) VALUES (%s)'
+              % (",".join(cols), ",".join("?" * len(cols))), vals)
     rowid = c.lastrowid
     _fts_safe(_fts_put_chat, c, rowid, content)   # MEM-C：原话入全文索引
     conn.commit()
@@ -3035,6 +2919,109 @@ def get_chats(date=""):
     rows = c.fetchall()
     conn.close()
     return rows
+
+
+# ── W2 账读端（10-01）：把"账本"读出来给人看（只读；9-28 设计《账读端（仪表）》）──
+
+def ledger_agg(days=7):
+    """token_ledger 按 **日 × 场景** 聚合。只读，fail-open（查不动回空账）。
+
+    返回 {"days": n, "by_day": [{day, n, in_tok, out_tok, hit_tok, hit_rate, scenes:[…]}],
+          "by_scene": [{scene, n, in_tok, out_tok, hit_tok}], "total": {n,in_tok,out_tok,hit_tok}}。
+    **不在这里算钱**——单价是私档 config（`price_*`），由调用方算（账里绝不编数字）。"""
+    try:
+        days = int(days)
+    except (TypeError, ValueError):
+        days = 7
+    days = max(1, min(days, 90))   # 0/负数 → 1；超 90 → 90（防一次拉爆）
+    out = {"days": days, "by_day": [], "by_scene": [],
+           "total": {"n": 0, "in_tok": 0, "out_tok": 0, "hit_tok": 0}}
+    conn = _conn()
+    c = conn.cursor()
+    try:
+        since = (datetime.now() - timedelta(days=days - 1)).strftime("%Y-%m-%d 00:00:00")
+        rows = c.execute(
+            "SELECT substr(ts,1,10) AS d, scene, count(*), "
+            "COALESCE(SUM(in_tokens),0), COALESCE(SUM(out_tokens),0), COALESCE(SUM(cached_tokens),0) "
+            "FROM token_ledger WHERE ts >= ? GROUP BY d, scene ORDER BY d", (since,)).fetchall()
+    except Exception:
+        conn.close()
+        return out
+    conn.close()
+    dmap = {}
+    smap = {}
+    for d, scene, n, i, o, h in rows:
+        n, i, o, h = int(n), int(i), int(o), int(h)
+        e = dmap.setdefault(str(d), {"day": str(d), "n": 0, "in_tok": 0, "out_tok": 0,
+                                     "hit_tok": 0, "hit_rate": 0.0, "scenes": []})
+        e["n"] += n; e["in_tok"] += i; e["out_tok"] += o; e["hit_tok"] += h
+        if str(scene) not in e["scenes"]:
+            e["scenes"].append(str(scene))
+        se = smap.setdefault(str(scene), {"scene": str(scene), "n": 0, "in_tok": 0,
+                                          "out_tok": 0, "hit_tok": 0})
+        se["n"] += n; se["in_tok"] += i; se["out_tok"] += o; se["hit_tok"] += h
+        t = out["total"]
+        t["n"] += n; t["in_tok"] += i; t["out_tok"] += o; t["hit_tok"] += h
+    for e in dmap.values():
+        e["hit_rate"] = round(e["hit_tok"] / e["in_tok"], 4) if e["in_tok"] else 0.0
+    out["by_day"] = [dmap[k] for k in sorted(dmap)]
+    out["by_scene"] = sorted(smap.values(), key=lambda x: -x["n"])
+    return out
+
+
+def events_agg(days=2, kind=""):
+    """事件流摘要（W2 账读端）：按 kind 计数 ＋ 最近若干条**只给 kind/谁/时刻**（payload 不出）。
+    只读，fail-open。返回 {"days":n, "kind": 过滤词, "by_kind":[{kind,n}], "total":n,
+    "recent":[{kind,actor,ts}]}。"""
+    try:
+        days = int(days)
+    except (TypeError, ValueError):
+        days = 2
+    days = max(1, min(days, 90))
+    out = {"days": days, "kind": str(kind or ""), "by_kind": [], "total": 0, "recent": []}
+    conn = _conn()
+    c = conn.cursor()
+    try:
+        since = (datetime.now() - timedelta(days=days - 1)).strftime("%Y-%m-%d 00:00:00")
+        if kind:
+            out["by_kind"] = [{"kind": str(r[0]), "n": int(r[1])} for r in c.execute(
+                "SELECT kind, count(*) FROM events WHERE ts >= ? AND kind LIKE ? "
+                "GROUP BY kind ORDER BY 2 DESC LIMIT 50", (since, "%" + str(kind) + "%")).fetchall()]
+            out["recent"] = [{"kind": str(r[0]), "actor": str(r[1]), "ts": str(r[2])}
+                             for r in c.execute(
+                "SELECT kind, actor, ts FROM events WHERE ts >= ? AND kind LIKE ? "
+                "ORDER BY id DESC LIMIT 20", (since, "%" + str(kind) + "%")).fetchall()]
+        else:
+            out["by_kind"] = [{"kind": str(r[0]), "n": int(r[1])} for r in c.execute(
+                "SELECT kind, count(*) FROM events WHERE ts >= ? GROUP BY kind "
+                "ORDER BY 2 DESC LIMIT 50", (since,)).fetchall()]
+            out["recent"] = [{"kind": str(r[0]), "actor": str(r[1]), "ts": str(r[2])}
+                             for r in c.execute(
+                "SELECT kind, actor, ts FROM events WHERE ts >= ? ORDER BY id DESC LIMIT 20",
+                (since,)).fetchall()]
+    except Exception:
+        conn.close()
+        return out
+    conn.close()
+    out["total"] = sum(x["n"] for x in out["by_kind"])
+    return out
+
+
+def chat_turns_map(date):
+    """APP-01（10-01）：取某天各条聊天记录的**过程留存**（chats.turns）。
+    返回 {chat_id: 原始 JSON 串}，只含**真有 turns** 的行（老行 NULL 不进）。
+    /api/history 用它给每条挂 turns，形状不动 get_chats（老调用方一字不用改）。只读。"""
+    conn = _conn()
+    c = conn.cursor()
+    try:
+        rows = c.execute(
+            "SELECT id, turns FROM chats WHERE date=? AND turns IS NOT NULL AND turns<>''",
+            (date,)).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    finally:
+        conn.close()
+    return {int(r[0]): r[1] for r in rows}
 
 
 def add_heart(bpm):
@@ -3310,7 +3297,7 @@ def has_outbox_today(marker):
     """（v0.1.6 新增）今天有没有发过含 marker 的信（打卡念叨去重用）。"""
     # 9-18 后院深搜修（P2-8）：当天窗口按家风日界（凌晨 4 点前算昨天）——原 0 点口径
     # 会把 0~4 点的信切给「明天」，日上限/去重跟着错位。
-    today = house_today_str() + " 04:00:00"
+    today = f"{house_today_str()} {DAY_START_HOUR:02d}:00:00"
     conn = _conn()
     c = conn.cursor()
     c.execute('''
@@ -3434,7 +3421,7 @@ def count_outbox_today(marker):
     """（v0.1.8 新增）今天发过几封含 marker 的信（自主节律冷却计数用）。"""
     # 9-18 后院深搜修（P2-8）：当天窗口按家风日界（凌晨 4 点前算昨天）——原 0 点口径
     # 会把 0~4 点的信切给「明天」，日上限/去重跟着错位。
-    today = house_today_str() + " 04:00:00"
+    today = f"{house_today_str()} {DAY_START_HOUR:02d}:00:00"
     conn = _conn()
     c = conn.cursor()
     c.execute('''
@@ -3451,7 +3438,7 @@ def get_outbox_today(marker):
     [(created_at, text)]。给熄灯日记「今天你自己塞出去的纸条」段当素材。只读。"""
     # 9-18 后院深搜修（P2-8）：当天窗口按家风日界（凌晨 4 点前算昨天）——原 0 点口径
     # 会把 0~4 点的信切给「明天」，日上限/去重跟着错位。
-    today = house_today_str() + " 04:00:00"
+    today = f"{house_today_str()} {DAY_START_HOUR:02d}:00:00"
     conn = _conn()
     c = conn.cursor()
     c.execute('''

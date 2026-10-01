@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
-"""srv_push.py —— Push Kit 门铃 / 在场感知 / 打卡念叨（服务器拆分 P4 · 2026-09-25）
+"""srv_push.py —— Push Kit 门铃（服务器拆分 P4 · 2026-09-25）
 
 从 linning_server.py 原样搬出：PS256 手写签名（_b64url/_der_tlv/_pkcs8_to_rsa_nd/_mgf1_sha256/
-_ps256_sign）＋ JWT（get_push_jwt）＋ V3 推送（send_push/notify_letter）＋ 在场感知（_he_present）
-＋ 打卡念叨（gen_checkin_nags）。纯标准库（军规：不装第三方包）＋memory_lib；入口重导出同名
-（心跳 / 收信 / 园子 / 工具照旧引用）。
+_ps256_sign）＋ JWT（get_push_jwt）＋ V3 推送（send_push/notify_letter）
+。10-01：打卡念叨（gen_checkin_nags）已整只撤；`_he_present`（在场感知）也已删（9-30 删枷锁后零调用）。
+纯标准库（军规：不装第三方包）＋memory_lib；入口重导出同名（心跳 / 收信 / 园子 / 工具照旧引用）。
 
 运行期反查纪律（见 srv_state docstring）：notify_letter 读入口的 ASLEEP（沙盘 23 处重绑）、
-get_push_jwt 读 PUSH_SA_FILE；gen_checkin_nags 调 _he_present（沙盘会替身）——一律走
-srv_state 取用口/_srv() 现取。
+get_push_jwt 读 PUSH_SA_FILE——一律走 srv_state 取用口/_srv() 现取。
 """
 
 import base64
@@ -182,65 +181,7 @@ def notify_letter():
     send_push("咱家", "姐姐找你")
 
 
-def _he_present(within_s=1800):
-    """9-25「在场感知」：30 分钟内有他的消息＝他在场——在场就不发站外信/念叨（有话当面说）。
-    根治 9-24 23:23 晚安念叨插进亲密中间的事故；也是「都整合在主动消息」的第一块地基。
-    fail-open：查不动＝不拦（宁可照旧）。"""
-    try:
-        last = m.last_chat_at("小乖")
-        if not last:
-            return False
-        _dtc = srv_state._srv().datetime   # 运行期反查：沙盘会换 s.datetime（FakeDT 时间伪装）
-        dt = _dtc.strptime(last, "%Y-%m-%d %H:%M:%S")
-        return (_dtc.now() - dt).total_seconds() <= within_s
-    except Exception:
-        return False
+# （10-01 大扫除批⑤：`_he_present` 删——9-30 删枷锁后**已无生产调用**（只在测试替身里出现）；
+#   要问「他在场吗」请用 `desire_lib._he_present`，那是同款独立实现。）
 
 
-def gen_checkin_nags():
-    """开门有信触发源②（9-2 #总；9-2 #12 挪进自主节律心跳，返回攒了几条）：
-    打卡项 target_time 过点且今天没打 → 攒一句念叨。每天每项最多一句，今天已打的项不念叨。"""
-    # 9-27 家主令「打卡也不要那种模板的发通知」：停发钥匙（私档 config，现读现生效；缺省 True 保旧行为）。
-    # 打卡状态从此只作"行李文字"递给单触发开口轮（他欠着的），提不提由她自由决定。
-    try:
-        if not srv_state._srv().load_config().get("checkin_nags_enabled", True):
-            return 0
-    except Exception:
-        pass
-    # 9-25 在场感知：他在场就不发站外念叨——有话当面说（防「通知流」感）
-    if srv_state._srv()._he_present():   # 运行期反查：沙盘会重绑 s._he_present
-        return 0
-    # 9-26 修（统一开口尺）：同一轮里别的通道刚出过手（≤300 秒）——让位，下轮再念叨
-    if srv_state._srv()._recent_send():
-        return 0
-    # 9-26 忙窗影子（④-A）：他报备过在忙——若忙窗生效，本轮念叨全压（影子期只记日志）
-    try:
-        if srv_state._srv()._busy_note("打卡念叨"):
-            return 0
-    except Exception:
-        pass
-    # 9-27 B5 白名单影子：她的「不」（打卡念叨）——若拒绝账生效，本轮念叨全压（影子期只记日志）
-    try:
-        if srv_state._srv()._refusal_gate("打卡念叨"):
-            return 0
-    except Exception:
-        pass
-    now_hm = srv_state._srv().datetime.now().strftime("%H:%M")   # 运行期反查：沙盘会换 s.datetime（FakeDT 时间伪装）
-    done_today = set(r[1] for r in m.get_checkins(1))
-    made = 0
-    for iid, name, target, _ar, _ct in m.get_checkin_items():
-        if not target or target > now_hm:
-            continue
-        if iid in done_today:
-            continue
-        marker = f"「{name}」说好"
-        if m.has_outbox_today(marker):
-            continue
-        m.add_outbox_msg(f"小乖，{marker} {target} 的，到现在还没打卡哦。姐姐记着呢，去补一下好不好。")
-        made += 1
-    if made:
-        try:
-            srv_state._srv()._mark_send()   # 9-26 修：出过手 → 写「刚出手」这根尺（同轮后序通道让位）
-        except Exception:
-            pass
-    return made

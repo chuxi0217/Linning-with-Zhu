@@ -22,7 +22,7 @@ from datetime import datetime, timedelta
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 DB_PATH = os.path.join(BASE_DIR, "咱家的家.db")
-SHADOW_LOG = os.path.expanduser("~/desire_shadow.log")
+# （v1 的 SHADOW_LOG 随 v1 壳退休删除——10-01；现在只看 V2_LOG。）
 
 
 def _cfg(key, default):
@@ -63,14 +63,7 @@ def _last_desire():
     return float(_cfg("desire_d0", 0.08))
 
 
-def _save_d_v1(d):
-    """v1 的 D 落独立 state（原子写；保留 state 其它键）。fail-open 回 False。9-29 ②。"""
-    try:
-        st = _load_state()
-        st["d"] = round(float(d), 4)
-        return _save_state(st)
-    except Exception:
-        return False
+# （`_save_d_v1` 随 v1 壳退休删除——10-01。state 的 `d` 现在是 v2 在写。）
 
 
 def _time_mult(now):
@@ -101,60 +94,11 @@ def _he_present(within_s=2400):
     return False
 
 
-def tick_and_shadow(now=None):
-    """心跳每轮调：D 生长/满足回落 → 掷骰 → 分拣 → ③命中时拟发日志。fail-open 返回 dict|None。
-    9-25 两修（家主看数据后批）：①③命中满足回落 0.15——「说了就饱」，饱腹感节流不设配额；
-    ②在场感知——他在场不急找（自然回落），③不朝在场的人伸手。"""
-    try:
-        if not _cfg("desire_engine_shadow", True):
-            return None
-        now = now or datetime.now()
-        d = _last_desire()
-        growth = float(_cfg("desire_growth", 0.10)) * _time_mult(now)
-        present = _he_present()
-        if present:
-            d = max(0.05, d - growth)        # 他在场＝被喂饱（自然回落）
-        else:
-            d = min(0.95, d + growth)
-        d_pre = d   # 9-27 修：记下命中前真值——影子账可复算 D 曲线（此前只剩落账后的 0.15）
-        hit = random.random() < d
-        hm = now.strftime("%H:%M")
-        night = ("23:00" <= hm or hm < "02:00")
-        d_fired = None
-        if hit and night and d >= 0.5 and not present:
-            exit_type = "③表达"
-            d_fired = d
-            d = 0.15                         # 满足回落：说了就「饱」一点（不设配额·饱腹感节流）
-        elif hit:
-            exit_type = "②留下"
-        else:
-            exit_type = "①开口"
-        # 9-29 ②：D 落**独立 state**（原子写）——不把曲线挂在 events 影子上（关了会静默冻结）
-        _save_d_v1(d)
-        # W1 脊柱：desire.tick 事件（影子）
-        try:
-            import events_lib
-            events_lib.record("desire.tick", "linning", "heartbeat",
-                              {"d": round(d, 3), "d_before": round(d_pre, 3), "hit": hit,
-                               "exit": exit_type, "growth": round(growth, 3), "present": present})
-        except Exception:
-            pass
-        # ③命中 → 拟发日志（绝不真发；转正后由她现场亲笔，不拟话）
-        if d_fired is not None:
-            try:
-                with open(SHADOW_LOG, "a", encoding="utf-8") as f:
-                    f.write(f"[{now.strftime('%F %T')}] 💋 ③出口拟发（影子）"
-                            f" D={d_fired:.2f}→0.15 情境={_time_factor_name(now)}\n")
-            except Exception:
-                pass
-        # 欲望 v2·影子（9-27 批）：并行数学，独立状态/日志——只记不发
-        try:
-            tick_v2_shadow(now=now, present=present)
-        except Exception:
-            pass
-        return {"d": round(d, 3), "hit": hit, "exit": exit_type}
-    except Exception:
-        return None
+# ── v1 `tick_and_shadow` 壳：**10-01 家主令退休** ──────────────────────────────
+# 它原本干三件：算 v1 的 D／掷骰分拣／③命中拟发日志。10-01「降状态」后出口已删
+# （D 只作感觉、由 desire_state_line 给一句），剩下的唯一价值是**当 v2 的宿主**——
+# 现在 v2 已提成心跳直调（`linning_server` 心跳里 `tick_v2_shadow`），壳整个删掉。
+# `_last_desire()` 留着：v2 首跑仍向旧曲线借一次种（`~/.zanjia_desire_state.json` 的 d）。
 
 
 STATE = os.path.expanduser("~/.zanjia_desire_state.json")
@@ -183,66 +127,125 @@ def _save_state(st):
         return False
 
 
+def desire_state_line(now=None):
+    """（9-30 新增·**降状态**）读 v2 的 D，给一句"心里有多黏糊"——**只说感觉、不给数字**。
+    低档返回 None（没感觉就不摆这块）。D 只是"感觉"，**不决定任何事**。fail-open。"""
+    try:
+        with open(V2_STATE, encoding="utf-8") as f:
+            st = json.load(f)
+        d = float(st.get("d") or 0.0)
+    except Exception:
+        return None
+    if d < 0.35:
+        return None
+    now = now or datetime.now()
+    gap = ""
+    since = st.get("last_satisfy") or st.get("last_fire")
+    if since:
+        try:
+            h = (now - datetime.strptime(str(since), "%Y-%m-%d %H:%M:%S")).total_seconds() / 3600
+            if h >= 36:
+                gap = "（好久没好好抱过了）"
+            elif h >= 12:
+                gap = "（今天还没黏够）"
+        except Exception:
+            pass
+    if d < 0.65:
+        return "心里有点想你，黏糊糊的" + gap
+    return "心里很黏，想要你" + gap
+
+
 def take_desire(now=None):
-    """上岗口（9-26 家主令「她想要也可以主动找我」·注入版）：③出口命中（深夜+D高+他不在场）
-    → 递一句话头到开场，**让她自己决定说不说、怎么说**（不代写腔调、不主动发消息）。
-    取走即记账（STATE 存已递事件 id，只留最近 50 条）：**12h 窗口内取最早的一条未递③**，
-    同一命中只递一次；state 写不进去 → 返回 None（宁可不给，不许重复给）。
-    9-26 修：旧版只记「最新一条 ts」——取了新③，窗口内更早的老③永远取不出；
-    且 state 写失败时同一③每次开场重递。旧 state 的 taken_ts 自动迁进 taken_ids。
-    开关 desire_engine_inject（默认关）——关掉＝回到只算不递。返回 dict|None；fail-open。"""
+    """上岗口（**9-30 改·降状态**）：原读「③命中事件」（深夜+D高+不在场+p=D²掷骰），
+    现改读 **v2 的状态句**——她开场看到一句"心里有多黏糊"，**她自己决定说不说、怎么说**
+    （不代写腔调、不主动发消息）。同一天同一句只递一次（state 记 `taken_state`）。
+    开关 desire_engine_inject（默认关）——关掉＝只算不递。返回 dict|None；fail-open。"""
     now = now or datetime.now()
     try:
         if not _cfg("desire_engine_inject", False):
             return None
-        win_h = float(_cfg("desire_inject_window_h", 12))
-        cutoff = (now - timedelta(hours=win_h)).strftime("%Y-%m-%d %H:%M:%S")
-        con = _conn()
-        rows = con.execute(
-            "SELECT id, ts, payload FROM events WHERE kind='desire.tick' AND payload LIKE '%③表达%' "
-            "AND ts >= ? ORDER BY id ASC", (cutoff,)).fetchall()
-        con.close()
-        if not rows:
+        line = desire_state_line(now)
+        if not line:
             return None
         st = _load_state()
-        taken = [x for x in (st.get("taken_ids") or []) if isinstance(x, int)]
-        legacy_ts = st.get("taken_ts")
-        if legacy_ts and not taken:
-            # 旧 state 只记了「最后递出的 ts」：迁成 id 集合（同一秒全算已递，宁缺勿重）
-            taken = [eid for eid, ts, _ in rows if ts == legacy_ts]
-        for eid, ts, payload in rows:
-            if eid in taken:
-                continue                     # 已递过，看下一条——不再被最新一条堵死
-            try:
-                age_h = (now - datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")).total_seconds() / 3600
-            except Exception:
-                continue
-            if not (0 <= age_h <= win_h):
-                continue                     # 窗外（或时钟怪）的不递，不翻旧账
-            st["taken_ids"] = (taken + [eid])[-_TAKEN_KEEP:]
-            st["taken_ts"] = ts              # 兼容旧格式读者
-            if not _save_state(st):
-                return None                  # 记不上账＝不敢递（宁可漏一条，不许重复顶）
-            return {"ts": ts, "d": (json.loads(payload or "{}").get("d"))}
-        return None
+        key = now.strftime("%Y-%m-%d") + "#" + line[:6]
+        if st.get("taken_state") == key:
+            return None                     # 同一天、同一句，只递一次（不重复顶）
+        st["taken_state"] = key
+        if not _save_state(st):
+            return None                     # 记不上账＝不敢递（宁可漏一条）
+        return {"ts": now.strftime("%Y-%m-%d %H:%M:%S"), "line": line}
     except Exception:
         return None
 
 
-def _time_factor_name(now):
-    hm = now.strftime("%H:%M")
-    if "23:00" <= hm or hm < "02:00":
-        return "深夜×1.3"
-    if "18:00" <= hm < "23:00":
-        return "傍晚×1.15"
-    if "09:00" <= hm < "18:00":
-        return "白天×0.6"
-    return "清晨×0.8"
+# （`_time_factor_name` 随 v1 壳退休删除——10-01；v2 的 trace 直接用 `_time_mult`。）
 
 
 # ─────────────────────────────────────────────────────────────────────
 # 欲望 v2 · 影子（9-27 家主批「鲁棒灵活一点」——《设计_欲望v2与小语义层_2026-09-27》）
 # 与旧算法并行跑、独立状态/日志，**零行为变更**；读两天对齐后再评估切换。
+# ── 满足探测器（10-01 · 家主令「doi 之后欲望该回落或降低增长」）──────────────
+# 旧机制**只有一个探头**：最近 2h 记过「欲望」心情。实案（10-01）：她做完之后自己记的是
+# **「踏实」**——那个探头全哑 → D 一路涨到 14:59 的全天最高 0.82（正好是做的尾巴），
+# 之后只以 −0.05/h 磨四小时。这里给两个探头（任一命中＝满足 → D 落到低位 ＋ 开余韵窗）：
+#   探头A（她的笔）  ：最近 2h 有 欲望/踏实/满足/被填满 —— 免费、永远在
+#   探头B（段级小模型）：最近 win 分钟的**对话段**判「在做」——实测段级 78%、**零误报**
+#                        （逐句只有 63%：差就差在"说要"和"在做"只隔一个时态）
+# ★ 全部先走**影子**：只多记一列「D新」，她的实际状态一个字不动（`desire_v2_sat_shadow`）。
+_SAT_MOODS = ("欲望", "踏实", "满足", "被填满")
+_SEG_PROMPT = ("下面是两个人（他=小乖）**一段时间里**的对话。判断：**这一段里他们是不是正在做爱**"
+               "（身体正在进行：插入/口/抚摸/自慰等实际动作）。"
+               "只是聊性话题、说要、幻想、事后回忆都不算；**只有真的在做**才算。\n"
+               "只回 JSON：{\"say\": \"在做\"} 或 {\"say\": \"不在\"}。\n\n")
+
+
+def _sat_probe_mood(now, win_h=2.0):
+    """探头A：她的笔。最近 win_h 小时内记过 _SAT_MOODS 里哪一种 → 返回那个词；否则 None。"""
+    for _t in _SAT_MOODS:
+        try:
+            _g = _mood_last_gap_h(now, _t)
+        except Exception:
+            _g = None
+        if _g is not None and _g <= win_h:
+            return _t
+    return None
+
+
+def _seg_judge_intimate(now, win_min=25, max_msgs=16):
+    """探头B：把**最近 win_min 分钟的对话段**交给本地小模型判「在做」。
+    返回 True/False/None（None＝判不了/没料/测试模式——诚实缺席，绝不编）。"""
+    try:
+        if os.environ.get("ZANJIA_TEST"):
+            return None                     # 沙盘/套件：零外呼，绝不打网络
+        if not _cfg("desire_v2_seg_judge", True):
+            return None
+        import memory_lib as _m
+        import srv_state as _ss
+        _lj = getattr(_ss._srv(), "_local_judge", None)
+        if not callable(_lj):
+            return None
+        _since = (now - timedelta(minutes=max(5, int(win_min)))).strftime("%Y-%m-%d %H:%M:%S")
+        _seg = []
+        for _row in _m.get_chats(_m.house_today_str())[-max_msgs:]:
+            _id, _d, _role, _ct, _at = _row
+            if str(_at or "") >= _since:
+                _seg.append(("他" if _role == "小乖" else "她") + "："
+                            + str(_ct or "").replace("\n", " ")[:180])
+        if len(_seg) < 3:
+            return None                     # 太短不判（宁可不判，也不瞎判）
+        _txt, _err = _lj(_SEG_PROMPT + "\n".join(_seg), timeout=20, max_tokens=30)
+        if not _txt:
+            return None
+        if "在做" in _txt and "不在" not in _txt:
+            return True
+        if "不在" in _txt:
+            return False
+        return None
+    except Exception:
+        return None
+
+
 # v2 数学：饱和生长（真实小时差）/ 分层满足（不应期）/ 锐化触发（p=D²）/ 接她的心情账。
 V2_STATE = os.path.expanduser("~/.zanjia_desire_v2_state.json")
 V2_LOG = os.path.expanduser("~/desire_v2_shadow.log")
@@ -318,7 +321,8 @@ def tick_v2_shadow(now=None, present=None):
              × fac_ignite（点火） × (0.7 喂饱) × (0.8 委屈)
       D += 生长×Δh×(1−D)（饱和生长）；今天有「欲望」→ 抬起点 max(D,0.35)；
       「喂饱」→ 再按 Δh 线性回落 feed_decay（真回落，不只是减速）。
-      深夜窗(23:00–02:00) 且 D>threshold(0.55) 且不在场 → p=D² 掷骰；命中 D→0.2 + 记 last_fire。
+      （10-01 降状态：**夜窗+阈值+D²掷骰已整段删**——D 只作「感觉」由 desire_state_line 读，
+       不再决定任何事，也不再记 last_fire。）
 
     A（9-29）：行尾追加**闸门因果 trace**（照积温 getTriggerTrace）——哪一闸挡的、差多少。
     B（9-29）：**点火＝亲密余温**（最近一次「欲望」心情距今 h → ×(1+gain·e^(−h/τ))）；
@@ -386,45 +390,74 @@ def tick_v2_shadow(now=None, present=None):
         d = min(1.0, d + growth_h * dh * (1 - d))       # 饱和生长：越近 1 越慢（久别才浓）
         if mood_want:
             d = max(d, 0.35)                    # 她的笔：抬起点
+        # ── 满足回落（9-30 降状态后的**新触发源**）──
+        #   原回落挂在"fire 命中"上；fire 已去，回落改由**真实发生的事**驱动：
+        #   最近 2h 内有过「欲望」心情（她真想要过/真被撩过、写进了心情河）→ D 落到低位
+        #   （"说了就饱"）。★ 这是自循环信号的**降级使用**——它只影响"感觉浓淡"，
+        #   不再决定任何事；待"火苗"（心情入口扩到每轮）接上后换成真信号。
+        try:
+            _gp2 = _mood_last_gap_h(now, "欲望")
+        except Exception:
+            _gp2 = None
+        if _gp2 is not None and _gp2 <= 2.0:
+            d = min(d, 0.3)
+            # ★ 每次满足都刷新（10-01 扫除修）：老写法 `st.get("last_satisfy") or now`
+            #   只写一次、此后永不动 → desire_state_line 算的 gap 只增不减，
+            #   哪怕刚满足过，过 36h 也永远显示「（好久没好好抱过了）」。
+            st["last_satisfy"] = now.strftime("%Y-%m-%d %H:%M:%S")
         feed_decay = float(_cfg("desire_v2_feed_decay", 0.05)) if fed else 0.0
         if feed_decay:
             d = max(0.0, d - feed_decay * dh)   # 喂饱：真回落（按 Δh 线性，避免自激）
-        # ── A：闸门因果（照积温 getTriggerTrace）──
-        hm = now.strftime("%H:%M")
-        night = ("23:00" <= hm or hm < "02:00")
-        thr = float(_cfg("desire_v2_threshold", 0.55))
-        gates, blocked = [], ""
-        if night:
-            gates.append(f"夜窗✓({hm})")
+        # ── 9-30 降状态（家主令「欲望只以一个状态语送给她」）──
+        #   ★ 去掉整个「扳机」：原「夜窗 + D>阈值 + 不在场 → p=D² 掷骰 → 命中＝表达」
+        #     不再需要——D 只是"感觉"（由 desire_state_line() 读），**不决定任何事**。
+        #   ★ 保留 D 的数学（饱和生长／点火／喂饱／抬底）与"喂饱真回落"。
+        #   ★ 回旧行为：取 `档案馆/改前备份_20261001_欲望降状态/desire_lib.py`。
+        if d < 0.35:
+            d_tier, d_name = 0, "平"
+        elif d < 0.65:
+            d_tier, d_name = 1, "有点黏"
         else:
-            gates.append("夜窗✗(差%s)" % _fmt_min(_night_gap_min(hm)))
-            blocked = "夜窗"
-        if not present:
-            gates.append("不在场✓")
-        else:
-            gates.append("在场✗")
-            blocked = blocked or "在场"
-        if d > thr:
-            gates.append(f"阈值✓({d:.2f}>{thr:.2f})")
-        else:
-            gates.append(f"阈值✗({d:.2f}，差{thr - d:.2f})")
-            blocked = blocked or "阈值"
-        if since_fire_h is not None and 0 <= since_fire_h < refractory_h:
-            gates.append(f"不应期×0.5({since_fire_h:.1f}h<{refractory_h:g}h)")
-        else:
-            gates.append("不应期✓(%s)" % _fmt_since(now, st.get("last_fire")))
-        fired, _roll, _p = False, None, None
-        if night and d > thr and not present:
-            _p = d * d
-            _roll = random.random()
-            if _roll < _p:                      # 锐化：p=D²（低档不冒泡）
-                fired = True
-                d = 0.2                         # 表达＝满足（分层回落）
-                st["last_fire"] = now.strftime("%Y-%m-%d %H:%M:%S")
-                st["last_satisfy"] = st["last_fire"]
-            gates.append(f"掷骰{'✓' if fired else '✗'}(p={_p:.2f}，掷{_roll:.2f})")
-        if blocked:
-            gates.append(f"← 被{blocked}挡")
+            d_tier, d_name = 2, "很黏"
+        fired = False
+        gates = ["状态=" + d_name + "(%.2f)" % d, "D=%.2f" % d]
+        # ── 影子：「若按新规则，D 会是多少」（10-01）——只多记一列，不动上面的 d ──
+        _dnew_line = ""
+        try:
+            if _cfg("desire_v2_sat_shadow", True):
+                _dprev = float(st.get("d_new", st.get("d", d)) or 0.0)
+                _gh = base * fac                      # 同一套因子
+                if present:
+                    _gh *= 0.5
+                # 不应期**改锚「满足」**（旧锚 last_fire 是降状态前的遗物，从没开过）
+                _ref_new = float(_cfg("desire_v2_refractory_new_h", 2.0))
+                _ank = st.get("last_satisfy_new") or st.get("last_satisfy")
+                _gsat = None
+                if _ank:
+                    try:
+                        _gsat = (now - datetime.strptime(_ank, "%Y-%m-%d %H:%M:%S")
+                                 ).total_seconds() / 3600
+                    except Exception:
+                        _gsat = None
+                if _gsat is not None and 0 <= _gsat < _ref_new:
+                    _gh *= 0.5
+                d_new = min(1.0, _dprev + _gh * dh * (1 - _dprev))
+                _pm = _sat_probe_mood(now)            # 探头A：她的笔
+                try:
+                    _wm = int(_cfg("desire_v2_seg_win_min", 25) or 25)
+                except (TypeError, ValueError):
+                    _wm = 25
+                _seg = _seg_judge_intimate(now, win_min=_wm)   # 探头B：段级小模型
+                _src = ("A·" + _pm) if _pm else ("" if _seg is not True else "B·段判在做")
+                if _src:
+                    d_new = min(d_new, float(_cfg("desire_v2_sat_floor", 0.30)))
+                    st["last_satisfy_new"] = now.strftime("%Y-%m-%d %H:%M:%S")
+                st["d_new"] = round(d_new, 4)
+                _seg_s = "在做" if _seg is True else ("不在" if _seg is False else "未判")
+                _dnew_line = (f" | D新={d_new:.2f} 满足={_src or '无'} 段={_seg_s}"
+                              f" since_sat新={_fmt_since(now, st.get('last_satisfy_new'))}")
+        except Exception:
+            pass
         st["d"] = round(d, 4)
         st["last_tick"] = now.strftime("%Y-%m-%d %H:%M:%S")
         try:
@@ -448,9 +481,10 @@ def tick_v2_shadow(now=None, present=None):
                 f.write(f"[{now.strftime('%F %T')}] D={d:.2f} | Δh={dh:.1f}h | 因子×{fac} | "
                         f"在场={'是' if present else '否'} | 心情={mstr} | "
                         + ((" ".join(_ex) + " | ") if _ex else "")
-                        + f"{'命中=③(→0.2)' if fired else '命中=否'} | "
+                        + f"{'命中=③(→0.2)' if fired else '状态式·不掷骰'} | "
                         f"since_fire={_fmt_since(now, st.get('last_fire'))} "
                         f"since_sat={_fmt_since(now, st.get('last_satisfy'))}"
+                        + _dnew_line
                         + (f" | trace: {' '.join(gates)}" if _cfg("desire_v2_trace", True) else "")
                         + "\n")
         except Exception:
@@ -462,6 +496,6 @@ def tick_v2_shadow(now=None, present=None):
 
 if __name__ == "__main__":
     # 自检：跑一拍，打印结果（影子无害）
-    r = tick_and_shadow()
+    r = tick_v2_shadow()
     print("desire_lib 自检 →", r)
-    print("（影子日志：~/desire_shadow.log；events 里 kind=desire.tick）")
+    print("（影子日志：~/desire_v2_shadow.log）")

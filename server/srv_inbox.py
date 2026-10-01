@@ -22,6 +22,9 @@ import srv_state
 INBOX_ADDR = "your-home-mailbox@example.com"
 INBOX_IMAP_HOST = "imap.163.com"
 INBOX_INTERVAL = 3600  # 1 小时一拉（9-12 晚家主令：改一小时一次）
+# 10-01 大扫除批⑤：IMAP 连接超时——不加的话，163 的半开连接会让收信线程**永久卡在 socket 读**，
+#   连下面的 sleep 都到不了（收信静默停摆，不打日志也不报警）。30 秒。
+INBOX_TIMEOUT = 30
 
 
 def _inbox_fetch_once():
@@ -30,7 +33,7 @@ def _inbox_fetch_once():
     if not auth:
         return 0
     n = 0
-    conn = imaplib.IMAP4_SSL(INBOX_IMAP_HOST)
+    conn = imaplib.IMAP4_SSL(INBOX_IMAP_HOST, timeout=INBOX_TIMEOUT)
     try:
         conn.login(INBOX_ADDR, auth)
         # 163 铁律（9-12 晚实锤）：登录后必须先发 ID 自报家门（RFC 2971），否则服务器按
