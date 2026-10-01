@@ -1659,6 +1659,9 @@ def append_to_day(date, add_text):
     new_content = ((content or "") + "\n\n〔补记〕" + (add_text or "")).strip()
     c.execute("UPDATE days SET content=? WHERE id=?", (new_content, _id))
     _fts_safe(_fts_put_day, c, _id, title, new_content, mood)
+    # 10-02 修：内容变了要**重嵌**——原先只更新 FTS，day 向量永远停在旧内容，
+    # 补记段（同日二次熄灯）语义搜不到；reconcile 只补"完全没向量"的行、不自愈。
+    _embed_enqueue_c(c, "day", _id)
     conn.commit()
     conn.close()
     return _id

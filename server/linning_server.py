@@ -2956,7 +2956,8 @@ def exec_library_tool(name, args):
         return "\n".join(lines[:limit * 7])
     if name == "search_chats":
         date = str(args.get("date") or "").strip()[:10]
-        who = str(args.get("who") or "小乖").strip()
+        # 10-02 修：默认 **全部**（原先默认"小乖"→ 她查原话时静默丢掉自己的话）
+        who = str(args.get("who") or "全部").strip()
         # MEM-C：原话卷升级走 FTS（同义词扩词），空手退回 LIKE 全表兜底
         rows = []
         for _id, d, r, c2, ct in m.fts_search(query, ("chat",), limit * 3).get("chat", []):
