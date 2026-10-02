@@ -48,8 +48,14 @@ function detailBestOf(items: MonthCheckinItem[], id: number): number {
 
 function detailWeeksOf(): number[][] {
   const total = detailMonthDays();
+  const now = new Date();
+  const firstDow: number = new Date(now.getFullYear(), now.getMonth(), 1).getDay();   // 0=周日
   const out: number[][] = [];
   let row: number[] = [];
+  // 10-02 修：按 1 号的真实星期对齐（原从 1 号起每 7 个硬切，整月周列都错位）。0＝空占位。
+  for (let b = 0; b < firstDow; b++) {
+    row.push(0);
+  }
   for (let d = 1; d <= total; d++) {
     row.push(d);
     if (row.length === 7) {
@@ -58,10 +64,15 @@ function detailWeeksOf(): number[][] {
     }
   }
   if (row.length > 0) {
+    while (row.length < 7) {
+      row.push(0);
+    }
     out.push(row);
   }
   return out;
 }
+
+const WEEKDAY_CN: string[] = ['日', '一', '二', '三', '四', '五', '六'];
 
 @Component
 export struct CheckinDetailPage {
@@ -95,11 +106,22 @@ export struct CheckinDetailPage {
         .width('100%')
 
       Column({ space: 6 }) {
-        ForEach(detailWeeksOf(), (row: number[]) => {
+        Row({ space: 6 }) {
+          ForEach(WEEKDAY_CN, (w: string) => {
+            Text(w)
+              .fontSize(FS_AUX)
+              .fontColor(dkColor(C_TEXT_5, this.nightPref))
+              .width(32)
+              .textAlign(TextAlign.Center)
+          }, (w: string, wi: number) => `wk${wi}`)
+        }
+        .width('100%')
+
+        ForEach(detailWeeksOf(), (row: number[], ri: number) => {
           Row({ space: 6 }) {
-            ForEach(row, (d: number) => {
+            ForEach(row, (d: number, di: number) => {
               Stack() {
-                Text(`${d}`)
+                Text(d === 0 ? '' : `${d}`)
                   .fontSize(FS_AUX)
                   .fontColor(detailDaysOf(this.monthItems, this.checkinDetailId).includes(d)
                     ? dkColor(C_WHITE, this.nightPref) : dkColor(C_TEXT_5, this.nightPref))
@@ -107,12 +129,13 @@ export struct CheckinDetailPage {
               .width(32)
               .height(32)
               .borderRadius(16)
-              .backgroundColor(detailDaysOf(this.monthItems, this.checkinDetailId).includes(d)
-                ? dkColor(C_ACCENT, this.nightPref) : dkColor(C_CARD, this.nightPref))
-            }, (d: number) => `${d}`)
+              .backgroundColor(d === 0 ? dkColor(C_CARD, this.nightPref) : (detailDaysOf(this.monthItems, this.checkinDetailId).includes(d)
+                ? dkColor(C_ACCENT, this.nightPref) : dkColor(C_CARD, this.nightPref)))
+              .opacity(d === 0 ? 0 : 1)
+            }, (d: number, di: number) => `${di}-${d}`)
           }
           .width('100%')
-        }, (row: number[]) => `r${row[0]}`)
+        }, (row: number[], ri: number) => `r${ri}-${row.join('-')}`)
       }
       .width('100%')
 

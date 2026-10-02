@@ -16,13 +16,19 @@ import { LengthMetrics } from '@kit.ArkUI';
 //（本机 compatibleSdkVersion 23 ✓）。
 @Component
 export struct MdSegText {
-  segs: MdSeg[] = [];
+  // 10-02：换卷/换段时 segs 会变——加 @Watch，变了就重设属性字符串（原来只 aboutToAppear 设一次，
+  //   靠父级"全文 key"兜底重建；去掉那个隐性依赖）。
+  @Prop @Watch('refill') segs: MdSeg[] = [];
   baseSize: number = FS_BODY;
   baseColor: string = '#5c5348';
   codeColor: string = '#b08968';
   bold: boolean = false;
   lh: number = 23;
   private ctl: TextController = new TextController();
+
+  refill(): void {
+    this.ctl.setStyledString(this.styled());
+  }
 
   private styled(): MutableStyledString {
     const ms: MutableStyledString = new MutableStyledString('');

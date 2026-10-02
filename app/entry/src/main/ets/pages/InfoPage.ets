@@ -106,7 +106,7 @@ export struct InfoPage {
               .borderRadius(R_MD)
               .width('100%')
               .alignItems(HorizontalAlign.Start)
-            }, (g: InfoGroup) => g.title)
+            }, (g: InfoGroup, i: number) => `${i}-${g.title}`)
             if (this.msg !== '') {
               Text(this.msg)
                 .fontSize(FS_AUX)

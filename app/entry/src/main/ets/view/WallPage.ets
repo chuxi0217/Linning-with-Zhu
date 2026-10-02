@@ -79,7 +79,7 @@ export struct WallPage {
               .padding(10)
               .backgroundColor(dkColor(C_CARD, this.nightPref))
               .borderRadius(R_SM)
-            }, (p: WallPin) => `${p.pin_id}`)
+            }, (p: WallPin, i: number) => `${p.pin_id ?? 'p'}-${i}`)
           }
           Text('门牌墙只读：她每天开场看到的就是这些。')
             .fontSize(FS_AUX)

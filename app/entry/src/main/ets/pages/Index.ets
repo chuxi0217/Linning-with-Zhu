@@ -508,7 +508,7 @@ struct Index {
   @State notesGroups: InfoGroup[] = [];
   // ── 姐姐思考中 ──
   @State thinkingSec: number = 0;
-  @State thinkPeek: boolean = false;         // 💭 默认折叠（9-9）：流式思考点一下才偷看
+  @State thinkPeekKey: string = '';          // 💭 10-02：改成「哪一张思考卡是展开的」——逐卡，不再一点全开
   private locPermAsked: boolean = false;
   private scroller: Scroller = new Scroller();
   // 9-29 修（家主：「打开一个东西，退出来就回到顶点了，尤其是共读」）：
@@ -3333,18 +3333,18 @@ struct Index {
       // 思考步骤卡（9-12 时间线版）：占位「叫姐姐中…」→活跃卡计时→封口「思考了 Ns」，
       // 点一下展开流式原文尾段（Kimi 步骤卡同款）；全文走 💭 看想法
       Row() {
-        Text(!this.thinkPeek
+        Text(this.thinkPeekKey !== item.key
           ? (item.thinkDone || item.time === '叫姐姐中…' ? `💭 ${item.time}`
             : `💭 姐姐思考中… ${this.thinkingSec.toFixed(1)}s`)
           : `💭 ${item.text.length > 300 ? '…' + item.text.substring(item.text.length - 300) : item.text}`)
-          .fontSize(!this.thinkPeek ? FS_BODY : FS_AUX)
+          .fontSize(this.thinkPeekKey !== item.key ? FS_BODY : FS_AUX)
           .fontColor(this.dk(C_TEXT_3))
           .padding(12)
           .backgroundColor(this.dk(C_WHITE))
           .border({ width: 1, color: this.dk(C_HER_EDGE) })
           .borderRadius({ topLeft: R_XL, topRight: R_XL, bottomLeft: R_TAIL, bottomRight: R_XL })
           .onClick(() => {
-            this.thinkPeek = !this.thinkPeek;
+            this.thinkPeekKey = this.thinkPeekKey === item.key ? '' : item.key;
           })
       }
       .width('100%')
@@ -4168,7 +4168,7 @@ struct Index {
                 }
               }
               .width('100%')
-            }, (p: MoodPoint) => `${p.time}-${p.type}-${p.score}`)
+            }, (p: MoodPoint, i: number) => `${i}-${p.time}-${p.type}-${p.score}`)
           }
         }
         .width('100%')
@@ -5594,7 +5594,7 @@ struct Index {
   // 第一个事件没到之前显示「叫姐姐中…」，thinking 一来就变计时逐字；封口与归档由 sealThink 负责 ──
   private beginThinking(): void {
     this.thinkingSec = 0;
-    this.thinkPeek = false;   // 💭 默认折叠：新一轮重新折叠
+    this.thinkPeekKey = '';   // 💭 默认折叠：新一轮重新折叠（10-02：逐卡后清的是"展开的那张"）
     // 9-27 v5：占位卡不再 append 进 chatData（那样它永远不重画）——改挂 live 思考卡：
     // 读 this 的 @State，第一个事件没到之前显示「💭 叫姐姐中…」，thinking 一到就变计时＋逐字。
     this.liveThinkOn = true;
@@ -5872,7 +5872,9 @@ struct Index {
         const isFinal: boolean = t.final === true;
         // 思考卡：全文进 thinkingCache（key 带 chat_id + 轮号），点一下就能看——不用再走网络
         if (th.length > 0 && !isFinal) {
-          const tk: string = `think-h${msg.id}-${t.r}`;
+          // 10-02：老消息 msg.id 可能是 undefined → 原 key 变 `think-hundefined-1`，多条老消息互相覆盖
+          const _mid: string = (msg.id !== undefined && msg.id !== null) ? `${msg.id}` : `t${msg.time}`;
+          const tk: string = `think-h${_mid}-${ti}`;
           this.thinkingCache.set(tk, th);
           out.push({ key: tk, who: '思考', text: th, imageUrl: '',
                      time: `思考 · ${msg.time}`, thinkDone: true, msgId: msg.id });
@@ -6425,7 +6427,8 @@ struct Index {
         // 任何环节炸了都抛出去走 catch——对账/入队老路径一字不动。
         body.stream = true;
         let sseRest = new Uint8Array(0);
-        let rawBuf = new Uint8Array(0);   // 9-25：原文字节也攒一份——dedup 回的是 JSON（无 data: 前缀）
+        const rawChunks: Uint8Array[] = [];   // 9-25：原文字节也攒一份——dedup 回的是 JSON（无 data: 前缀）
+        // 10-02 修：原来每来一段就 new+copy 全量（O(n²)）→ 改成攒块、收尾一次拼
         let doneEv: StreamEvent | null = null;
         // ── 9-26 流式卡住修（工单 patch_流式客户端收尾硬化_2026-09-26）──
         // 流式收尾多路兜底：done（协议收尾）/ dataEnd（传输收尾）/ 静默看门狗，任一先到即结算；
@@ -6598,10 +6601,7 @@ struct Index {
           try {
             // 9-25：整份原文按字节攒——事后一次解码（逐帧解码会在多字节汉字切分处出乱码）
             const inb = new Uint8Array(data);
-            const rb = new Uint8Array(rawBuf.length + inb.length);
-            rb.set(rawBuf, 0);
-            rb.set(inb, rawBuf.length);
-            rawBuf = rb;
+            rawChunks.push(inb);
             const merged = new Uint8Array(sseRest.length + data.byteLength);
             merged.set(sseRest, 0);
             merged.set(new Uint8Array(data), sseRest.length);
@@ -6647,6 +6647,16 @@ struct Index {
         // 9-12 去重命中：重发的消息 server 认出身份证，回的是 JSON（dedup:true）而非 SSE——
         // 原样还他上次那句，直接按正常回复渲染，别当"流没收到收尾"绕去对账。
         if (streamCode >= 200 && streamCode < 300 && !doneEv) {
+          let _rt = 0;
+          for (let _ci = 0; _ci < rawChunks.length; _ci++) {
+            _rt += rawChunks[_ci].length;
+          }
+          const rawBuf = new Uint8Array(_rt);
+          let _ro = 0;
+          for (let _ci = 0; _ci < rawChunks.length; _ci++) {
+            rawBuf.set(rawChunks[_ci], _ro);
+            _ro += rawChunks[_ci].length;
+          }
           const raw: string = util.TextDecoder.create('utf-8').decodeToString(rawBuf);   // 9-25：流式版无 res.result
           if (raw.indexOf('"dedup"') >= 0) {
             try {

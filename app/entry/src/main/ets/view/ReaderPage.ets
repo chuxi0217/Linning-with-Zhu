@@ -127,7 +127,7 @@ export struct ReaderPage {
             }
             .width('100%')
           }
-        }, (p: string, i: number) => `${i}-${p.length}`)
+        }, (p: string, i: number) => `${i}-${p}`)
       }
       .layoutWeight(1)
       .width('100%')
