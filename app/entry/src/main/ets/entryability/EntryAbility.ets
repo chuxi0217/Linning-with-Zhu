@@ -11,9 +11,10 @@ const TAG = 'ourFamily';
 
 // 9-1-#8 刀3 地址收编：设置页换门牌存 preferences，这里每次上报前重读
 const DEFAULT_SERVER = 'https://your-door.example';   // 9-23 换新门；旧值备查：https://node.your-door.ts.net
-// 新门 Caddy Basic 门锁：上报请求要带钥匙（与 Index.ets 的 DOOR_AUTH 同源，
-// 同指 d:/咱家记忆库/网络门锁凭证.txt——改锁两处同改；本批范围所限先各存一份）
-const DOOR_AUTH = 'Basic <Base64(用户名:密码)>';
+// 新门 Caddy Basic 门锁：上报请求要带钥匙。
+// ★ 10-02：**不再写死在源码里**——与 Index.ets 同源，读 preferences 的 'door_key'
+//（设置页「门锁钥匙」存的那串），在 refreshServerUrls() 里现算。
+let DOOR_AUTH = '';
 let SERVER_BASE = DEFAULT_SERVER;
 const HTTP_TIMEOUT_MS = 15000;   // 9-23 手表清退：原 HEART_TIMEOUT_MS 改名——只余 push token 上报在用
 
@@ -125,8 +126,19 @@ export default class EntryAbility extends UIAbility {
     try {
       const prefs = preferences.getPreferencesSync(this.context, { name: 'zanjia' });
       SERVER_BASE = (prefs.getSync('server_base', '') as string).trim() || DEFAULT_SERVER;
+      // 10-02：门锁钥匙也从本地读（与 Index.ets 同键 'door_key'）——不再写死源码
+      const dk = (prefs.getSync('door_key', '') as string).trim();
+      DOOR_AUTH = '';
+      if (dk) {
+        const lines: string[] = dk.split('\n');
+        const l0: string = (lines[0] ?? '').trim();
+        const ci: number = l0.toLowerCase().indexOf('basic ');
+        if (ci >= 0) {
+          DOOR_AUTH = l0.substring(ci);   // 去掉可能带的 `Authorization: ` 前缀
+        }
+      }
     } catch (e) {
-      // 读不到就用默认门牌
+      // 读不到就用默认门牌 / 空钥匙
     }
   }
 

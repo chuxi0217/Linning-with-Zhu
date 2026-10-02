@@ -170,10 +170,45 @@ const JPEG_QUALITY: number = 70;
 const BASE_URL: string = 'https://your-door.example';
 const BASE_URL_OLD: string = 'https://node.your-door.ts.net';      // 旧门过渡：Windows（node）
 const BASE_URL_LINUX: string = 'https://chuxi.your-door.ts.net';   // 旧门过渡：Linux（chuxi）
-// 新门挂着 Caddy Basic 门锁——每个请求都得带钥匙；钥匙串在 ~/咱家记忆库/网络门锁凭证.txt
-const DOOR_AUTH: string = 'Basic <Base64(用户名:密码)>';
-// 图片走 URL 后门：Image 组件带不了请求头，服务端认 ?token=<同一把密码>
-const DOOR_TOKEN: string = '<门锁密码>';
+// 新门挂着 Caddy Basic 门锁——每个请求都得带钥匙。
+// ★ 10-02：**不再写死在源码里**（谁拿到 HAP 或源码，就能读写信箱/日记/照片）。
+//   改成：首次在「设置 → 门锁钥匙」粘一次（值＝`网络门锁凭证.txt` 里「app 用」那一行），
+//   存进 preferences；启动时读回来算。空＝没填（请求会 401，设置页有提示）。
+let DOOR_AUTH: string = '';
+// 图片走 URL 后门：Image 组件带不了请求头，服务端认 ?token=<门锁密码原串>（srv_static._image_token_ok）。
+let DOOR_TOKEN: string = '';
+
+/** 「门锁钥匙」文本 → DOOR_AUTH / DOOR_TOKEN。
+ *  收：`Authorization: Basic xxx` / `Basic xxx`；也收两行（第二行当图片口令，兜底）。
+ *  Basic 解出来是 `用户名:密码` → 图片 token 取冒号后的**密码原串**（与凭证文件同源）。 */
+export function applyDoorKey(raw: string): void {
+  const s: string = (raw ?? '').trim();
+  DOOR_AUTH = '';
+  DOOR_TOKEN = '';
+  if (s === '') {
+    return;
+  }
+  const lines: string[] = s.split('\n');
+  let line0: string = (lines[0] ?? '').trim();
+  let tok: string = lines.length > 1 ? (lines[1] ?? '').trim() : '';
+  const ci: number = line0.toLowerCase().indexOf('basic ');
+  if (ci < 0) {
+    return;                        // 不是 Basic 串 → 当没填
+  }
+  line0 = line0.substring(ci);     // 去掉前面的 `Authorization: `
+  DOOR_AUTH = line0;
+  if (tok === '') {
+    try {
+      const dec = new util.Base64Helper().decodeSync(line0.substring(6).trim());
+      const up: string = util.TextDecoder.create('utf-8').decodeToString(dec);
+      const p: number = up.indexOf(':');
+      tok = p >= 0 ? up.substring(p + 1) : up;
+    } catch (e) {
+      tok = '';
+    }
+  }
+  DOOR_TOKEN = tok;
+}
 // 9-1-#8 刀3：地址收编——全工程写死的地址都在这儿，设置页换门牌走 applyServerBase
 let CHAT_URL: string = BASE_URL + '/api/chat';
 let HISTORY_URL: string = BASE_URL + '/api/history';
@@ -393,6 +428,8 @@ struct Index {
   // ── 设置页（9-1-#8 刀3） ──
   @State currentBase: string = '';           // 空 = 默认 Windows（node）门牌
   @State customBase: string = '';
+  @State doorKeyInput: string = '';   // 10-02：门锁钥匙（不再写死源码；设置页粘一次、存本地）
+  @State doorKeyMsg: string = '';
   @State serverTestMsg: string = '';
   // ── 心情页（9-9 心情曲线 v2） ──
   @State moodSel: string = '';               // 选中的情绪词（''=未选）
@@ -541,6 +578,15 @@ struct Index {
       }
       // CAL-02（9-13）：课表原文（存过就读回来当编辑框初值；上报也认这份）
       this.timetableDraft = (prefs.getSync('timetable_text', '') as string);
+      // 10-02：门锁钥匙（不再写死源码）——读回来算出 DOOR_AUTH / DOOR_TOKEN
+      const dk = (prefs.getSync('door_key', '') as string);
+      if (dk) {
+        applyDoorKey(dk);
+        this.doorKeyInput = dk;
+      } else {
+        // 10-02：没填钥匙就明确提示（否则她只看到「—」，不知道为什么）
+        this.doorKeyMsg = '还没填门锁钥匙——去下面「门锁钥匙」粘一次（网络门锁凭证.txt 里「app 用」那一行）。';
+      }
     } catch (err) {
       // 读不到就用默认门牌
     }
@@ -2782,6 +2828,38 @@ struct Index {
           .width('100%')
       }
 
+      // ── 10-02：门锁钥匙（不再写死源码）——粘一次、存本地；空＝没填（请求会 401）──
+      Row({ space: 8 }) {
+        TextInput({ placeholder: '门锁钥匙：粘「Authorization: Basic …」整行', text: this.doorKeyInput })
+          .layoutWeight(1)
+          .height(40)
+          .fontSize(FS_SUB)
+          .backgroundColor(this.dk(C_WHITE))
+          .borderRadius(R_MD)
+          .padding({ left: 12, right: 12 })
+          .onChange((v: string) => {
+            this.doorKeyInput = v;
+          })
+        Button('保存')
+          .fontSize(FS_SUB)
+          .height(40)
+          .fontColor(this.dk(C_WHITE))
+          .backgroundColor(this.dk(C_ACCENT))
+          .borderRadius(R_PILL)
+          .stateStyles({ pressed: pressDim, normal: pressFull })
+          .onClick(() => {
+            this.saveDoorKey();
+          })
+      }
+      .width('100%')
+
+      if (this.doorKeyMsg) {
+        Text(this.doorKeyMsg)
+          .fontSize(FS_AUX)
+          .fontColor(this.dk(C_TEXT_2))
+          .width('100%')
+      }
+
       // ── 工地日志（9-13 家主令：拉日志开界面，不再内嵌设置页）——
       // 工具有没有真调，一眼可查；点进去全屏看，右上角还能刷新 ──
       Button(this.logsBusy ? '取日志中…' : '📜 工地日志（最近 100 行，开界面看）')
@@ -2869,6 +2947,34 @@ struct Index {
   }
 
   // 换门牌：立即生效 + 持久化（默认门牌不占存储，存空）+ 顺手测一下
+  // 10-02：门锁钥匙不再写死源码——这里存本地并立刻生效（值＝网络门锁凭证.txt 的「app 用」整行）
+  private saveDoorKey(): void {
+    const s: string = this.doorKeyInput.trim();
+    applyDoorKey(s);
+    try {
+      const prefs = preferences.getPreferencesSync(getContext(this), { name: 'zanjia' });
+      if (s) {
+        prefs.putSync('door_key', s);
+      } else {
+        prefs.deleteSync('door_key');
+      }
+      prefs.flushSync();
+    } catch (err) {
+      this.doorKeyMsg = '存不下来（本地存储出错），没生效。';
+      return;
+    }
+    if (s === '') {
+      this.doorKeyMsg = '已清空——各种请求会 401，重新粘一次即可。';
+    } else if (DOOR_AUTH === '') {
+      this.doorKeyMsg = '这串不认：要以「Basic 」开头（从 网络门锁凭证.txt 复制整行）。';
+    } else if (DOOR_TOKEN === '') {
+      this.doorKeyMsg = '已存钥匙；图片口令没解出来，图片可能裂（可换用两行：第二行填密码原串）。';
+    } else {
+      this.doorKeyMsg = '已存好，立即生效。';
+    }
+    this.fetchStatus();   // 立刻试一次
+  }
+
   private switchServerBase(base: string): void {
     const b = base.trim();
     // 10-02 修：原来只判 startsWith('http')——`http`、`httpfoo` 这类半截值也过，后续请求全打飞
