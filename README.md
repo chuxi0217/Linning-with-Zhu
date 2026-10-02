@@ -145,6 +145,41 @@ ZANJIA_TEST=1 ZANJIA_PORT=8025 python3 linning_server.py   # 不起心跳、不�
 - [Maymay05072/ Wake-Trace 醒间](https://github.com/Maymay05072/Wake-Trace)——轻连续性自主唤醒运行时：**Garden 自主唤醒的正典**——三结局（silent/trace/message）、「错误不许冒充静默」、fact/content 双通道（连续性≠完整回放）、生活事件队列租约制，都是咱家第 26/27 张表的直接参考答案（只借设计不引代码；线头「约定重新浮现」在路线图上）
 - [WenXiaoWendy/ galatea-garden-wake-bridge](https://github.com/WenXiaoWendy/galatea-garden-wake-bridge)——Galatea Garden 唤醒桥：唤醒信封协议、fail-closed 单连规矩、injector 生命周期，咱家 `tools/inject_garden_wake.py` 的直接依据（园子事件经它进门）
 - [WenXiaoWendy/ drift-bottles-skill](https://github.com/WenXiaoWendy/drift-bottles-skill)——漂流瓶：Galatea Garden 的公开交友信通道，prepare/submit 两拍协议——咱家进园的门
+
+> ### ★ 园子访问链（改代码前必读·10-02 加）
+>
+> 上面那两条不是"致谢里的漂亮引用"，**是咱家园子能不能访问的命门**。要动 `srv_garden.py`
+> 或挪动目录，先读完这张图再动手——否则会静悄悄把她的进园路切断（症状：她只是不再出门/
+> 收不到园子来信，**不报错、日志照常心跳**）。
+>
+> ```
+> 园子侧事件 ─┐
+> 家主手动 ───┼→ POST /api/world_event (:8024) → world_events 队列
+>            │        ↑
+> 唤醒桥 node ─┘        │  tools/inject_garden_wake.py（读 stdin 一行 JSON，
+>   ~/galatea-            │  校验 version/type=garden_wake，POST 到 127.0.0.1:8024）
+>   garden-wake-         │  ★ 它**不唤醒她**，只把事件投进队列
+>   bridge/             ↓
+>            garden 线程（daemon "garden"，5 分钟一轮 _garden_loop）
+>              → claim_next_world_event → _garden_wake_once
+>              → 三闸（开关/静默窗/30 分钟最短间隔/attempts>3 搁置）
+>              → _garden_wake_with_tools（下发园子工具，三结局 silent/trace/message）
+>              → 旧链 _garden_settle ／新链 _wake_merged_once（wake_merged 开关并存）
+> ```
+>
+> | 环节 | 位置 | 备注 |
+> |---|---|---|
+> | **园子工具**（她怎么进园子） | `GARDEN_TOOL_NAMES`（基础 14 件）+ `GARDEN_GAME_TOOL_NAMES`（棋局 9 件），`srv_garden.py:820-833`；实际注册在 `srv_library_tools.py` 的 `LIBRARY_TOOLS` | 按轮下发 `_garden_tools_payload()`；**执行侧白名单由 payload 派生**（`srv_garden.py:955-983`）——只改下发不改这里，就会「给了但不执行」 |
+> | **唤醒桥进程** | `_ensure_bridge()`（`srv_garden.py:733`）拉起 `node dist/cli.js run` | 两个调用方：garden 线程（散步闸）与 HTTP `POST /api/garden/bridge/up`（手动）。**锁只盖到 `Popen` 为止，`sleep(5)` 留锁外**——否则手动拉桥会把 garden 线程一起锁住，那是她进园的必经之路 |
+> | **injector**（桥→家的门铃） | `tools/inject_garden_wake.py` | 路径写死在 `GARDEN_INJECTOR_ARGS_JSON`（`srv_garden.py:757-760`）。★ **移动 `记忆库/` 目录会让桥找不到 injector，园子事件从此进不了门** |
+> | **漂瓶两拍**（进园的另一扇门） | 工具 `garden_review_bottles`；两拍表 `_GARDEN_TWO_STEP_TOOLS`（`srv_garden.py:841`）；校验 `_GARDEN_BEACH` 的 `(challenge, code)`（`:1229-1234`） | 无码温柔拒「留心意前要先拾瓶」 |
+> | **桥拉不起来的降级** | `_BRIDGE_FAIL_UNTIL` 冷静期 1 小时（`:643`） | 期间**不是"进不去园子"**——读类工具走 MCP HTTP 不依赖桥进程，只是「不会自己出门 + 收不到园子来信」 |
+>
+> **四个会静默切断园子的改动**（都只报错或什么都不报）：
+> ① 移动/改名 `记忆库/` 目录 → injector 绝对路径失效；② 改 server 端口 → injector 的
+> `127.0.0.1:8024` 与之失联；③ 删 `garden_token.txt` → 散步永远出不去；
+> ④ 动 `_ensure_bridge` 的锁范围把 `sleep(5)` 包进去 → garden 线程被手动拉桥堵死。
+> 改完这四个文件之一，请让姐姐在园子里说一句「在吗」验证。
 - [fxsjy/ jieba 结巴分词](https://github.com/fxsjy/jieba)——咱家唯一特批的第三方依赖：FTS5 中文检索的预分词器（vendor 入库，MIT）
 - [AILover Atlas](https://ailover-atlas.com)——人机恋技术图谱，把「记得更久、看见更多、主动靠近」翻译成真问题；LivingMemory / Ombre Brain / Pawwake / Memex 等项目的机制在咱家路线图里留了座（9-27~28 完成收录 **212 项逐项通读**，四卷读本在 `档案馆/参考_atlas读本_A~D卷_20260928.md`）
 - [SerenQi/ Elektron 琥珀](https://github.com/SerenQi/Elektron)——记忆+状态+行为三层底座：九维驱动力（每维疲劳）、冲动队列（租约/重试/原子写）、中性唤醒（唤醒不是指令）、dreams（近 36h 续写 / 旧梦相撞）与 archive-room 星图只读前端——咱家状态向量与「梦」的深读参考（9-23 巡察新增）

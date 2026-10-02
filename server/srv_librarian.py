@@ -191,7 +191,16 @@ def _librarian_tick(now=None):
             _end_h = 4
         _house = now - timedelta(days=1) if now.hour < _end_h else now
         _house_day = _house.strftime("%Y-%m-%d")
-        if (e and _house.weekday() == int(cfg.get("librarian_weekday", 6))
+        # 10-02 修（agent 审查·高）：原裸 int(cfg.get("librarian_weekday", 6))，坏值直接抛。
+        #   'sunday'→ValueError / None→TypeError，被外层 except 吞成一行「循环失手」，
+        #   然后每 30 分钟重复一次、周报一篇不产——心跳照跳、日志不炸，只有家主知道周报没来。
+        #   照 179行 _due_h 的款包 try，坏值回退 6（周日）。
+        try:
+            _wd = int(cfg.get("librarian_weekday", 6))
+        except (TypeError, ValueError):
+            print("  [图书管理员] librarian_weekday 配的不是整数（%r），按 6（周日）走" % (cfg.get("librarian_weekday"),))
+            _wd = 6
+        if (e and _house.weekday() == _wd
                 and (now.hour >= _due_h or now.hour < _end_h)
                 and not m.lib_report_exists_on(_house_day)):
             try:

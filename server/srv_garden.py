@@ -641,6 +641,10 @@ def _wake_merged_once(now=None):
 GARDEN_WALK_MIN_GAP_H = 4
 GARDEN_WALK_DAILY_MAX = 2
 _BRIDGE_FAIL_UNTIL = [0.0]   # 桥拉起失败的冷静期（epoch 秒），防 5 分钟一轮硬重试
+# 10-02 修（agent 审查·高）：_ensure_bridge 的「查→拉」临界区锁。两个并发调用方
+#   （garden 线程 / HTTP /api/garden/bridge/up），无锁会各拉一个 node 桥 → 事件双消费。
+#   RLock：_garden_wake_once 递归回园子窗时防同线程自锁。
+_BRIDGE_LOCK = threading.RLock()
 
 
 def _cmdline_is_bridge(parts):
@@ -734,50 +738,60 @@ def _ensure_bridge():
     """散步前看一眼耳朵：不在岗就 setsid 拉起（家主委托版，掉线仍不自动重连）。
     返回 True=在岗（原本就跑/刚拉起）；False=拉不起（日志 + 1 小时冷静期）。"""
     import subprocess
-    if _bridge_running():
-        return True
-    if time.time() < _BRIDGE_FAIL_UNTIL[0]:
-        return False
-    try:
-        with open(srv_state._srv().GARDEN_TOKEN_PATH) as _tf:   # 10-02：with 关句柄（原裸 open 漏 fd）；运行期反查：沙盘会重绑 s.GARDEN_TOKEN_PATH
-            token = _tf.read().strip()
-    except Exception:
-        token = ""
-    if not token:
-        print("  [Garden] 散步前拉桥失败：garden_token.txt 缺失——1 小时冷静期")
-        _BRIDGE_FAIL_UNTIL[0] = time.time() + 3600
-        return False
-    bridge_dir = os.path.expanduser("~/galatea-garden-wake-bridge")
-    logf = None
-    try:
-        logf = open(os.path.join(bridge_dir, "bridge.log"), "a")
-        env = dict(os.environ)
-        env.update({
-            "GARDEN_MACHINE_TOKEN": token,
-            "GARDEN_INJECTOR_EXECUTABLE": "python3",
-            "GARDEN_INJECTOR_ARGS_JSON": json.dumps(
-                [os.path.join(BASE_DIR, "tools", "inject_garden_wake.py")],
-                ensure_ascii=False),
-            "GARDEN_LOG_LEVEL": "info",
-        })
-        subprocess.Popen(["node", "dist/cli.js", "run"], cwd=bridge_dir, env=env,
-                         stdout=logf, stderr=subprocess.STDOUT,
-                         stdin=subprocess.DEVNULL, start_new_session=True)
-        time.sleep(5)   # 给 SSE 握手一点时间（结果看 bridge.log）
-        _BRIDGE_FAIL_UNTIL[0] = 0.0
-        return True
-    except Exception as e:
-        print(f"  [Garden] 散步前拉桥失败（{e}）——1 小时冷静期")
-        _BRIDGE_FAIL_UNTIL[0] = time.time() + 3600
-        return False
-    finally:
-        # 10-01 大扫除批⑤：Popen 已把 logf dup 给子进程，父进程这份留着 = 每拉一次桥漏一个 fd
-        #（入口 `linning_server._spawn_detached` 9-29 已修同类漏，srv 这份没跟上）。
-        if logf is not None:
-            try:
-                logf.close()
-            except Exception:
-                pass
+    # 10-02 修（agent 审查·高）：本函数有两个并发调用方——garden 线程（_garden_self_walk_allowed
+    #   尾行）与 HTTP 请求线程（/api/garden/bridge/up）。原「查→拉」之间无锁，两边可同时通过
+    #   _bridge_running()==False 各拉一个 node 桥 → 同一唤醒事件被消费两次、token 双份在岗，
+    #   而 _bridge_running() 只按 argv 匹配认不出「有两个」，日志也只有一行「耳朵拉起来了」。
+    #   RLock（不是 Lock）：_garden_wake_once(:602) 在合一模式下会递归回园子窗，防同线程自锁。
+    #   锁只盖到 Popen 为止；time.sleep(5) 留在锁外（见下），否则手动拉桥会把 garden 线程一起锁住。
+    with _BRIDGE_LOCK:
+        if _bridge_running():
+            return True
+        if time.time() < _BRIDGE_FAIL_UNTIL[0]:
+            return False
+        try:
+            with open(srv_state._srv().GARDEN_TOKEN_PATH) as _tf:   # 10-02：with 关句柄（原裸 open 漏 fd）；运行期反查：沙盘会重绑 s.GARDEN_TOKEN_PATH
+                token = _tf.read().strip()
+        except Exception:
+            token = ""
+        if not token:
+            print("  [Garden] 散步前拉桥失败：garden_token.txt 缺失——1 小时冷静期")
+            _BRIDGE_FAIL_UNTIL[0] = time.time() + 3600
+            return False
+        bridge_dir = os.path.expanduser("~/galatea-garden-wake-bridge")
+        logf = None
+        try:
+            logf = open(os.path.join(bridge_dir, "bridge.log"), "a")
+            env = dict(os.environ)
+            env.update({
+                "GARDEN_MACHINE_TOKEN": token,
+                "GARDEN_INJECTOR_EXECUTABLE": "python3",
+                "GARDEN_INJECTOR_ARGS_JSON": json.dumps(
+                    [os.path.join(BASE_DIR, "tools", "inject_garden_wake.py")],
+                    ensure_ascii=False),
+                "GARDEN_LOG_LEVEL": "info",
+            })
+            subprocess.Popen(["node", "dist/cli.js", "run"], cwd=bridge_dir, env=env,
+                             stdout=logf, stderr=subprocess.STDOUT,
+                             stdin=subprocess.DEVNULL, start_new_session=True)
+            _BRIDGE_FAIL_UNTIL[0] = 0.0
+        except Exception as e:
+            print(f"  [Garden] 散步前拉桥失败（{e}）——1 小时冷静期")
+            _BRIDGE_FAIL_UNTIL[0] = time.time() + 3600
+            return False
+        finally:
+            # 10-01 大扫除批⑤：Popen 已把 logf dup 给子进程，父进程这份留着 = 每拉一次桥漏一个 fd
+            #（入口 `linning_server._spawn_detached` 9-29 已修同类漏，srv 这份没跟上）。
+            if logf is not None:
+                try:
+                    logf.close()
+                except Exception:
+                    pass
+    # 握手等待**在锁外**（10-02 修）：只是给 SSE 一点时间，不持锁。
+    #   原先它在临界区内 → 手动拉桥（HTTP 线程）会把这把锁占住 5 秒，
+    #   而 garden 线程的散步闸也要抢这把锁 → **她进园的必经之路被一次手动点击堵死**。
+    time.sleep(5)   # 给 SSE 握手一点时间（结果看 bridge.log）
+    return True
 
 
 def _garden_self_walk_allowed(cfg, now, last_ts):

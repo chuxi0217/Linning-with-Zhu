@@ -46,8 +46,21 @@ def _last_desire():
     9-29 ②（评审第二批）**去掉隐藏依赖**：原先只从 `events: desire.tick` 读——events 影子一关
     （或被轮转/清理），D 就**静默冻结**在初值上，谁也不知道。现在**以独立 state 为准**
     （`~/.zanjia_desire_state.json` 的 `d` 键，与 v2 用 `V2_STATE` 是同款做法）；
-    events 只当**首次迁移的种子**（老状态文件还没 d 时借一次），再退回 `desire_d0`。fail-open。"""
-    try:
+    events 只当**首次迁移的种子**（老状态文件还没 d 时借一次），再退回 `desire_d0`。fail-open。
+
+    10-02 修（agent 审查·中）：注释说的「独立 state」其实**没人写**——v1 壳10-01 退休，
+      `_save_d_v1` 已删，`take_desire` 只写 `taken_state`（键名不是 d），events 也没写方了。
+      真正在写 `d` 的是 v2 的 V2_STATE。所以本函数三级回退全落空 → V2_STATE 一旦丢失/换机，
+      **D 从头开始爬，毫无征兆**（静默退回 desire_d0）。
+      修法：第一级改成读 V2_STATE 的 `d`（与 v2 写的地方同源），其余回退保留兜底。"""
+    try:   # ① v2 的 V2_STATE —— tick_v2_shadow 真正在写的就是它
+        with open(V2_STATE, encoding="utf-8") as f:
+            _d = json.load(f).get("d")
+        if _d is not None:
+            return float(_d)
+    except Exception:
+        pass
+    try:   # ② 老 state 文件（v1 遗留，键名仍是 d）
         _d = _load_state().get("d")
         if _d is not None:
             return float(_d)
@@ -132,7 +145,14 @@ def _save_state(st):
 
 def desire_state_line(now=None):
     """（9-30 新增·**降状态**）读 v2 的 D，给一句"心里有多黏糊"——**只说感觉、不给数字**。
-    低档返回 None（没感觉就不摆这块）。D 只是"感觉"，**不决定任何事**。fail-open。"""
+    低档返回 None（没感觉就不摆这块）。D 只是"感觉"，**不决定任何事**。fail-open。
+
+    10-02 修（agent 审查·中）：影子开关 desire_v2_shadow 关掉后 tick_v2_shadow 不再写 V2_STATE，
+      但本函数照旧读那个**冻住的** V2_STATE，take_desire() 也照旧注入 → **关了开关，她开场仍
+      每天递同一句 d 算出来的旧状态语**。看着像机制在跑、实际是冻值（正是「没通电却像跑过」）。
+      修法：影子关着就不递。"""
+    if not _cfg("desire_v2_shadow", False):
+        return None      # 影子已关：V2_STATE 是冻值，不递（宁可没这块，不递假状态）
     try:
         with open(V2_STATE, encoding="utf-8") as f:
             st = json.load(f)
@@ -230,9 +250,19 @@ def _seg_judge_intimate(now, win_min=25, max_msgs=16):
         _eng = str(_cfg("seg_engine", "flash") or "flash").strip().lower()
         _fj = getattr(_ss._srv(), "_flash_judge", None)
         _lj = getattr(_ss._srv(), "_local_judge", None)
+        # 10-02 修（退役残留）：原回退链只看 `callable(_lj)`，**不查本地端点是否已退役**
+        #   （_local_judge 这个函数还在，所以永远判true）→ 4B 已停后照样去打 :11437，
+        #   拿不到判定 → 「不在做」永远判不出→ 满足探头 B 静默失效。
+        #   修法：回退前查 `_local_judge_on()`（server 侧那个开关），退役就直接不判（None）。
+        _lj_on = False
+        try:
+            _ljo = getattr(_ss._srv(), "_local_judge_on", None)
+            _lj_on = bool(_ljo()) if callable(_ljo) else False
+        except Exception:
+            _lj_on = False
         if _eng != "local" and callable(_fj):
             _judge = _fj
-        elif callable(_lj):
+        elif _lj_on and callable(_lj):
             _judge = _lj
         else:
             return None

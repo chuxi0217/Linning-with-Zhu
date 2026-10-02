@@ -171,7 +171,15 @@ def _save_state(st):
 
 
 def _save_cand(cand):
-    """候选落盘 + 进程内镜像。保留 state 其它键（recent 等）。fail-open。9-26 修。"""
+    """候选落盘 + 进程内镜像。保留 state 其它键（recent 等）。fail-open。9-26 修。
+
+    10-02 修（agent 审查·低）：这里补**统一判空**——五条腿（_walk_calendar / _walk_dream …）
+      各自取 text 时只做了 `[:80]` 截断、没校验非空，空 `days.content` 或残缺 dream link 会
+      变成合法候选，经 take_recall 拼成「」递到她眼前（空引用）。
+      放在 `_save_cand` 是因为它是**所有腿的唯一出口**，一处挡住五条腿，
+      与 `_her_outgoing` 已有的前置判空同款。"""
+    if not str((cand or {}).get("text") or "").strip():
+        return None
     at = time.time()
     try:
         _LAST["cand"], _LAST["at"] = cand, at

@@ -43,6 +43,58 @@ def _day_start_str(now):
     return now.strftime("%Y-%m-%d") + f" {_h:02d}:00:00"
 
 
+def _pick_one(rows):
+    """从『待说』里挑一件递出去：**老的加权优先，但每条都递得到**。
+
+    10-02 修（agent 审查·高·三次）：原三处都写 `random.choice(rows[:5])`——只从id 最小的 5 条里抽。
+      而 settle() 把他每次说话后把『已提』还回『待说』且 id 不变 → 只要他持续说话，这 5 条就在
+      待说→已提→待说 之间无限弹跳，**#6 及以后永远进不了 rows[:5]**。新攒的「想起/想你」（高 id、
+      最新鲜、最该递的）因此永不递到她眼前——与「让她自主、像人」的设计正好相反。
+
+      修法（保持「老的优先+一点随机」的本意，不改成纯随机）：
+        窗口随存量增长——`max(5, len//4)`，再在窗口内均匀随机。
+        存量 20 条时窗口 5（老的仍占优）；存到 100 条时窗口 25，新话终有机会递。
+      同类三处（take_huatou / take_huatou_for_send / shadow_pick）统一走这里，别再各写一份切片。
+    """
+    if not rows:
+        return None
+    win = min(len(rows), max(5, len(rows) // 4))
+    return random.choice(rows[:win])
+
+
+def reclaim_stale():
+    """把超时的『已提』还回『待说』（10-01 引入，10-02 从闸内提出来独立成函数）。
+
+    「已提」的条目若他此后一直没说话，settle 永远不会把它还回『待说』（settle 的条件是
+    「他之后又说过话」）→ 那条永久卡在『已提』，既不再被取、也不会重提。超过
+    huatou_reclaim_h 小时就还回去。
+
+    10-02 修：原先这段 UPDATE 只在 outreach_inject=true 的分支里跑，闸关着从不执行 →
+    开关一关一开之间留下永久孤儿。返回回收条数（-1=查不动）。fail-open，异常吞掉。
+    """
+    try:
+        _rh = int(float(_cfg("huatou_reclaim_h", 24)))
+    except (TypeError, ValueError):
+        _rh = 24
+    con = None
+    try:
+        con = _conn()
+        cur = con.execute("UPDATE huatou SET status='待说', said_at=NULL "
+                          "WHERE status='已提' AND said_at IS NOT NULL "
+                          "AND said_at <= datetime('now','localtime', ?)",
+                          ("-%d hours" % _rh,))
+        con.commit()
+        return int(cur.rowcount or 0)
+    except Exception:
+        return -1
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+
+
 def _log(line):
     try:
         with open(LOG, "a", encoding="utf-8") as f:
@@ -314,26 +366,23 @@ def take_huatou(now=None):
     只有一个能改到行，另一个拿 rowcount=0 返回 None（不重复递、不覆盖别人的取件）。"""
     now = now or datetime.now()
     try:
+        # 10-02 修（agent 审查·低）：超时回收原先被关在 outreach_inject 闸内——闸关着就直接
+        #   return，那条 UPDATE 从不执行。此后他若沉默，存量『已提』永久滞留（settle 只在他说话时
+        #   才救）。开关一关一开之间就留下孤儿。修法：回收独立成reclaim_stale()，在闸判之前跑。
+        reclaim_stale()
         if not _cfg("outreach_inject", False):
             return None
         con = _conn()
-        # 10-01 大扫除批⑧：**超时回收**——「已提」的条目若他此后一直没说话，settle 永远不会
-        #   把它还回『待说』（settle 的条件是「他之后又说过话」）→ 那条永久卡在『已提』，
-        #   既不再被取、也不会重提。超过 huatou_reclaim_h 小时 → 还回『待说』。
-        try:
-            _rh = int(float(_cfg("huatou_reclaim_h", 24)))
-            con.execute("UPDATE huatou SET status='待说', said_at=NULL "
-                        "WHERE status='已提' AND said_at IS NOT NULL "
-                        "AND said_at <= datetime('now','localtime', ?)",
-                        ("-%d hours" % _rh,))
-        except Exception:
-            pass
         rows = con.execute(
             "SELECT id, ts, kind, text FROM huatou WHERE status='待说' ORDER BY id").fetchall()
         if not rows:
             con.close()
             return None
-        rid, ts, kind, text = random.choice(rows[:5])
+        _picked = _pick_one(rows)      # 10-02 修：不再 random.choice(rows[:5])——那样 #6 之后永远递不到
+        if _picked is None:
+            con.close()
+            return None
+        rid, ts, kind, text = _picked
         cur = con.execute("UPDATE huatou SET status='已提', said_at=? "
                           "WHERE id=? AND status='待说'",
                           (now.strftime("%F %T"), rid))
@@ -363,7 +412,11 @@ def take_huatou_for_send(now=None):
         if not rows:
             con.close()
             return None
-        rid, ts, kind, text = random.choice(rows[:5])
+        _picked = _pick_one(rows)      # 10-02 修：不再 random.choice(rows[:5])——那样 #6 之后永远递不到
+        if _picked is None:
+            con.close()
+            return None
+        rid, ts, kind, text = _picked
         cur = con.execute("UPDATE huatou SET status='已说', said_at=? "
                           "WHERE id=? AND status='待说'",
                           (now.strftime("%F %T"), rid))
@@ -411,7 +464,10 @@ def shadow_pick(now=None, note=""):
         con.close()
         if not rows:
             return None
-        rid, ts, kind, text = random.choice(rows[:5])   # 老的优先：头部抽——不总是最老，像人
+        _p = _pick_one(rows)         # 10-02 修：同 take_huatou，窗口随存量长（老话仍占优，新话递得到）
+        if _p is None:
+            return None
+        rid, ts, kind, text = _p
         try:
             age_h = (now - datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")).total_seconds() / 3600
         except Exception:

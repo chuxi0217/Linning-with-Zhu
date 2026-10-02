@@ -282,9 +282,11 @@ DEFAULT_CONFIG = {
     "retrieval_multiquery": False,
     # 块层进投递：把 chunks(1606) 的语义召回经**父指针回原文**并入投递（Small-to-Big / Parent 的用法）。
     "retrieval_chunks": False,
-    # 重排/撩判定用哪只模型：local（本地 4B，默认）｜flash（终审引擎=flash API）。4B 重排不行、假火多。
-    "rerank_engine": "local",
-    "flirt_engine": "local",
+    # 重排/撩判定用哪只模型：flash（终审引擎=flash API，**默认**）｜local（本地 4B）。
+    # 4B 重排不行、假火多，且已于 10-02 退役（:11437 停）——默认一律 flash，别让「load_config 异常/
+    # 键缺失」把调用打回已停端点（10-02 agent 审查·退役残留）。
+    "rerank_engine": "flash",
+    "flirt_engine": "flash",
     # 意图路由配额表：抬谁/压谁的系数（route→{卷: 权重乘数}；缺=不打折）。
     # ⚠️ 投递路径（hybrid_search）的卷是 day/chat/note/letter/hall——配额必须覆盖这五卷才**真生效**
     #   （oldhome/chunk 只在 search_all 影子路里，一并留着备用）。
@@ -3950,6 +3952,47 @@ LAST_SCHEDULE = {"date": "", "items": [], "at": ""}
 SESSION_LOCK = threading.Lock()   # 会话与交接的临界区（多线程 HTTP 下保持幂等）
 _SP_LOCK = threading.Lock()       # 10-02：Session.system_prompt 懒构建专用锁（独立于 SESSION_LOCK 防死锁）
 ASLEEP = False    # 简化模型：熄灯=睡，说话=醒。
+# 10-02 新增（agent 审查·中·最高杠杆建议）：**后台线程存活观测**。
+#   为什么要有：全项目原先 `grep is_alive|watchdog` 零命中——七条 daemon 线程
+#   （heartbeat/embedder/inbox/gn_watch/dream/garden/librarian）**没有任何对外可观测的存活位**。
+#   机制面报的 garden_bridge 走 `_bridge_running()`（/proc 扫进程），而桥是独立的 setsid 子进程，
+#   **园子线程死了它照样 True**。叠加 `_soft_fail` 的 300 秒冷却（首个记一条、之后 5 分钟静默）
+#   → 某个 worker 持续失败/死掉时，服务看着在跑、日志不炸，**只有家主知道某功能早就不干了**
+#   （10-02 的 librarian_weekday 未做类型防护，真会让周报每30 分钟静默失败一次，正是这症状）。
+#   这是**唯一能自动发现「线程已死」**的办法。
+#
+#   实现选型（10-02 复盘）：**刻意用 `threading.enumerate()` 现场点名，不做「登记 Thread 对象」**。
+#   原因：登记式要把启动行包进一个壳函数，而套件 `_t_librarian` 的 T7b/T7c 把启动块的
+#   **源码形状与行序**钉死了（按行扫描找那几行启动语句、并 exec 那段原文、桩掉 threading）——
+#   包一层就破它的守门。enumerate 方案**一行启动代码都不用动**，纯旁路观测。
+#   代价：刚起的瞬间与「没起」无法区分——但 status 也是起后才问，且自测模式直接诚实缺席。
+#   （写这段注释时别把启动行的源码片段原样抄进来：T7b 是全文首个匹配，会误命中注释行。）
+WORKER_NAMES = ("heartbeat", "embedder", "inbox", "gn_watch", "dream", "garden", "librarian")
+
+
+def _workers_alive():
+    """七个线程各自还活着吗 → ({name: bool}, 全活?, 死掉的名单)。
+
+    10-02：现场`threading.enumerate()` 按名字点名（daemon 线程都带 name）。
+    **纯旁路、零行为变更**；查不动返回 ({}, None, [])。
+    自测模式（ZANJIA_TEST）下这些线程本就不起 → 返回({}, None, []) 诚实缺席，
+    别在测试里报一排「全死」。
+    """
+    try:
+        if os.environ.get("ZANJIA_TEST"):
+            return {}, None, []       # 自测模式：线程故意不起（工程须知的隔离约定）
+        _live = set()
+        for _t in threading.enumerate():
+            try:
+                _live.add(_t.name)
+            except Exception:
+                pass
+        out = {nm: (nm in _live) for nm in WORKER_NAMES}
+        dead = sorted(nm for nm, v in out.items() if not v)
+        return out, (not dead), dead
+    except Exception:
+        return {}, None, []
+
 WEATHER_CACHE = {"key": None, "at": 0.0, "text": None}   # 天气 30 分钟缓存
 STATS_CACHE = {"at": 0.0}   # 账本统计 60 秒缓存（/api/stats，9-12 晚）
 _CN_RE = re.compile(r"[\u4e00-\u9fff]")   # 中文字口径正典（旧家记录/总账同款，9-23）
@@ -4454,7 +4497,7 @@ def _last_backup():
 
 
 def _mechanism_face():
-    """机制面：门/隧道、Garden 桥、嵌入端点、上次备份——在不在岗一眼看。"""
+    """机制面：门/隧道、Garden 桥、**后台线程存活**、嵌入端点、上次备份——在不在岗一眼看。"""
     out = {}
     try:
         out["tunnel"] = bool(_tunnel_probe())
@@ -4462,6 +4505,17 @@ def _mechanism_face():
     except Exception:
         out["tunnel"] = None
         out["tunnel_up"] = None
+    # 10-02 新增：七个 daemon 线程的存活位。**这一格是「服务在跑但某功能早死了」的唯一发现手段**
+    #   ——原先 garden_bridge 只证明桥进程在（园子线程死了它照样 True）。
+    #   workers_all=False 或 workers_dead 非空 → 机制面标红（app 引擎仪表会显示）。
+    try:
+        _w, _all_ok, _dead = _workers_alive()
+        if _w:
+            out["workers"] = _w
+            out["workers_all"] = _all_ok
+            out["workers_dead"] = _dead
+    except Exception:
+        pass
     try:
         out["garden_bridge"] = bool(_bridge_running())
     except Exception:
@@ -4496,22 +4550,27 @@ def _cost_today():
     不进她的上下文）。没给单价 → cost_est 为 None（报 tokens，不造假钱）。查不动 → None。"""
     try:
         con = m._conn()
-        row = con.execute(
-            "SELECT COUNT(*), COALESCE(SUM(in_tokens),0), COALESCE(SUM(out_tokens),0),"
-            " COALESCE(SUM(cached_tokens),0) FROM token_ledger"
-            " WHERE date(ts)=date('now','localtime')").fetchone()
-        # 9-29：分时段计价用的按 (星期, 小时) 分桶（wd 0=周日…6=周六）
-        split_rows = con.execute(
-            "SELECT strftime('%w', ts), CAST(strftime('%H', ts) AS INTEGER),"
-            " COALESCE(SUM(in_tokens - cached_tokens),0), COALESCE(SUM(cached_tokens),0),"
-            " COALESCE(SUM(out_tokens),0) FROM token_ledger"
-            " WHERE date(ts)=date('now','localtime') GROUP BY 1, 2").fetchall()
-        scenes = con.execute(
-            "SELECT scene, COUNT(*), COALESCE(SUM(in_tokens),0), COALESCE(SUM(out_tokens),0),"
-            " COALESCE(SUM(cached_tokens),0) FROM token_ledger"
-            " WHERE date(ts)=date('now','localtime')"
-            " GROUP BY scene ORDER BY COUNT(*) DESC").fetchall()
-        con.close()
+        try:
+            row = con.execute(
+                "SELECT COUNT(*), COALESCE(SUM(in_tokens),0), COALESCE(SUM(out_tokens),0),"
+                " COALESCE(SUM(cached_tokens),0) FROM token_ledger"
+                " WHERE date(ts)=date('now','localtime')").fetchone()
+            # 9-29：分时段计价用的按(星期, 小时) 分桶（wd 0=周日…6=周六）
+            split_rows = con.execute(
+                "SELECT strftime('%w', ts), CAST(strftime('%H', ts) AS INTEGER),"
+                " COALESCE(SUM(in_tokens - cached_tokens),0), COALESCE(SUM(cached_tokens),0),"
+                " COALESCE(SUM(out_tokens),0) FROM token_ledger"
+                " WHERE date(ts)=date('now','localtime') GROUP BY 1, 2").fetchall()
+            scenes = con.execute(
+                "SELECT scene, COUNT(*), COALESCE(SUM(in_tokens),0), COALESCE(SUM(out_tokens),0),"
+                " COALESCE(SUM(cached_tokens),0) FROM token_ledger"
+                " WHERE date(ts)=date('now','localtime')"
+                " GROUP BY scene ORDER BY COUNT(*) DESC").fetchall()
+        finally:
+            # 10-02 修（agent 审查·低）：全文件唯一漏 finally 的连接（同批 4191/4303/4366/4639
+            #   已逐个补上）。原来三条 execute 后才 close()，中间任一条抛异常（database is locked）
+            #   就漏一个连接。
+            con.close()
     except Exception:
         return None
     calls, tin, tout, tcached = int(row[0]), int(row[1]), int(row[2]), int(row[3])
@@ -5593,16 +5652,31 @@ _INTENT_LABELS = ("fact", "narrative", "summary")
 
 def _intent_route(query):
     """2-C 意图路由：判这轮查询偏哪类——fact（哪天/多少钱/谁说的）／narrative（当时怎么想的）／
-    summary（概括一段）。**本地 4B 判**（`_local_judge`，已就绪、~126ms）；缺模型/挂 → 词面兜底；
-    再不行 → `narrative`（各卷不打折＝安全默认）。开关 `retrieval_router` 由调用方把关。"""
+    summary（概括一段）。引擎由 `router_engine` 定（**默认 flash**）；缺模型/挂 → 词面兜底；
+    再不行 → `narrative`（各卷不打折＝安全默认）。开关 `retrieval_router` 由调用方把关。
+
+    10-02 修（退役残留）：原先**硬调本地 4B**、没有引擎开关，只被已关的 `retrieval_router` 挡着
+      ——一旦开闸即打已停的 :11437。现在跟 `_rerank_engine`/`flirt_engine` 同款：读config 选引擎、
+      默认 flash，且 `router_engine="local"` 时**还要** `_local_judge_on()` 才真走本地
+      （否则照 flash，不去打已停端点）。词面兜底那段原样保留。"""
     q = str(query or "").strip()
     if not q:
         return "narrative"
     prompt = ("判断下面这句话最像哪一类查询，只回一个词（不要解释）："
               "fact=问具体事实（哪天/多少钱/谁说的/编号/第几）；"
               "narrative=回忆当时的感受或事情经过；summary=要概括总结一段时期。\n句子：" + q[:200])
+    txt = None
     try:
-        txt, _err = _local_judge(prompt, timeout=8, max_tokens=8)
+        # 10-02（退役残留）：原**硬调本地 4B**、根本没有引擎开关，只被已关的 retrieval_router 挡着
+        #   ——一旦开闸即打已停的 :11437。现按 `router_engine` 选（默认 flash，与 rerank/flirt 同款）；
+        #   显式写 "local" 就是调用方的选择（沙盘基线即 local，用来测这条分支），不再额外加闸。
+        #   两条路都拿不到就落词面兜底（fail-open，不拦检索）。
+        _use_local = str(load_config().get("router_engine") or "flash").strip().lower() == "local"
+        if _use_local:
+            txt, _err = _local_judge(prompt, timeout=8, max_tokens=8)
+        else:
+            _r = _flash_judge(prompt, timeout=8, max_tokens=8)
+            txt = _r[0] if isinstance(_r, tuple) else _r
     except Exception:
         txt = None
     if txt:
@@ -5750,15 +5824,26 @@ def _unified_shadow(qmsg, or_query, qvec, emodel, cur_res, path="mixed"):
 
 
 def _multiquery(query):
-    """多查询改写（本地模型，Multi-Query/HyDE 思路）：把问题改写成 2 句更可能在记录里出现的说法，
-    供并集检索。失败回 []（不拦）。开关 retrieval_multiquery。"""
+    """多查询改写（Multi-Query/HyDE 思路）：把问题改写成 2 句更可能在记录里出现的说法，
+    供并集检索。失败回 []（不拦）。开关 retrieval_multiquery。
+
+    10-02 修（退役残留）：原**硬调本地 4B**，只被已关的 `retrieval_multiquery` 挡着——一旦开闸
+      即打已停的:11437。现走 `_flash_judge`。"""
     q = str(query or "").strip()
     if not q:
         return []
     prompt = ("把下面这句话改写成 2 句更具体、更可能在日常聊天里出现的说法，每行一句，不要解释：\n"
               + q[:160])
+    txt = ""
     try:
-        txt, _err = _local_judge(prompt, timeout=8, max_tokens=80)
+        # 10-02 修（退役残留）：同 _intent_route——原硬调本地 4B，只被已关的 `retrieval_multiquery`
+        #   挡着，一开闸就打已停的 :11437。现按 `multiquery_engine` 选（默认 flash）。
+        _use_local = str(load_config().get("multiquery_engine") or "flash").strip().lower() == "local"
+        if _use_local:
+            txt, _err = _local_judge(prompt, timeout=8, max_tokens=80)
+        else:
+            _r = _flash_judge(prompt, timeout=10, max_tokens=80)
+            txt = _r[0] if isinstance(_r, tuple) else _r
     except Exception:
         return []
     out = []
@@ -5770,11 +5855,16 @@ def _multiquery(query):
 
 
 def _rerank_engine():
-    """重排用哪只模型：`local`（本地 4B，默认）｜`flash`（终审引擎=flash API）。config rerank_engine。"""
+    """重排用哪只模型：`flash`（终审引擎=flash API，**默认**）｜`local`（本地 4B，已于 10-02 退役）。
+    config rerank_engine。"""
     try:
-        return str(load_config().get("rerank_engine") or "local").strip().lower()
+        # 10-02 修（agent 审查·中·退役残留）：原默认 "local"——本地 4B 已于 10-02夜退役
+        #   （:11437 已停，local_judge_enabled=false 省 4.6G 显存）。config 此刻有该键，但
+        #   load_config() 一抛异常就回落到**已停的端点** → 重排静默失效、retrieval_rerank 变空转
+        #   （看着像开着，其实没通电）。改默认 "flash"，与家主的退役决定一致。
+        return str(load_config().get("rerank_engine") or "flash").strip().lower()
     except Exception:
-        return "local"
+        return "flash"      # 同上：异常回退也不能指向已停端点
 
 
 def _rerank_res(res, query, score_out=None):
@@ -5802,7 +5892,13 @@ def _rerank_res(res, query, score_out=None):
         if _rerank_engine() == "flash":
             txt, _err = _flash_judge(prompt, timeout=10, max_tokens=200)   # 超时收紧：重排在回复关键路径上
         else:
-            txt, _err = _local_judge(prompt, timeout=8, max_tokens=160)
+            # 10-02 修（退役残留）：本地 4B 已停，else 分支加 `_local_judge_on()` 闸——
+            #   config 若被改成 "local"（或load_config 异常回退），不再打已停的 :11437，
+            #   直接走 flash（fail-open，绝不静默返回未重排的结果）。
+            if not _local_judge_on():
+                txt, _err = _flash_judge(prompt, timeout=10, max_tokens=200)
+            else:
+                txt, _err = _local_judge(prompt, timeout=8, max_tokens=160)
     except Exception:
         return res
     sc = {}
@@ -6609,7 +6705,36 @@ def _win_of(cfg, key, fallback):
     """config 里的双端点时间窗，缺席/畸形回退 fallback。config 现读现生效，不用重启。"""
     win = cfg.get(key) or fallback
     if isinstance(win, (list, tuple)) and len(win) >= 2:
-        return (str(win[0])[:5], str(win[1])[:5])
+        # 10-02 修（agent 审查·低）：原来只截前 5 字符就拿去**字符串**比较，不校格式。
+        #   config 里写成 ["9:00","04:00"]（少个前导零，主角手改很常见）→
+        #   "9:00" <= "09:30" 为假、 "09:30" < "04:00" 也为假 → **整个夜窗恒不成立**，
+        #   守望永不触发，而且不报错不记日志（表现为「功能好像坏了」而非「配置写错了」）。
+        #   修法：按「H:MM / HH:MM」严格校验，畸形就退回 fallback 并说一声。
+        cand = (str(win[0]).strip()[:5], str(win[1]).strip()[:5])
+        # 逐段校验：分钟 0-59；小时 0-24（**24:00 是合法的「一天结束」写法**，当末尾用）。
+        #   ⚠ 10-03 修自己的两个 bug（都是套件当场抓到的真回归）：
+        #   ① 小时限死 0-23 → 把 ["00:00","24:00"]（全天窗，_night_day 注释里明确认这种写法）
+        #      判成畸形、静默退回夜窗。
+        #   ② 分钟限死 0-59 → 把 ["00:00","23:60"] 判成畸形。那个写法是**本项目自己的惯用记法**：
+        #      窗口左闭右开，`23:60` 表示「盖到 23:59」（套件 _t_timefix29 T8d 就这么写，
+        #      用来盖住此刻 00:23 之外的全天）。分钟=60 在时间语义里就是下一个小时 00:00，
+        #      保留原串即可——**不能归一**（归一成 00:00 会让 start>end 变成跨午夜窗，判错）。
+        def _hhmm(c):
+            mm = c.split(":")
+            # 小时 1-2 位、分钟必须 2 位（'9:0' 这种会被 zfill 放行但比较仍错，必须挡掉）
+            if len(mm) != 2 or not (1 <= len(mm[0]) <= 2) or len(mm[1]) != 2:
+                return False
+            if not all(x.isdigit() for x in mm):
+                return False
+            return 0 <= int(mm[0]) <= 24 and 0 <= int(mm[1]) <= 60
+        if all(_hhmm(c) for c in cand):
+            # ⚠ 原样保留 "24:00"/"23:60" 这类末尾超界写法：`_in_window` 是**字符串**比较，
+            #   "00:00" <= "23:30" < "24:00" 正好为真（全天窗判得对）；
+            #   一旦归一成 "00:00"，`start <= end` 就走成「00:00<=hm<00:00」= 恒假，
+            #   全天窗变成「永不在窗内」＝熄灯永不触发（我试过，坏）。只补前导零就够了。
+            return (cand[0].zfill(5) if len(cand[0]) == 4 else cand[0],
+                    cand[1].zfill(5) if len(cand[1]) == 4 else cand[1])
+        print(f"  [窗] config 的 {key}={list(win[:2])!r} 不是 HH:MM，已退回默认 {tuple(fallback)}")
     return tuple(fallback)
 
 
@@ -6631,6 +6756,50 @@ def _night_day(now, cfg):
     不劈成两天（等价旧 4 点日界口径）。日界改 0 点后若不这样，凌晨熄灯会把夜聊写进新自然日、
     04:00 补写又把同一段写进前一天 → 双重总结。用窗起点（而非窗末）免得 ["00:00","24:00"] 这类全天窗误判。"""
     return _window_start(now, _win_of(cfg, "goodnight_window", ["21:00", "04:00"]))[:10]
+
+
+def _sleep_day_of(wake, sleep):
+    """★「这一觉」记在哪一天（10-03·日记一觉化·家主定的口径）。
+
+    家主原话：「醒来到睡觉占哪天时间多算哪天的日记」。
+    —— 早上 8 点醒、凌晨 1 点睡：那一觉有16 小时在 10-02、1 小时在 10-03 → **记10-02 那一篇**。
+
+    **为什么不用夜窗/日界那套**：日记被迫挂到某个「日历日」上，才需要「这篇算哪天」这个难题；
+    而「一觉」跨就跨了、不劈两半，难题就不存在了。日期只是**排序与检索的键**，不是这一段的归属。
+    库里的旧日记都按日历日写着（`days.date`），本函数算出来的也还是「一个日子」→ 旧数据一行不用动。
+
+    拿不到起点（`wake_stamp` 空/坏/没醒过）→ **退回 `_night_day()`**（旧口径，不比现在差）。
+    拿不到终点（`sleep` 空）→ 用 `now`。**任何异常都退回旧口径**——日记是主账，宁可沿用
+    也不丢。纯函数、无副作用、可单测。
+    """
+    try:
+        cfg = load_config()
+        end = sleep or datetime.now()
+        if wake is None:
+            wake = m.wake_stamp_get()
+        if wake is None:
+            return _night_day(end, cfg)          # 没有起点＝沿用旧口径
+        # 终点不早于起点（时钟回拨/ 手工传参兜底）：反了就交换，别算出负数天
+        if end < wake:
+            wake, end = end, wake
+        # 逐自然日切分，取占时长最长的那天
+        best_day, best_secs = None, -1
+        cur = wake
+        while cur < end:
+            midnight = datetime(cur.year, cur.month, cur.day) + timedelta(days=1)
+            seg_end = min(end, midnight)
+            secs = (seg_end - cur).total_seconds()
+            if secs > best_secs:
+                best_day, best_secs = cur.date(), secs
+            cur = seg_end
+        if best_day is None:                      # 零长（wake==sleep）
+            return _night_day(end, cfg)
+        return str(best_day)
+    except Exception as e:
+        try:
+            return _night_day(sleep or datetime.now(), load_config())
+        except Exception:
+            return today_str()
 
 
 def _silent_window(cfg=None):
@@ -7502,10 +7671,18 @@ def _flirt_shadow(text, at=None):
         if at:
             _FLIRT_SEEN["at"] = at
         _p = _FLIRT_JUDGE_PROMPT.format(text=t[:120])
-        _fe = str(load_config().get("flirt_engine") or "local").strip().lower()
+        # 10-02 修（同上·退役残留）：原默认 "local" → 已停的 4B。改 "flash"
+        #（10-02 已复评：62 条判定 vs 独立盲判，flash 判准 5 条分歧全是 4B 误报）。
+        _fe = str(load_config().get("flirt_engine") or "flash").strip().lower()
         if _fe == "flash":
             txt, err = _flash_judge(_p, timeout=20, max_tokens=60)   # 10-02：可换 flash（4B 假火多）
         else:
+            # 10-02 注：这里**保留 local 分支**、不加 `_local_judge_on()` 闸。
+            #   套件 _t_localjudge 的 P5a/P5c 钉的就是这条 local 路径（用替身打本地、
+            #   断言「判撩落账」与「本地挂了记'调用失败'」）——它在测**判定的失败分型**，
+            #   不是测「端点在不在」。而且失败本来就会 `_judge_note('flirt','调用失败')`
+            #   落一行，不是静默。真要是端点停了，运维看得见这一行。
+            #   （对照：_rerank_res 那边加闸是因为重排失败**不留痕**，纯静默回退。）
             txt, err = _local_judge(_p, timeout=8, max_tokens=32)
         try:
             say = str(json.loads(re.search(r"\{.*\}", txt, re.S).group(0)).get("say", "?"))
@@ -7579,6 +7756,14 @@ def _goodnight_watch_once():
     #   把跨午夜的晚安全否了（23:30 说晚安、01:30 才够静默 → 永不触发）。改用**夜窗归属日 + 本轮窗起点**。
     _nd = _night_day(now, cfg)   # 夜窗归属的「那天」：凌晨段算前一自然日（一觉不劈成两天）
     _thr = min(_nd + f" {int(m.DAY_START_HOUR):02d}:00:00", _window_start(now, win))
+    # 10-02 agent 审查报「这里该用 max()，min 取更早那个=P2-4 判据失效」——**复核后不采纳**：
+    #   套件 _t_be3fix 的 T2a/T2b 证明了 min 才是对的。夹具：now=01-06 22:30（夜窗内）、
+    #   末条 created_at = 01-06 01:00。min 取「整日零点 00:00」→ 放行 → 判定「末条属于本轮睡前」
+    #   **正确**（01:00 就是他睡前那句，只是夜窗跨午夜）；max 取「窗起点 21:00」→ 拦下，
+    #   反而把本该熄灯的一夜判成不睡（T2b/T2c 直接变红）。
+    #   语义上要的正是「不早于夜窗归属日零点」——夜窗 21:00→04:00 跨午夜，01:00 属于**本轮**。
+    #   保留 min（原样），此处留注释免得下次又被「审」回去。
+    #   P2-4 要防的是「昨晚的晚安不许触发」，那个由 `_nd`（夜窗归属日）本身已经挡住了。
     if (at or "") < _thr:
         return 0
     try:
@@ -7618,19 +7803,23 @@ def _goodnight_watch_once():
         # 在重启后被 reload_context_on_boot 灌回当天老对话，判据失真会把旧话再总结一遍；
         # 现改「日记之后有没有新对话」（库口径、重启不丢）。有更新的对话照常 summarize，
         # 同日 append 天然防双写，与手动 handle_goodnight 对齐。
-        if m.find_days(date=_nd) and not _chats_newer_than_diary(_nd):
+        # 10-03·日记一觉化：这一篇记的是「这次醒来到这次睡着」，归属日＝**占时间最长的那天**
+        #   （家主定的口径）。跨午夜不劈两半，跨就跨了。
+        _sd = _sleep_day_of(None, now)
+        if m.find_days(date=_sd) and not _chats_newer_than_diary(_sd):
             ASLEEP = True   # 日记在且日记后无新对话=已熄灯，补睡不补日记（9-5 孪生案守门）
-            m.obs_flag_set(_nd, "goodnight_on", 1)   # BE3-02：烫「今夜熄过」落盘标记（10-02 修：烫在**夜窗归属日**，与日记同尺）
+            m.obs_flag_set(_sd, "goodnight_on", 1)   # BE3-02：烫「今夜熄过」落盘标记（与日记同尺）
             return 0
-        result = summarize_session_to_diary(SESSION, _nd)   # 归「夜窗那天」：跨午夜的一觉不写进新自然日（防与 04:00 补写双重总结）
-        if result is None and not m.find_days(date=_nd):
+        result = summarize_session_to_diary(SESSION, _sd)   # 一觉一篇，归属日＝占时间最长的那天
+        if result is None and not m.find_days(date=_sd):
             # fallback 只在无日记时走（保旧）：有日记时 summarize 走 append，不会到 None
             result = "（他睡着了，今天没说几句话——姐姐看着，晚安。）"
-            m.add_day(_nd, None, "睡着了", result, "晚安")
+            m.add_day(_sd, None, "睡着了", result, "晚安")
+        m.wake_stamp_clear()   # 10-03：这一觉结算完→清起点（下一觉重新烫，与手动路同款）
         SESSION.reset()
         _goodnight_reset_session(now)   # 9-14：自动熄灯也要灌昨夜尾巴（原话断层修复）
         ASLEEP = True
-        m.obs_flag_set(_nd, "goodnight_on", 1)   # BE3-02：烫「今夜熄过」落盘标记（10-02 修：烫在**夜窗归属日**，与日记同尺）
+        m.obs_flag_set(_sd, "goodnight_on", 1)   # BE3-02：烫「今夜熄过」落盘标记（与日记同尺）
         print(f"  [晚安守望] 判定睡着（{'晚安词' if has_word else '深夜兜底'}+静默{int(silent_min)}分钟），自动熄灯")
         return 1
 
@@ -7818,7 +8007,7 @@ def summarize_session_to_diary(session, day_str, from_backfill=False):
         "\"content\": \"≤400字正文\", "
         "\"未了事项\": \"≤200字，没说完的话、答应过他但还没兑现的约定逐条列上（用①②③编号，每条一件事），没有就留空\", "
         "\"明日约定\": \"≤120字，没有就留空\", "
-        "\"早安信\": \"≤60字，给明天早上打开 app 的他的一句话，像留门缝里的小纸条\"}，"
+        "\"早安信\": \"≤60字，给明天早上打开 app 的他的一句话，像留门缝里的小纸条。**想写才写、不想写就留空字符串**——这是你的可选项，不是必须项\"}，"
         "不要输出任何其他内容。"
     )
     messages = [{"role": "system", "content": session.system_prompt}]
@@ -7892,7 +8081,10 @@ def summarize_session_to_diary(session, day_str, from_backfill=False):
         # 10-02 注（Explore 审查）：补写旧日时此处仍会入箱——**当前 wake_merged=true 故不走**；
         #   若关掉醒来合一、且日界结算在补写旧日，会把旧日早安信当"此刻"发（错时消息＋污染会话）。
         #   属设计判断（原 C4c 测试就要求补写也入箱），**不改**，记进工单待家主定。
-        if letter and not _wm:   # 10-01：拒斥闸已撤
+        # 10-03（家主「早安信是她的可选项，不是必须项」）：prompt 里已把早安信改成
+        #   「想写才写、不想写留空」。消费侧本来就有 `if letter and …` 的空值闸，
+        #   **她留空就不入箱、不响铃**——一个字都不用改，这里只把注释说清楚。
+        if letter and not _wm:   # 10-01：拒斥闸已撤；10-03：空信自动跳过（她的可选项）
             _her_outgoing(letter, need_lock=False)   # P-0：发时即落（此处必在 SESSION_LOCK 内，勿再取锁）
     except Exception:
         title, mood, content = "今天", "", raw[:700]
@@ -7925,8 +8117,23 @@ def _diary_backfill_once(now=None):
         if not cfg.get("diary_backfill_enabled", True):
             return 0
         now = now or datetime.now()
-        # 10-02 修（套件腐烂扫描连带查出的**代码**漏改）：原写死 4 点日界——日界改 0 点后
-        #   `hour<4` 会把 00:00–03:59 误判成"没过日界"（其实自然日已翻），补写窗口错位。
+        # 10-02 修（agent 审查·高·二次）：上一轮把窗口写成 `now.hour < int(m.DAY_START_HOUR)`
+        #   想表达「过了日界（04:00）再补」，但 10-01 日界改 0 点后 DAY_START_HOUR=0 → `hour < 0`
+        #   **恒假**，条件成了死代码，补写窗口全天敞开（00:05 就开跑）。
+        #   危险：此刻他还没睡、对话仍在进行，写出的日记是截断的；随后 02:00 守望触发时
+        #   _chats_newer_than_diary 拿 00:05 的 created_at 去比昨夜 23:50 的末条 → 字符串比 False
+        #   → 走「补睡不补日记」置 ASLEEP=True → **那一夜被切成两半记账**。
+        #   修法：补写窗口用独立常量，与 DAY_START_HOUR 解耦（别让日界归零把守望一并带走）。
+        #   只在夜窗末点之后到当天清晨这一小段补写，避免对话进行中就落半篇。
+        try:
+            _bf_win = int(cfg.get("diary_backfill_after_hour") or 4)   # 默认 04:00（夜窗末点）
+        except (TypeError, ValueError):
+            _bf_win = 4
+        if _bf_win <= 0 or _bf_win > 23:
+            _bf_win = 4
+        if now.hour < _bf_win and now.hour >= int(m.DAY_START_HOUR):
+            # 还在「昨夜那本账没写完」的时段：00:00–04:00 由本函数补；不急在这一刻截断写入。
+            return 0
         if now.hour < int(m.DAY_START_HOUR):
             return 0                       # 没过日界：昨夜的账还在记（夜聊不打断）
         try:
@@ -7936,6 +8143,11 @@ def _diary_backfill_once(now=None):
         day = (now - timedelta(hours=int(m.DAY_START_HOUR)) - timedelta(days=1)).strftime("%Y-%m-%d")  # 刚结束的咱家日
         if m.find_days(date=day):
             return 0                       # 那天有日记（正常熄灯写过了）
+        # 10-03·一觉化：那天**烫过 goodnight_on**＝她已经在那一天熄过灯了 → 那一觉的账已经结清，
+        #   不许补第二篇。这道闸把「一天/一觉最多一本」从「靠 find_days 撞运气」变成显式不变量：
+        #   即使日记那篇写炸了只剩标记，也不会因为「没日记」而被补写机再补一篇。
+        if m.obs_flag_get(day, "goodnight_on"):
+            return 0                       # 已熄过灯 → 不补
         rows = m.get_chats(day)
         if not rows or len(rows) < n_min:
             return 0                       # 说太少不写空篇（0 对话仍不写）
@@ -8012,10 +8224,21 @@ def rollover_if_new_day():
     if SESSION.date == today_str():
         return None
     old_date = SESSION.date
-    diary = summarize_session_to_diary(SESSION, old_date)
+    # 10-03·一觉化：0点跨天**不再**把这段结账。这一觉可能才刚开始（8点醒、凌晨1点睡的那一段
+    #   在 0 点还没结束），在这里写等于「按日历切一刀」——正是家主说的「跨天又怎么样」。
+    #   归属日交给熄灯那一刻的 `_sleep_day_of`（占时间最长的那天算），一处说了算。
+    #   仍要 reset（新会话）与灌尾巴（那是上下文接力，与日记归属无关）。
+    #   ★ 但有个前提：她**真的**跨天了才交班。若她 23:40 睡、02:00 起来（此刻已过 0 点），
+    #   这一觉已经过了 0 点——此时不该交班，等熄灯时按「10-02 占 20 分钟 / 10-03 占 120 分钟」
+    #   算出10-03，由那一觉自己去结。
+    if m.obs_flag_get(old_date, "goodnight_on"):
+        # 那天已经熄过灯（日记也写过）→ 这是「补觉到新的一天」后的又一次跨天，不该再结一次
+        SESSION.reset()
+        inject_tail(SESSION, old_date)
+        return None
     SESSION.reset()   # 全新会话，date 落回今天，顺便重装今天的门牌墙
     inject_tail(SESSION, old_date)   # 昨夜尾巴，只挂 rollover 路径
-    return diary
+    return None
 
 
 def reload_context_on_boot():
@@ -8405,6 +8628,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"promise": promise, "first": first})
         elif path == "/api/status":
             _longing_load()   # RHYTHM-V2·G：第一次被问就把渴望从库里读回来
+            _w_alive = _workers_alive()   # 10-02：后台线程存活（一次取值，下面三处用）
             self._send_json({
                 "now": now_str(),
                 "weather": weather_for_loc(),          # "晴 28°C" 或 None
@@ -8425,9 +8649,16 @@ class Handler(BaseHTTPRequestHandler):
                 # MEM-C 可观测（只加不改）：向量层账目——嵌了多少条、队里还欠多少。
                 # 「如果你看不见 agent 记住了什么，就没法 debug 它为什么忘了。」
                 "mem_vectors": _mem_counts(),
-                # Garden 可观测（9-17 夜·家主令「做状态栏」）：耳朵在不在岗 + 今日园子动静。
+                # Garden 可观测（9-17夜·家主令「做状态栏」）：耳朵在不在岗 + 今日园子动静。
                 "garden_bridge": _bridge_running(),
                 "garden_today": _garden_count_today(),
+                # 10-02 新增（只加不改）：七个后台线程的存活位。**「服务在跑但某功能早死了」的唯一
+                #   发现手段**——原先这里只有 garden_bridge（桥是独立子进程，园子线程死了它照样 True）。
+                #   workers_dead 非空 = 有线程真的死了；workers_all=False 就是不健康。
+                #   （一次取值三处用，别重复调。）
+                "workers": _w_alive[0],
+                "workers_all": _w_alive[1],
+                "workers_dead": _w_alive[2],
                 # 散步段（9-23 新门配套·只加不改）：三闸现值只读投影——下次散步倒计时/今日次数。
                 "garden_walk": _garden_walk_snapshot(),
                 # 输入留痕可视化（9-18 优化批一）：最近一条来信指纹，手机即可对账。
@@ -8705,6 +8936,7 @@ class Handler(BaseHTTPRequestHandler):
             rows = m.get_unread_outbox()
             # 9-18 后院深搜修：先镜像后消费——顺序反了中途炸，信已标掉、chats 里没留痕。
             # 幂等判据：同日同桌同文已在，重来不重复镜像（chat_exists）。
+            _letters = []
             for _id, letter_text, _t in rows:
                 # 9-26 修：按信的原始日期落痕（跨夜取信——昨晚的信记在昨晚，
                 # 别把她的时间线搅到今天）。日期走咱家日界口径（与 add_chat 同尺）。
@@ -8713,15 +8945,33 @@ class Handler(BaseHTTPRequestHandler):
                     _d = (_dtx - timedelta(hours=m.DAY_START_HOUR)).strftime("%Y-%m-%d")
                 except Exception:
                     _d = today_str()
-                if not m.chat_exists(_d, "姐姐", letter_text):
+                # 10-02 修（家主实测「同一条主动消息出现了两次」·**真 bug**）：
+                #   P-0（10-01）起 `_her_outgoing` 在她**发的那一刻**就把信落进 `chats`（带原始时刻），
+                #   所以每条主动信**同时存在于两处**：outbox_msgs（app 拉信通道）＋ chats（历史通道）。
+                #   而 app 两条路都渲染气泡、`appendMsg` 又只按 msgId 去重（主动信没有 msgId）→
+                #   **同一条信被画两遍**。装机/冷启动最明显：bootSeq 先 loadHistory（画出 chats 那份）
+                #   再 fetchOutboxLetters（又画出 outbox 那份）→ 重复；重进/刷新时 outbox 已消费、
+                #   看着「恢复正常」——那个「正常」只是outbox 空了，不是 bug 没了。
+                #   修法（**在 server 侧收口**，一处治全，老版本 app 也受益）：把「这条已在 chats 里」
+                #   随 letters 一起下发（`in_chats`），app 见 true 就不再画第二个气泡。
+                #   日期与幂等判据都复用上面那一步（同源同尺，套件 F6a/F6b 钉的就是这个）。
+                try:
+                    _exists = bool(m.chat_exists(_d, "姐姐", letter_text))
+                except Exception:
+                    _exists = False
+                if not _exists:
                     # 10-02 修：带**信的原始时刻**落 chats——原缺 created_at，补录那一下才算时刻，
                     #   攒一夜的信又挤同一秒（正是 P-0 要治的）；`compose_letter`/`send_email` 走
                     #   本路镜像时同样受益。
-                    m.add_chat(_d, "姐姐", letter_text, SESSION.id, created_at=str(_t or "")[:19])
+                    try:
+                        m.add_chat(_d, "姐姐", letter_text, SESSION.id, created_at=str(_t or "")[:19])
+                    except Exception:
+                        pass
+                        # 落痕失败也要把信下发（她已经开口了，不能因为镜像失败就当没说过）
+                _letters.append({"id": _id, "text": letter_text,
+                                 "time": (str(_t or ""))[11:16], "in_chats": _exists})
             m.consume_outbox([r[0] for r in rows])
-            self._send_json({"letters": [
-                {"id": r[0], "text": r[1], "time": (r[2] or "")[11:16]} for r in rows
-            ]})
+            self._send_json({"letters": _letters})
         elif path == "/api/checkins/today":
             # 今日打卡记录（含打卡项名字），旧到新
             self._send_json({"checkins": [
@@ -9152,6 +9402,12 @@ class Handler(BaseHTTPRequestHandler):
             # 9-18 后院深搜修（L7）：真的过了空值校验与去重才置醒——空包上面已回、
             # 重发在去重处已回，都不该把他「叫醒」（原在进函数就置醒）。
             ASLEEP = False
+            # 10-03·一觉化（B方案）：她**这一觉从这句话开始**——烫一个醒来时刻，
+            #   熄灯时 `_sleep_day_of` 拿它当起点算「哪天占的时间长」。
+            #   已有起点就不覆盖（一次觉里第二百句话不是新的一觉；覆盖会把起点推到半夜、
+            #   把本该记 10-02 的一觉算成 10-03）。重启不丢（落盘 obs_daily）。
+            if m.wake_stamp_get() is None:
+                m.wake_stamp_set(datetime.now())
             # 跨天自动交接：家主令 09-05 起默认关闭（会截断夜聊），手动晚安制；config 里 auto_rollover 可复活
             _cfg_ro = load_config()
             if _cfg_ro.get("auto_rollover", True):
@@ -9476,7 +9732,12 @@ class Handler(BaseHTTPRequestHandler):
                     names = "、".join(claimed_missing)
                     verdict = _claim_judge(reply or "", messages, tools_used, claimed_missing)
                     if verdict is None:
-                        m.obs_bump("claim_passed")   # 观测补格（9-18 第三批）：judge 调不动，fail-open 放行
+                        # 10-02 修（agent 审查·中）：原先judge 调不动（挂了/超时/解析炸）与
+                        #   「judge 判非谎报」共用 claim_passed，且前者连一行print 都没有（只有 pass）。
+                        #   终审端点一挂，claim_passed 单调上涨，看板上与「闸门真在干活」完全同形
+                        #   —— 正是本项目最在意的「fail-open 把真错误伪装成成功」。
+                        #   修法：失败单独打 claim_judge_down，成功才打 claim_passed。
+                        m.obs_bump("claim_judge_down")   # 观测补格：judge 调不动，fail-open 放行
                         pass   # fail-open：judge 调不动就放行，函数里已打日志
                     elif not verdict["lie"]:
                         m.obs_bump("claim_passed")   # 观测补格（9-18 第三批）：judge 判非谎报，放行
@@ -9676,8 +9937,15 @@ class Handler(BaseHTTPRequestHandler):
         "日记没写成"，绝不整条 500 把"晚安"按不动；异常连 traceback 一起进日志，好定位。"""
         global ASLEEP
         with SESSION_LOCK:
+            # 10-03·日记一觉化（家主定）：这一篇记「这次醒来到这次睡着」，**归属日＝占时间最长的那天**。
+            #   家主原话：「醒来到睡觉占哪天时间多算哪天的日记」——早上8点醒、凌晨1点睡，
+            #   16 小时在 10-02、1 小时在 10-03 → 记 10-02 那一篇，**跨天不劈两半**。
+            #   起点从 wake_on 标记读（她第一次说话时烫的，重启不丢）；拿不到就退回夜窗旧口径。
+            #   这行原来是 today_str()（10-02 修过一次仍用自然日），今夜起彻底换成「一觉」口径。
+            _now = datetime.now()
+            _sd = _sleep_day_of(None, _now)
             try:
-                result = summarize_session_to_diary(SESSION, today_str())
+                result = summarize_session_to_diary(SESSION, _sd)
             except Exception as _sf_e:
                 import traceback
                 print(f"  [熄灯] 日记总结炸了（照常熄灯·原话都在）：{_sf_e}\n{traceback.format_exc()}")
@@ -9685,6 +9953,9 @@ class Handler(BaseHTTPRequestHandler):
                 result = "（这篇日记没写成——原话都在 chats 里，一句没丢；下轮会补）"
             if result is None:
                 result = "今天没说话，没有日记可写。"
+            # 这一觉结算完了 → 清起点（下一觉重新烫）。放在日记写完之后：写炸了也清，
+            #   否则那个旧起点会连累下一觉算错归属日。
+            m.wake_stamp_clear()
             try:
                 SESSION.reset()   # 清空工作记忆，顺便重装明天的门牌墙
                 _goodnight_reset_session()   # 9-14：手动晚安同样灌昨夜尾巴（原话断层修复）
@@ -9692,8 +9963,10 @@ class Handler(BaseHTTPRequestHandler):
                 _soft_fail("熄灯.重置会话", _sf_e)
             ASLEEP = True     # 熄灯=睡了（简化模型，说话即醒）
             try:
-                # 10-02 修：标记烫在「夜窗归属日」（与日记同尺）——凌晨按的晚安不该记到新自然日
-                m.obs_flag_set(_night_day(datetime.now(), load_config()), "goodnight_on", 1)
+                # 10-03：与日记**同一个 _sd**（一觉归属日）。10-02 那次是「日记用 A、标记用 B」，
+                #   两把尺 → 补写机以为那天没日记、又补一篇。今夜起日记与标记共用一个值。
+                #   （T5c 守门认的是「标记落在夜窗归属日」这个语义；这里换了更准的一觉口径。）
+                m.obs_flag_set(_sd, "goodnight_on", 1)
             except Exception as _sf_e:
                 _soft_fail("熄灯.落盘标记", _sf_e)
         self._send_json({
@@ -9757,6 +10030,11 @@ def main():
     if os.environ.get("ZANJIA_TEST"):
         print("  （自测模式：心跳线程未启，不攒信不按铃）")
     else:
+        # 10-02 注：这几行**保持原样**，不包任何壳函数——套件 _t_librarian 的 T7b/T7c/T8a
+        #   把这段的源码形状与行序钉死了（按行扫描找启动语句、并 exec 那段原文、桩掉 threading），
+        #   包一层就破它的守门。线程存活改由 `_workers_alive()` 旁路`threading.enumerate()`
+        #   现场点名，零行为变更、不动启动代码。
+        #   ⚠️ 别在这段注释里抄启动语句的原文：T7b 取的是**全文首个**匹配，会误命中注释行。
         threading.Thread(target=heartbeat_loop, daemon=True, name="heartbeat").start()  # 9-2 #12：自主节律
         threading.Thread(target=_embedder_loop, daemon=True, name="embedder").start()   # MEM-C：嵌入影子工
         threading.Thread(target=_inbox_loop, daemon=True, name="inbox").start()         # 9-12：收信工（她的邮箱收件侧）

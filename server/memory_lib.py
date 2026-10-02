@@ -2280,6 +2280,64 @@ def obs_flag_set(day, name, val=1):
         return None
 
 
+def wake_stamp_set(when=None):
+    """★ 落「这一觉醒来的时刻」（10-03·日记一觉化 B 方案）。
+
+    为什么要有：日记改成「**一觉一篇**」——这一篇记的是「这次醒来到这次睡着」，
+    跨天就跨了、不劈两半。那归属日得知道**这一觉从几点开始**，否则无从判断「哪天占的时间长」。
+    SESSION.date 不够用：重启就重置，起点会丢。
+
+    存法：借`obs_daily` 的 (day, name) upsert，**n 存 epoch 秒**（INTEGER 装得下2038 年前），
+    **零新表**（只加不改的家规）。键 `wake_at`：0/1 那套 obs_flag 装不下时刻，这是同一个表
+    家族的第二个形状——`goodnight_on` 存 0/1、这个存秒，都只是「按天的小账」。
+    拿不到/查不动 →回 0（家风：查不动＝没这个事实，调用方自己兜）。
+    """
+    try:
+        epoch = int(datetime.now().timestamp()) if when is None else int(when.timestamp())
+        conn = _conn()
+        c = conn.cursor()
+        c.execute("INSERT INTO obs_daily (day, name, n) VALUES (?, 'wake_at', ?) "
+                  "ON CONFLICT(day, name) DO UPDATE SET n = excluded.n",
+                  (house_today_str(), epoch))   # day 列必填（本表的 PK 之一），
+                  # 但读侧只按 name 取、不按 day 取，所以给什么天都不影响语义
+        conn.commit()
+        conn.close()
+        return epoch
+    except Exception as e:
+        print(f"  [标记] 醒来时刻落盘失手：{e}")
+        return 0
+
+
+def wake_stamp_get():
+    """读「这一觉醒来的时刻」→ datetime|None。查不到/坏了回 None（调用方退回旧口径）。"""
+    try:
+        conn = _conn()
+        c = conn.cursor()
+        row = c.execute("SELECT n FROM obs_daily WHERE name='wake_at' LIMIT 1").fetchone()
+        conn.close()
+        if not row or int(row[0]) <= 0:
+            return None
+        return datetime.fromtimestamp(int(row[0]))
+    except Exception as e:
+        print(f"  [标记] 醒来时刻读取失手：{e}")
+        return None
+
+
+def wake_stamp_clear():
+    """结算完一觉就清起点（否则下一觉会拿旧的当起点，跨了两觉）。返回清掉的 epoch（0=本来就没有）。"""
+    try:
+        conn = _conn()
+        c = conn.cursor()
+        row = c.execute("SELECT n FROM obs_daily WHERE name='wake_at' LIMIT 1").fetchone()
+        c.execute("DELETE FROM obs_daily WHERE name='wake_at'")
+        conn.commit()
+        conn.close()
+        return int(row[0]) if row else 0
+    except Exception as e:
+        print(f"  [标记] 醒来时刻清理失手：{e}")
+        return 0
+
+
 def obs_flag_get(day, name):
     """读一个按天落盘标记；没有/查不动回 0（照「查不动=没这个事实」家风）。"""
     try:
