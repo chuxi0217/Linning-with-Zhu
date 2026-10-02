@@ -7397,11 +7397,19 @@ def _asleep_restore_on_boot():
     """重启不丢「今夜熄过灯」（BE3-02，9-23 修复批）。ASLEEP 原只有内存态：熄灯后重启，
     她以为他还醒着——23:00–01:00（静默窗之外的夜段）可能再攒信/按铃。
     熄灯两条路（手动晚安/晚安守望）各烫一个 obs_daily('goodnight_on') 落盘标记，
-    这里是读侧：开机读咱家今天的标记，有=ASLEEP True。跨了咱家日（现在＝自然日）自然失效；他开口说话
-    handle_chat 照旧置醒。查不动保持 False（照旧行为，绝不拦开机）。"""
+    这里是读侧。★ 10-02 修（真 bug，家主实测"傍晚显示睡了"）：**只在夜窗内才恢复**——
+    原先无条件读"今天"的标记，可凌晨那次熄灯会把标记烫在今天（见 _night_day 注释），
+    于是白天/傍晚任何一次重启都把她恢复成"睡着"（他 20:08 看到"睡了"就是这个）。
+    白天一律 False（他开口说话 handle_chat 照旧置醒）。查不动保持 False（照旧行为，绝不拦开机）。"""
     global ASLEEP
     try:
-        ASLEEP = bool(m.obs_flag_get(m.house_today_str(), "goodnight_on"))
+        cfg = load_config()
+        now = datetime.now()
+        if not _in_window(now.strftime("%H:%M"), _win_of(cfg, "goodnight_window", ["21:00", "04:00"])):
+            ASLEEP = False
+            return ASLEEP
+        # 夜窗内：读**本轮夜归属日**的标记（凌晨配前一日，与日记同一把尺）
+        ASLEEP = bool(m.obs_flag_get(_night_day(now, cfg), "goodnight_on"))
     except Exception:
         ASLEEP = False
     return ASLEEP
@@ -7612,7 +7620,7 @@ def _goodnight_watch_once():
         # 同日 append 天然防双写，与手动 handle_goodnight 对齐。
         if m.find_days(date=_nd) and not _chats_newer_than_diary(_nd):
             ASLEEP = True   # 日记在且日记后无新对话=已熄灯，补睡不补日记（9-5 孪生案守门）
-            m.obs_flag_set(m.house_today_str(), "goodnight_on", 1)   # BE3-02：烫「今夜熄过」落盘标记（开机恢复 ASLEEP 用）
+            m.obs_flag_set(_nd, "goodnight_on", 1)   # BE3-02：烫「今夜熄过」落盘标记（10-02 修：烫在**夜窗归属日**，与日记同尺）
             return 0
         result = summarize_session_to_diary(SESSION, _nd)   # 归「夜窗那天」：跨午夜的一觉不写进新自然日（防与 04:00 补写双重总结）
         if result is None and not m.find_days(date=_nd):
@@ -7622,7 +7630,7 @@ def _goodnight_watch_once():
         SESSION.reset()
         _goodnight_reset_session(now)   # 9-14：自动熄灯也要灌昨夜尾巴（原话断层修复）
         ASLEEP = True
-        m.obs_flag_set(m.house_today_str(), "goodnight_on", 1)   # BE3-02：烫「今夜熄过」落盘标记（开机恢复 ASLEEP 用）
+        m.obs_flag_set(_nd, "goodnight_on", 1)   # BE3-02：烫「今夜熄过」落盘标记（10-02 修：烫在**夜窗归属日**，与日记同尺）
         print(f"  [晚安守望] 判定睡着（{'晚安词' if has_word else '深夜兜底'}+静默{int(silent_min)}分钟），自动熄灯")
         return 1
 
@@ -9684,7 +9692,8 @@ class Handler(BaseHTTPRequestHandler):
                 _soft_fail("熄灯.重置会话", _sf_e)
             ASLEEP = True     # 熄灯=睡了（简化模型，说话即醒）
             try:
-                m.obs_flag_set(m.house_today_str(), "goodnight_on", 1)   # BE3-02：烫「今夜熄过」落盘标记（开机恢复 ASLEEP 用）
+                # 10-02 修：标记烫在「夜窗归属日」（与日记同尺）——凌晨按的晚安不该记到新自然日
+                m.obs_flag_set(_night_day(datetime.now(), load_config()), "goodnight_on", 1)
             except Exception as _sf_e:
                 _soft_fail("熄灯.落盘标记", _sf_e)
         self._send_json({
