@@ -17,7 +17,6 @@ import os
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime
 
 import memory_lib as m
 import srv_state

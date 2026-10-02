@@ -2,10 +2,13 @@
 # -*- coding: utf-8 -*-
 """desire_lib —— 欲望引擎 · 影子版（9-24 家主令「可以加一下影子版，先跑一天看看」）
 
+入口：`tick_v2_shadow`（心跳直调·算 D 与状态式）· `desire_state_line`（她可见的状态句）·
+     `take_desire`（旧③出口，现主要走状态句）· `note_flirt`（火苗：他撩她→fac_flirt）
 · D = 「想亲密」的独立渴望（与念念的 p「想说话」分离）
 · 生长 = desire_growth × 情境系数（深夜 1.3 / 傍晚 1.15 / 白天 0.6）
 · 掷中 + 情境偏③ → 拟发日志（只落 ~/desire_shadow.log，绝不真发）
-· 影子期开关 desire_engine_shadow（默认 true=只算不发）；总闸 desire_engine 转正用
+· 影子期开关 desire_engine_shadow（默认 true=只算不发）；**注：总闸 `desire_engine` 已是死键**
+  （9-30 体检零引用）——现真正生效的是 `desire_engine_inject`（状态句递不递她）＋ `desire_v2_*`。
 · 上岗（9-26）：`take_desire()` 把 ③ 命中递到开场【心里有想要】——她自己定腔调、自己决定说不说；
   开关 desire_engine_inject（默认关）。**不代写、不主动发消息**（主动按铃属另一批，需家主另行拍板）。
 · fail-open：任何异常吞掉，绝不拦心跳
@@ -140,7 +143,7 @@ def desire_state_line(now=None):
         return None
     now = now or datetime.now()
     gap = ""
-    since = st.get("last_satisfy") or st.get("last_fire")
+    since = st.get("last_satisfy")   # 10-02：去掉 `or last_fire` 死读（降状态后全库已无人写 last_fire）
     if since:
         try:
             h = (now - datetime.strptime(str(since), "%Y-%m-%d %H:%M:%S")).total_seconds() / 3600

@@ -4,6 +4,8 @@
 
 **完整说明见 `说明/机制说明.md` §走神**——四种漫步、落盘持久化、双投修复、开关、fail-open。
 一句话：心跳时旧事自己浮上来（只算只记），提不提由她。
+入口：`tick_and_shadow`(心跳生成候选) · `take_recall`(取给开场) · `current_cand_key`/`delivered_keys`(只读)；
+四腿 _walk_calendar / _walk_random / _walk_topic / _walk_card。
 """
 
 import json
@@ -34,7 +36,8 @@ _STOP = {
     "因为", "所以", "但是", "已经", "这个", "那个", "一下", "一点", "真的", "时候",
 }
 
-_TAG = {"calendar": "日历锚", "random": "翻旧日记", "topic": "话题第二跳", "card": "翻卡"}
+_TAG = {"calendar": "日历锚", "random": "翻旧日记", "topic": "话题第二跳", "card": "翻卡",
+        "dream": "梦里牵的线"}      # 10-02 #3：第五腿（睡眠整理回流）
 
 # ── 9-25 上岗：注入取用口（取走即清）──
 # 影子期只记日志；转正后 server 开场来取一次，取走就清——一次走神只提一次，不车轱辘反复念。
@@ -68,7 +71,8 @@ def take_recall(max_age_s=None):
         # 9-27 修：先记「已递」，写不进去就不递（候选留着下次再来）——防「递了没记住」被话头簿再投一次。
         if not _mark_delivered(c.get("key")):
             return None
-        _clear_cand()       # 取走即清——一次走神只提一次
+        if not _clear_cand():
+            return None     # 10-02 修：清不掉就更不递——否则磁盘候选还在，下一轮把同一条又提到她眼前
         return c
     except Exception:
         return None
@@ -194,7 +198,9 @@ def _load_cand():
 
 
 def _clear_cand():
-    """消费/超窗后清除候选（磁盘 + 镜像）；保留 recent 等其它键。fail-open。9-26 修。"""
+    """消费/超窗后清除候选（磁盘 + 镜像）；保留 recent 等其它键。fail-open。
+    10-02 修：**返回是否真的清掉**——调用方（take_recall）据此决定要不要递，
+    防磁盘写失败时候选还在、下一轮同一条再提一遍。"""
     try:
         _LAST["cand"], _LAST["at"] = None, 0.0
     except Exception:
@@ -205,9 +211,10 @@ def _clear_cand():
             if "cand" in st or "cand_at" in st:
                 st.pop("cand", None)
                 st.pop("cand_at", None)
-                _save_state(st)
+                return bool(_save_state(st))
+        return True          # 本来就没候选：没有要清的东西＝成功
     except Exception:
-        pass
+        return False
 
 
 def _remember(key):
@@ -221,6 +228,52 @@ def _remember(key):
             _save_state(st)
     except Exception:
         pass
+
+
+# ── 10-02 #2（家主令「机制三件」）：走神触发从"纯骰子"改成"情绪/久违累积" ──
+# 原来每跳固定 5% 掷骰，与她今天心情多重、多久没走神全无关系。现在：情绪重的日子、或久没走神，
+# 概率上调（最多 ×2，仍受 recall_chance 总闸约束）——总频率不会变唠叨。开关 recall_chance_mood。
+_STRONG_TYPES = ("委屈", "欲望", "想你")   # 「重」的心情（正典词表里这几样算压心口的）
+_MOOD_BUMP_MAX = 2.0
+
+
+def _stamp_walk(now):
+    """记一笔「上次走神」时刻（久违感/累积用）。fail-open。"""
+    try:
+        with _STATE_LOCK:
+            st = _load_state()
+            st["last_walk"] = now.strftime("%Y-%m-%d %H:%M:%S")
+            _save_state(st)
+    except Exception:
+        pass
+
+
+def _mood_bump(now):
+    """情绪/久违系数：今天有「重」心情 → ×1.6；距上次走神 >36h → ×1.5；两者取大、封顶 ×2。
+    读不到任何东西 → 1.0（＝原行为）。fail-open。"""
+    try:
+        f = 1.0
+        try:
+            import memory_lib as _m
+            today = _m.house_today_str()
+            for (_dt, _sc, _src, _note, _at, _tp) in (_m.get_moods(days=1) or []):
+                if str(_dt) != today:
+                    continue
+                if int(_sc or 0) >= 4 or str(_tp or "") in _STRONG_TYPES:
+                    f = max(f, 1.6)
+                    break
+        except Exception:
+            pass
+        try:
+            _lw = str(_load_state().get("last_walk") or "")
+            if _lw:
+                if (now - datetime.strptime(_lw, "%Y-%m-%d %H:%M:%S")).total_seconds() > 36 * 3600:
+                    f = max(f, 1.5)
+        except Exception:
+            pass
+        return min(_MOOD_BUMP_MAX, f)
+    except Exception:
+        return 1.0
 
 
 def _seed_words(text, k=3):
@@ -392,8 +445,39 @@ def _walk_card():
             "why": f"翻到{c['group']}的一张卡"}
 
 
+# ── 10-02 #3：第五腿「梦里牵的线」（睡眠整理回流）────────────────────────
+# dream_lib 夜里只干跑、零产出——它「牵的线」（线头 × 近两周日记的共同词）现在落到
+# ~/.zanjia_dream_links.json；白天走神偶有机会把这条关联递上来（她的联想延续到醒着）。
+DREAM_LINKS = os.path.expanduser("~/.zanjia_dream_links.json")
+
+
+def _walk_dream():
+    """读「梦里牵的线」小账，挑一条没翻过的。空/全翻过 → None。fail-open。"""
+    try:
+        with open(DREAM_LINKS, encoding="utf-8") as f:
+            items = json.load(f) or []
+    except Exception:
+        return None
+    if not items:
+        return None
+    recent = set(_load_state().get("recent") or [])
+    for it in items:
+        try:
+            k = str((it or {}).get("key") or "")
+            if not k or k in recent:
+                continue
+            return {"type": "dream", "key": k,
+                    "ref": str(it.get("ref") or "夜里牵的线"),
+                    "text": str(it.get("text") or "")[:80],
+                    "why": str(it.get("why") or "夜里替你牵的线")}
+        except Exception:
+            continue
+    return None
+
+
 def tick_and_shadow(now=None):
-    """心跳每轮调：概率闸 → 挑一条腿漫步 → 只记日志（+events 账）。fail-open 返回 dict|None。"""
+    """心跳每轮调：概率闸（10-02 起含情绪/久违累积）→ 挑一条腿漫步 → 只记日志（+events 账）。
+    fail-open 返回 dict|None。"""
     try:
         if not _cfg("recall_shadow", True):
             return None
@@ -401,26 +485,32 @@ def tick_and_shadow(now=None):
             chance = float(_cfg("recall_chance", 0.05))
         except (TypeError, ValueError):
             chance = 0.05
+        now = now or datetime.now()
+        if _cfg("recall_chance_mood", True):      # 10-02 #2：情绪重/久没走神 → 概率上调
+            chance *= _mood_bump(now)
         if random.random() >= chance:
             return None
-        now = now or datetime.now()
-        # 9-29 加第四腿「翻卡」——四腿分原来那 5%，**总频率不变**（不会变唠叨）。
-        kind = random.choices(("calendar", "random", "topic", "card"),
-                              weights=(0.30, 0.28, 0.22, 0.20))[0]
+        # 9-29 加第四腿「翻卡」；10-02 加第五腿「梦里牵的线」——五腿分那同一个 5%，
+        # **总频率不变**（不会变唠叨）。
+        kind = random.choices(("calendar", "random", "topic", "card", "dream"),
+                              weights=(0.26, 0.24, 0.19, 0.17, 0.14))[0]
         if kind == "calendar":
             cand = _walk_calendar(now)
         elif kind == "random":
             cand = _walk_random()
         elif kind == "topic":
             cand = _walk_topic()
-        else:
+        elif kind == "card":
             cand = _walk_card()
+        else:
+            cand = _walk_dream()
         if not cand:
             return None
         _log(f"[{now.strftime('%F %T')}] 走神·{_TAG[kind]} ｜ 种子={cand['why']}\n"
              f"    → {cand['ref']}：\"{cand['text']}\"")
         _remember(cand["key"])
         _save_cand(cand)              # 9-26 修：落盘持久化（跨进程/重启可读；take 后消费清除）
+        _stamp_walk(now)              # 10-02 #2：记「上次走神」时刻（久违累积用）
         try:
             import events_lib
             events_lib.record("recall.walk", "linning", "heartbeat",

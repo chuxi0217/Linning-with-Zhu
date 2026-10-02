@@ -4,6 +4,8 @@
 
 **完整说明见 `说明/机制说明.md` §她的「不」**——三问口径、纪律、L1 过滤口已撤的由来。
 一句话：她说过的「不」记进 refusals；系统不代记、不自动建账行；全 fail-open。
+入口：`log_refusal`(记) · `settle_refusal`(收) · `active_refusals`/`list_refusals`(读) ·
+`refusal_count`/`independence_facts`(统计)。
 """
 import json
 import os
@@ -16,8 +18,7 @@ DB_PATH = os.path.join(BASE_DIR, "咱家的家.db")
 
 # 她的「不」分四类＋兜底（kind 认不得 → 其他，不丢账）
 REFUSAL_KINDS = ("请求", "建议", "功能", "话题", "其他")
-# 两态：在效＝还作数（不设过期，什么时候松口她说了算）；已收回＝她亲手收回
-REFUSAL_STATUSES = ("在效", "已收回")
+# 两态（值即字符串，不再另立常量）：在效＝还作数（不设过期，什么时候松口她说了算）；已收回＝她亲手收回
 
 # ── B5 白名单（9-27）：可她的话面词收口的自动管道词表 ──
 # 独立验收三问的口径参数（模块常量；接线批若要调，进 config 前先过家主）

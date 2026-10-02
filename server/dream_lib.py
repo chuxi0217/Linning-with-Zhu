@@ -16,7 +16,6 @@ import difflib
 import json
 import os
 import sqlite3
-import time
 from datetime import datetime, timedelta
 
 import memory_lib as m
@@ -24,6 +23,29 @@ import memory_lib as m
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DREAM_LOG = os.path.join(BASE_DIR, "dream_shadow.log")
 DREAM_STAMP = os.path.join(BASE_DIR, "dream_last.txt")
+# 10-02 #3（睡眠回流）：夜里「牵的线」落这个小账，白天走神第五条腿来捞（recall_lib._walk_dream）
+DREAM_LINKS = os.path.expanduser("~/.zanjia_dream_links.json")
+
+
+def _save_links(items):
+    """把「牵的线」落到小账（新在前、去重、留最近 12 条）。空 items = 不动（别把旧账抹了）。fail-open。"""
+    try:
+        if not items:
+            return
+        old = []
+        try:
+            with open(DREAM_LINKS, encoding="utf-8") as f:
+                old = json.load(f) or []
+        except Exception:
+            old = []
+        seen = {(it or {}).get("key") for it in items}
+        merged = list(items) + [o for o in old if (o or {}).get("key") not in seen]
+        tmp = DREAM_LINKS + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(merged[:12], f, ensure_ascii=False)
+        os.replace(tmp, DREAM_LINKS)
+    except Exception:
+        pass
 
 _STRONG_MOOD = ("低落", "难过", "委屈", "想哭", "哭", "生气", "不开心", "崩")
 _SKIP_TOKENS = {"的", "了", "是", "在", "我", "他", "你", "和", "就", "都", "也", "很",
@@ -187,6 +209,7 @@ def link_candidates(con, now):
     except Exception:
         pass
     found = 0
+    out = []
     for th in threads:
         try:
             text = str(th[2] or "")
@@ -200,9 +223,16 @@ def link_candidates(con, now):
             if len(shared) >= 2:
                 _say(f"梦·牵线｜若提名：线头「{text[:18]}」与日记 {d}「{t[:14]}」可能有关"
                      f"（共同词：{'、'.join(list(shared)[:3])}）")
+                out.append({"key": f"dream#{d}#{text[:12]}",
+                            "ref": f"线头「{text[:18]}」× 日记「{t[:14]}」",
+                            "text": f"{t[:30]}（共同词：{'、'.join(list(shared)[:3])}）",
+                            "why": "夜里牵的线：这两件可能有关"})
                 found += 1
                 if found >= 3:
-                    return found
+                    break
+        if found >= 3:
+            break
+    _save_links(out)     # 10-02 #3：牵的线落小账（白天走神第五条腿捞）
     if not found:
         _say("梦·牵线｜线头与近两周日记没找到关联（干净）")
     return found
@@ -245,6 +275,7 @@ def dry_run(now=None):
         _say("梦·完（只记不递；原文一字未动）")
     except Exception as e:
         _say(f"梦·干跑失手（{e}）——静默过去，不打扰")
+        stats["error"] = True     # 10-02：整体失手要能看出来，tick 据此不写 stamp
     return stats
 
 
@@ -268,7 +299,9 @@ def tick(now=None):
                         return False
         except Exception:
             pass
-        dry_run(now)
+        _stats = dry_run(now)
+        if isinstance(_stats, dict) and _stats.get("error"):
+            return False     # 10-02：干跑整体失手 → 别写 stamp（否则整夜整理被记成"今天已做"而跳过）
         with open(DREAM_STAMP, "w", encoding="utf-8") as f:
             f.write(stamp)
         return True

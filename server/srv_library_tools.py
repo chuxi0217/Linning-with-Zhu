@@ -4,6 +4,12 @@
 从 linning_server.py 原样搬出（字节未动）：LIBRARY_TOOLS 数据 + TOOL_NAMES + _READONLY_TOOLS。
 纪律：纯数据、零依赖、零逻辑；入口重导出同名——`s.LIBRARY_TOOLS` 等测试引用照旧。
 改动只许走家批（只加不改）；本文件不 import 任何家里模块。
+
+──────── 检索目录（2026-10-02）────────
+  LIBRARY_TOOLS   图书证定义（六十五只；每条 {type, readOnly, function:{name/description/parameters}}）
+                  · 按域分布：园子/棋局 · 信 · 共读 · 她自己的账 · 检索(search_memory) · 图纸 · 上网
+  TOOL_NAMES      名字速查（正文假工具调用嗅探用）
+  _READONLY_TOOLS 只读集合（动作前剥 readOnly 标注）
 """
 
 # ── 图书证（二期 b.1 起，只做加法）：六十五只工具（二十七只只读+三十八只动作，含园门十四件 9-13；门牌亲笔/续页 9-18；安静时段/底色卷/生活账 9-18 第二批；作息 9-18 第三批；主权三件 9-23；9-23 手表清退批首例外：家主明令摘 get_heart_rate/request_heart 两只；9-24 松绑与主权收口批：note_grudge→note_upset / settle_grudge→settle_upset 更名，数不变；9-26 拒斥接线批 +2：note_refusal/settle_refusal——她的「不」记/收；9-28 园子棋局批 +9：garden_list_games / garden_game_status / garden_game_summary / garden_game_chat / garden_join_game / garden_start_game / garden_game_action / garden_game_say / garden_leave_game——看局/入座/落子/桌边说话；9-28 检索合并批 -4：search_diary / search_chats / search_archive / search_events 四件并入 search_memory（type 分卷路由，旧名仍可直呼）；9-28 图纸批 +2：read_blueprints（看家的图纸·读）/ write_to_archivist（给档案馆留话·写）；9-28 上网窗批 +1：web_search（上网查东西·读，官方内置搜索））──
@@ -997,8 +1003,8 @@ LIBRARY_TOOLS = [
 ]
 
 
-# 图书证名单（正文假工具调用嗅探用，9-9）：K3 偶尔把「工具名：参数」写进正文而不走
-# tool_calls（9-6 favorite_photo 实案，谎报军情）——handle_chat 里拿这份名单做嗅探兜底。
+# 图书证名单（正文假工具调用嗅探用，9-9）：模型偶尔把「工具名：参数」写进正文而不走
+# tool_calls（9-6 favorite_photo 实案，谎报军情；K3 起，现主引擎 DS 同样会）——handle_chat 里拿这份名单做嗅探兜底。
 TOOL_NAMES = [t["function"]["name"] for t in LIBRARY_TOOLS]
 # 只读工具名单（9-17 夜·消息防线包）：查证类声称对账用——「我查了」类话必须配只读工具回执。
 _READONLY_TOOLS = tuple(t["function"]["name"] for t in LIBRARY_TOOLS if t.get("readOnly"))

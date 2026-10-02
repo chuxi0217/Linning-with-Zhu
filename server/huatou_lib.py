@@ -4,6 +4,8 @@
 
 **完整说明见 `说明/机制说明.md` §话头簿**——状态链、开关、9-26 双投修复、fail-open 纪律。
 一句话：只攒只记日志、不发送；`take_huatou()` 递一件到她眼前，说不说她自己定。
+入口：`collect`(攒) · `settle`(结算) · `take_huatou`(递开场) · `take_huatou_for_send`(真发💬) ·
+`peek_pending`/`unmark_sent` · `tick_and_shadow`(心跳)。
 """
 import json
 import os

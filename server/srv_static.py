@@ -13,7 +13,6 @@ import base64
 import hmac
 import os
 import re
-import time
 import urllib.parse
 import uuid
 

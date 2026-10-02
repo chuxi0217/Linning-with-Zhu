@@ -49,7 +49,7 @@ PROD_DIR = "d:/咱家记忆库"   # 生产目录（Windows 侧）：--dump-jsonl
 # Linux 侧生产目录（双系统同一道闸，宁拒勿碰生产）：
 #   ① 本脚本所在仓库根——脚本在 <仓库根>/tools/ 下，根下 档案馆/、photos/、咱家的家.db 全是生产卷；
 #   ② 已知 Linux 生产根（server :8024 跑的那份；磁盘挂载路径若变，同步改这行）。
-_LINUX_PROD = "/media/<user>/E00EB5460EB5168E/咱家记忆库"
+_LINUX_PROD = "/media/<user>/E00EB5460EB5168E/咱家/记忆库"
 PROD_DIRS = (PROD_DIR, _LINUX_PROD,
              os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

@@ -181,9 +181,9 @@ def _week_roll_pack(now=None):
     try:
         now = now or srv_state._srv().datetime.now()   # 运行期反查：沙盘换假钟才对这里生效
         # BE3-04（9-23 修复批）：时点判据从「自然星期」改「咱家日的周一」——原判据下
-        # 周一 03:xx（house 还是周日）会按周日算窗（9-13→9-19），4 点后再跑一次又出一份
-        # 移窗卷（9-14→9-20，重叠 6 天；9-21 实案）。改后 4 点前不跑、4 点后只有一个窗，
-        # 重启再跑=同名不覆盖（同窗同名），重叠从根上没了。guard 值＝咱家日那周的周一
+        # 周一凌晨（house 还是周日）会按周日算窗，再跑一次又出一份移窗卷（重叠数天；9-21 实案）。
+        # 改后按「咱家日」判、同窗同名不覆盖，重叠从根上没了。guard 值＝咱家日那周的周一
+        # （「咱家日」的日界由 `DAY_START_HOUR` 定，现=0＝自然日）
         # （键名沿用 "day"：沙盘既有套件按老键名复位 guard，不动它们的复位线）。
         hd = datetime.strptime(m.house_today_str(now), "%Y-%m-%d")
         if hd.weekday() != 0 or _WROLL_STATE.get("day") == hd.strftime("%Y%m%d"):

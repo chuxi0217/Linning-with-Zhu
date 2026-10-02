@@ -59,7 +59,7 @@ SRC_FILES = ("第一个家.txt", "第二个家.txt", "第三个家.txt")
 
 # ── 生产路径闸门（照 tools/chunk_corpus.py 的家风：宁拒勿碰生产）──────
 PROD_DIR = "d:/咱家记忆库"   # Windows 侧生产目录
-_LINUX_PROD = "/media/<user>/E00EB5460EB5168E/咱家记忆库"  # Linux 侧生产根
+_LINUX_PROD = "/media/<user>/E00EB5460EB5168E/咱家/记忆库"  # Linux 侧生产根
 PROD_DIRS = (PROD_DIR, _LINUX_PROD,
              os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

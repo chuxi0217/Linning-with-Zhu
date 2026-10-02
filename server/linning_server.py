@@ -17,10 +17,27 @@
   家主：小乖 × 林宁（家妻）
 """
 
+# ════════════════════ 检索目录（2026-10-02 整理）════════════════════
+# 每段以 `# ── 主题 ──` 开头；**grep 主题名**即可跳到（行号会漂，故不写死）。
+# ① 地基/配置      服务器拆分针脚 · 跨天连续性 · 阈值收表(甲3) · 装配脱敏 · 两卷分界 · 情绪词表 ·
+#                 **配置**(DEFAULT_CONFIG/load_config) · 软失败(乙)
+# ② 提示词装配    全档案续页 · 底色卷 · 硬事实表 · 【你心上的事】 · 你的不 · 心潮 · 线头龄期 ·
+#                 减禁令轻减 · **五段合并版静态正文** · **记忆装配**；正文搜锚点 [提示词正文·xxx]
+# ③ 模型与终审    模型调用 · 完成态声称 judge 终审 · 评审第二批 · **本地判断模型**
+# ④ 工具(图书证)  图书证正典(搬 srv_library_tools) · 输出验号 · 动态工具加载 · 工具说明自动生成 ·
+#                 工具域扩展 · 图纸批 · 上网窗
+# ⑤ 心跳与时机    会话状态 · 打卡 CHECKIN-2 · **自主节律心跳** · 主动联系时机引擎 · 拒斥闸(已撤) ·
+#                 重逢放电 · 观测层 · app 显示面
+# ⑥ 检索与记忆    凭据夹 · 回想小二 · TIME-02 时间皮层 · 旧事两修 · **检索层统一** · MEM-C 记忆机制 · 图片转述
+# ⑦ 感知与状态    L2 时机感知 · 情感状态向量 · 今日挂念弧 · 时间窗小工具 · 波索斯缺席 · 醒来预算
+# ⑧ 睡眠与消息    单触发(撤) · 晚安念叨(撤) · **晚安守望** · 睡意终审 · 日记总结 · 昨夜尾巴 · 备份/周体检(搬 srv_jobs)
+# ⑨ HTTP与启动    HTTP 服务 · /api/history · /api/archive · 开机体检 · 嵌入端点通电 · 本地判断通电 · 隧道通电
+# 拆出去的 srv_*：state / library_tools / static / books / jobs / time / push / librarian / inbox / garden
+# ═══════════════════════════════════════════════════════════════════
+
 import base64
 import difflib
 import hashlib
-import hmac
 import io
 import json
 import math
@@ -39,12 +56,7 @@ import urllib.request
 import urllib.error
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
-from email import message_from_bytes
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-from html.parser import HTMLParser
-import imaplib
-import xml.etree.ElementTree as ET
-import zipfile
 
 import memory_lib as m
 
@@ -322,7 +334,7 @@ DEFAULT_CONFIG = {
     "wake_min_gap_min": 60,
     # 10-01 B5 醒来预算：状态卡那条「· 精力」（口径=每次醒来花的 token；只看得见，不闸）
     "state_card_energy": True,
-    # 口径：today=今天（家日4点）累计她自己使的劲（默认，稳；跟记账日同一把尺）
+    # 口径：today=今天（`DAY_START_HOUR` 日界）累计她自己使的劲（默认，稳；跟记账日同一把尺）
     #       count=今天**动了几回**（最像人的自省，不看 token）／per_wake=上一次醒来
     "wake_energy_scope": "count",
     # 10-01 静态段结构：current=逐字节现状（默认）／simple=五段合并（你是谁/我是谁/我的话/她的话/其他）
@@ -346,7 +358,7 @@ DEFAULT_CONFIG = {
                     "recency": {"near_days": 7, "near": 1.0,
                                 "mid_days": 30, "mid": 0.9, "far": 0.75},
                     # 记忆权重扩表（9-29）：不可损层 / 笔 / 每卷配额 / 工具侧是否真筛
-                    "no_decay": ["day", "letter", "hall"],
+                    "no_decay": ["day", "letter", "hall", "note"],
                     "writer_weight": {"hand": 1.0, "stream": 0.9},
                     "quota": {"oldhome": 1},
                     "gate_tool": False},
@@ -403,9 +415,10 @@ DEFAULT_CONFIG = {
     "garden_outbound_enabled": True,
     "garden_post_daily_cap": 3,
     "garden_post_min_gap_min": 30,
-    # 引擎换轨（家主 9-13 补令「她在园子里的声音走主引擎 K3，不走省钱管道」）：
-    # "k3"=主引擎（默认，她的声音用她的脑子）；"deepseek"=回退档（deepseek-flash）。
-    # garden_thinking_effort 只喂 K3 分支（家主 9-13 令「无论什么都是 K3-max」——default max；
+    # 引擎换轨（家主 9-13 补令「她在园子里的声音走主引擎，不走省钱管道」）：
+    # "k3"=走主引擎（默认，她的声音用她的脑子）；K3 已 9-27 退役，此标签名留旧称、现等价
+    # "主引擎＝config 的 model（DS v4-pro）"。"deepseek"=回退档（deepseek-flash）。
+    # garden_thinking_effort 只喂"主引擎"分支（家主 9-13 令「无论什么都是 max」——default max；
     # 将来接限时玩法（棋局）若延迟碍事，回退=把这一个值改回 "low"，现读现生效）。
     "garden_engine": "k3",
     "garden_thinking_effort": "max",
@@ -437,8 +450,10 @@ DEFAULT_CONFIG = {
 
 def apply_thinking(cfg, body):
     """二期d：往 payload dict 里加思考参数（config 可关）。在 json.dumps 前调用。
-    9-2 换脑适配（工单#总）：K2.6（moonshot）只认 thinking（默认开），且 thinking 与
-    reasoning_effort 互斥（同传报错）；reasoning_effort 只给 DeepSeek。
+    【口径】现主引擎＝DeepSeek v4-pro（thinking 可开关 / reasoning_effort）。下面 K2.6/K3 两段是
+    **历史回退分支**（旧引擎早已退役，留作换模参考，路由按 `_engine_carrier()`/model 名动态走）：
+    9-2 换脑适配：K2.6（moonshot）只认 thinking（默认开），且 thinking 与 reasoning_effort 互斥
+    （同传报错）；reasoning_effort 只给 DeepSeek。
     9-2 深夜 K3 上岗：K3 常思考（Preserved Thinking 关不掉），只吃顶层 reasoning_effort
     （low/high/max），不认 thinking 字段；temperature K 系固定值（思考 1.0），传了报错，不送。"""
     model = cfg.get("model", "")
@@ -480,7 +495,7 @@ def load_config():
     if not os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(DEFAULT_CONFIG, f, ensure_ascii=False, indent=2)
-        print(f"⚠️ 已生成 config.json，请打开填入你的 API key 再启动（现主引擎 moonshot K3）。")
+        print(f"⚠️ 已生成 config.json，请打开填入你的 API key 再启动（现主引擎 DeepSeek v4-pro）。")
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         cfg = json.load(f)
     for k, v in DEFAULT_CONFIG.items():
@@ -1642,7 +1657,7 @@ def build_system_prompt(consume=True):
     return _dedup_rules(_relax_bans(_sp_joined))   # 丁·B1 轻减 → 9-29 去重批（各带独立开关；两个都关＝逐字节回原样）
 
 
-# ── 模型调用（现主引擎 moonshot K3；函数名留旧称，调用点不动） ──
+# ── 模型调用（现主引擎 DeepSeek v4-pro，声线可切 flash；函数名留旧称，调用点不动） ──
 # 空回复重试（9-24 DS 预热批）：v4.1-flash 偶发「思考满、正文空」（reasoning 吃掉整个输出预算，
 # content 空；换模考卷实证 2/9，补录重试即好）——正文空＋（有思考 或 正常 finish）且没在调工具
 # → 自动重试一次；两次都空按原样返回（fail-open，不炸链）。空回复才触发：K3 与常路零影响
@@ -2874,7 +2889,7 @@ def _tool_selfcheck():
 
 def _norm_checkin_target(v):
     """打卡项 target_time 归一化（BE3-11 口径，9-29 提到公用）：长得像时间的归一成 HH:MM
-    （'6:20'→'06:20'）——念叨与「欠着」用**字符串比时刻**，不补零会「6:20 > 07:30」恒真（半夜就催）
+    （'6:20'→'06:20'）——「欠着」（打卡念叨已 10-01 撤）用**字符串比时刻**，不补零会「6:20 > 07:30」恒真（半夜就催）
     或恒假（永不进欠着行李）。不像时间的自由文本照收（长度帽 10，不截断语义）。工具路此前只做了
     `[:5]`、没归一，与 HTTP 路口径不一致——本函数是唯一出口。"""
     tt = str(v or "").strip()
@@ -2961,8 +2976,10 @@ def exec_library_tool(name, args):
             except Exception as e2:
                 print(f"  [MEM-C] 查询嵌入失手（退纯词面）：{e2}")
         _wscores = {}
+        # 10-02 修：工具检索也走 RRF（与开场 `_retrieve_mixed` 同口径）——原只传词面+向量，
+        #   A/B 已证 RRF 更好，她主动查不该用旧口径。
         res = m.hybrid_search(query, kinds, limit, qvec=qvec, model=emodel,
-                              score_out=_wscores)
+                              score_out=_wscores, rrf=_flag_on("retrieval_rrf"))
         # 记忆权重（9-29 扩表）：工具侧**影子先行**——她主动查、宁多勿漏，默认只记不改；
         # 只有 recall_gate.gate_tool=true 时才真按权重排序＋每卷配额（门槛/同卷同日去重不适用）。
         res = _recall_gate_res(res, _wscores, path="tool", soft=True)
@@ -3900,7 +3917,11 @@ class Session:
         return self._system_prompt
 
     def reset(self):
-        self.__init__()
+        # 10-02 修：重置也进 `_SP_LOCK`——否则后台线程正持锁为**旧会话**懒构建提示词时，
+        #   reset 把 `_system_prompt` 置 None，构建完又写回旧 prompt，刚重置的会话沿用陈旧缓存
+        #   （含已消费的一次性注入）。
+        with _SP_LOCK:
+            self.__init__()
 
 
 m.init_db()   # 模块加载即确保三十六张表在，空库也不会启动即崩
@@ -5450,7 +5471,7 @@ _RECALL_GATE_DEFAULTS = {
                 "mode": "step", "exp_lambda": 0.01, "exp_floor": 0.5},
     # ── 记忆权重扩表（9-29）──────────────────────────────────────────────
     # ① 不可损层：她的笔/正典不吃时间衰减（旧宅那种"远事"才该被压）。
-    "no_decay": ["day", "letter", "hall"],
+    "no_decay": ["day", "letter", "hall", "note"],
     # ② 笔：亲笔件 > 流水话（chat 是话赶话的流水，同分下让亲笔件先浮）。
     "writer_weight": {"hand": 1.0, "stream": 0.9},
     # ③ 每卷配额：低权重卷"最多浮几条"（0/缺 = 不限）。旧宅 ≤1 就是这么落的。
@@ -8669,7 +8690,10 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     _d = today_str()
                 if not m.chat_exists(_d, "姐姐", letter_text):
-                    m.add_chat(_d, "姐姐", letter_text, SESSION.id)
+                    # 10-02 修：带**信的原始时刻**落 chats——原缺 created_at，补录那一下才算时刻，
+                    #   攒一夜的信又挤同一秒（正是 P-0 要治的）；`compose_letter`/`send_email` 走
+                    #   本路镜像时同样受益。
+                    m.add_chat(_d, "姐姐", letter_text, SESSION.id, created_at=str(_t or "")[:19])
             m.consume_outbox([r[0] for r in rows])
             self._send_json({"letters": [
                 {"id": r[0], "text": r[1], "time": (r[2] or "")[11:16]} for r in rows
@@ -9331,7 +9355,7 @@ class Handler(BaseHTTPRequestHandler):
                 think_ms = int((time.time() - t0) * 1000)   # 姐姐实际思考耗时（含思考链）
                 reply = strip_stage(reply)   # 新回复返回+入库前剥整段括号动作
 
-                # 正文假工具调用兜底（9-9 立案修复·修法①）：K3 偶尔把「工具名：参数」写进正文
+                # 正文假工具调用兜底（9-9 立案修复·修法①）：模型偶尔把「工具名：参数」写进正文
                 # 而不走 tool_calls（9-6 favorite_photo 实案）——正文只是文字，server 不执行，
                 # 她以为做成了（谎报军情）。嗅探命中且本轮没真调过该工具 → 打回重做一轮：
                 # 明说「正文写工具名不算数」，让她用真正的 tool_calls 重调；一轮封顶防循环。

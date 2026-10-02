@@ -1,3 +1,100 @@
+// ═══════════════════════════════════════════════════════════════════════════════
+// 📖 Index.ets · 段落目录（9-30 单文件拆分后重排）
+//    ⚠️ 行号是**快照**，文件一改就会漂——找东西**按名字**更稳（搜符号名即可）。
+//
+// 这一份文件现在是「壳」：状态 + build + 全屏页调度 + 网络/取数与业务逻辑。
+// 显示层已外提（改页面去 view/，改数据形状去 model/，改纯逻辑去 common/）：
+//   view/   Thinking Traces Logs Wall Letter PhotoWall ImagePreview Stats Checkin
+//          CheckinDetail Reader Archive Reports KbEdit MdReader MdSegText
+//   model/  apiTypes（接口＋词表）· chatDataSource
+//   common/ timetable（课表解析）· markdown（md 解析）· format（文案/数字/时间）
+//           draw（canvas 小件）· theme（dkColor/errText）· AppStyles（色板/字号/圆角）
+//
+// ── 本文件内部 ───────────────────────────────────────────────────────────────
+//   L98    模块级：imports · 门牌/URL 常量 · applyServerBase · @Styles 按压样式 · errMsg 壳
+//   L291   struct Index 起
+//   L294   状态声明区（158 个 @State/@StorageProp：夜设、安全区、门牌快照、各页开关与数据）
+//         （状态区止于 L507 附近；下面依次是各 @Builder 与 方法）
+//
+//   【@Builder 构建器 · 17 个】
+//     L778   TabLabel(icon: string, label: string, idx: number)   13 行
+//     L794   GoodnightBtn()                       16 行
+//     L812   ChatView()                          374 行
+//     L1188  CoverHub()                           88 行
+//     L1280  XgWordsEditPage()                    70 行
+//     L1360  RiverDotCard(p: MoodPoint)           40 行
+//     L1403  RiverFullPage()                      98 行
+//     L1505  HallPage()                          559 行
+//     L2142  StatsCard()                          35 行
+//     L2183  HealthPage()                         18 行
+//     L2202  NightPage()                          18 行
+//     L2221  NotesPage()                          18 行
+//     L2491  SettingsPage()                      367 行
+//     L3071  DailyPage()                          39 行
+//     L3299  MsgBubble(item: ChatItem)           194 行
+//     L3921  MoodPage()                          229 行
+//     L5267  ImgGoneTip()                          9 行
+//
+//   【网络 / 取数 / 落盘 · 36 个】
+//     L2066  fetchStats                           25 行
+//     L2094  applyStats                           16 行
+//     L2113  reloadStats                          26 行
+//     L2249  fetchArchive                         31 行
+//     L2285  fetchArchiveDoc                      32 行
+//     L2326  fetchCards                           19 行
+//     L2347  fetchFavorites                       30 行
+//     L2384  fetchWall                            30 行
+//     L2416  fetchReports                         27 行
+//     L2910  fetchLogs                            26 行
+//     L2977  postSchedule                         18 行
+//     L3003  saveTimetable                        26 行
+//     L3111  fetchCheckinData                     38 行
+//     L3151  fetchMonthCheckins                   19 行
+//     L3569  fetchStatus                         151 行
+//     L3741  pushCard                             36 行
+//     L3779  fetchPromise                         25 行
+//     L4443  fetchMoods                           26 行
+//     L4703  fetchHall                            70 行
+//     L4775  fetchTraces                          21 行
+//     L4809  fetchHealth                          37 行
+//     L4848  pushHealthGroups                     50 行
+//     L4900  fetchShadowLines                     54 行
+//     L4956  fetchMechGroups                      30 行
+//     L4995  fetchDream                           35 行
+//     L5067  fetchNotes                           35 行
+//     L5158  saveXiaoguaiWords                    28 行
+//     L5360  loadOutbox                            8 行
+//     L5369  saveOutbox                           10 行
+//     L5405  watchNetRecovery                     24 行
+//     L5621  fetchOutboxLetters                   24 行
+//     L5672  saveChatCache                         9 行
+//     L5819  loadHistory                          43 行
+//     L5870  loadOlderHistory                     39 行
+//     L5912  loadNewerHistory                     44 行
+//     L6189  fetchLocation                        46 行
+//
+//   【其余大件（方法，前 18）】
+//     L6237  send                                421 行
+//     L4225  drawRiverOn                         178 行
+//     L611   build                               164 行
+//     L3569  fetchStatus                         151 行
+//     L5430  flushOutbox                         119 行
+//     L4603  pickAndImportBook                    97 行
+//     L4703  fetchHall                            70 行
+//     L522   aboutToAppear                        64 行
+//     L6130  compressToBase64                     56 行
+//     L4900  fetchShadowLines                     54 行
+//     L4848  pushHealthGroups                     50 行
+//     L6189  fetchLocation                        46 行
+//     L5912  loadNewerHistory                     44 行
+//     L5819  loadHistory                          43 行
+//     L2446  openReport                           42 行
+//     L4524  submitParaMarkAsync                  42 行
+//     L3831  sayGoodnight                         41 行
+//     L4471  openReader                           40 行
+//
+//   【不拆的调度器】build() · CoverHub（全屏页互斥调度）· DailyPage（按日期铺页）
+// ───────────────────────────────────────────────────────────────────────────────
 import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
 import { util } from '@kit.ArkTS';
@@ -18,6 +115,52 @@ import {
   FS_TITLE, FS_BODY, FS_SUB, FS_AUX, R_TAIL, R_SM, R_MD, R_LG, R_XL, R_PILL, R_PILL_XL,
   M_PAGE, NIGHT_MAP
 } from '../common/AppStyles';
+import { dkColor, errText } from '../common/theme';   // 9-30 拆分：纯函数外提，本文件留同名壳
+import {
+  toolCn, toolSummary, fmtSize, numTxt, wanTxt,
+  nowTime, sleepMs, histTextHit, traceEndingCn, moodNameOf,
+  detailMonthDays, httpErrMsg, mechTextToLines
+} from '../common/format';
+import {
+  hexToRgba, drawStar5, drawSpark4
+} from '../common/draw';
+import {
+  MoodTypeItem, MOOD_TYPES, MOOD_LEGACY_COLOR, LEGACY_MOOD_MAP, LocInfo, ChatBody,
+  StreamEvent, FileBody, ScheduleItem, ScheduleBody, ToolUseInfo, HistoryMsg,
+  TurnInfo, TurnTool,   // APP-01（10-01）：过程留存
+  HistoryResp, StatusResp, BridgeUpResp, GoodnightResp, LogsResp, BookMark,
+  BookShelf, BooksResp, TraceItem, TracesResp, RVTab, RIVER_TABS,
+  PrefTab, NIGHT_PREF_TABS, BookContentResp, StatsResp, LedgerPair, ArchiveItem,
+  ArchiveResp, ArchiveTextResp, CardItem, CardGroup, CardsResp, FavoritesResp,
+  WallPin, WallResp, LibReportItem, LibReportsResp, LibReportDocResp, PromiseResp,
+  HealthSoftTop, HealthSoftFail, HealthEmbed, HealthBackup, HealthMechFace, HealthLedgerScene,
+  HealthLedger, HealthResp, ShDesire, ShSingle, ShRecall, ShHuatou,
+  ShGate, ShadowsResp, MechSection, MechResp, DreamHeat, DreamMerge,
+  DreamReplay, DreamNight, DreamResp, NoteItem, NotesResp, ThinkingResp,
+  OutboxResp, CheckinItem, CheckinItemsResp, TodayCheckin, TodayCheckinsResp, MonthCheckinItem,
+  MonthCheckinsResp, OkResp, MoodPoint, MoodsResp, MoodReqBody, RiverDot,
+  HallEntry, HallResp, HallReqBody, WordsResp, LetterReqBody, CheckinReqBody,
+  ArchiveReqBody, OutboxItem, ChatItem
+} from '../model/apiTypes';
+import { ChatDataSource } from '../model/chatDataSource';
+import {
+  pad2, parseTimetable, pickTimetableToday
+} from '../common/timetable';
+import { MdReader } from '../view/MdReader';
+import { ArchivePage } from '../view/ArchivePage';
+import { ReportsPage } from '../view/ReportsPage';
+import { ReaderPage } from '../view/ReaderPage';
+import { CheckinPage } from '../view/CheckinPage';
+import { KbEditPage } from '../view/KbEditPage';
+import { ThinkingPage } from '../view/ThinkingPage';
+import { LogsPage } from '../view/LogsPage';
+import { WallPage } from '../view/WallPage';
+import { PhotoWallPage } from '../view/PhotoWallPage';
+import { LetterPage } from '../view/LetterPage';
+import { TracesPage } from '../view/TracesPage';
+import { ImagePreviewPage } from '../view/ImagePreviewPage';
+import { StatsPage } from '../view/StatsPage';
+import { CheckinDetailPage } from '../view/CheckinDetailPage';
 // 9-29 §12 app 显示面：只读信息页骨架（家的体检 / 夜里 / 随手记 三页共用）——拆分第一块砖
 import { InfoPage, InfoGroup } from './InfoPage';
 
@@ -114,548 +257,6 @@ const HTTP_TIMEOUT_MS: number = 30000;
 const CHAT_TIMEOUT_MS: number = 90000;   // /api/chat 专用：姐姐查图书证会多花时间，放宽到 90s
 const HILOG_TAG: string = 'firstBrick';
 
-// 情绪词表（9-9 心情曲线 v2；9-12 MOOD-V1 九并六）：与 server MOOD_TYPES 常量同一份正典
-//（改词表=两处都改）。顺序即展示顺序，色值即情绪河墨色。
-interface MoodTypeItem {
-  name: string;
-  color: string;
-}
-const MOOD_TYPES: MoodTypeItem[] = [
-  { name: '欲望', color: '#d95d63' },
-  { name: '想你', color: '#e08cae' },
-  { name: '开心', color: '#e2a93b' },
-  { name: '委屈', color: '#7a9bd4' },
-  { name: '踏实', color: '#7fa66a' },
-  { name: '累', color: '#8d8478' }
-];
-const MOOD_LEGACY_COLOR: string = '#c9beb0';   // 词表上线前的旧数字分（type 空串）画中性灰
-// MOOD-V1（9-12）词表九并六：心疼/平静/骄傲 退出正典——旧数据原样留库，
-// 展示层先过这张映射再取色取名（只用于展示，绝不回写）。
-const LEGACY_MOOD_MAP: Record<string, string> = {
-  '心疼': '委屈',
-  '平静': '踏实',
-  '骄傲': '开心'
-};
-
-interface LocInfo {
-  lat: number;
-  lon: number;
-  place?: string;   // 逆地理编码出的文字地址，可没有
-}
-
-interface ChatBody {
-  message: string;
-  msg_id?: string;    // 9-12 消息身份证：重试/补发复用同一张，server 凭它去重（回包丢了也不双发）
-  image?: string;
-  loc?: LocInfo;
-  place?: string;
-  file?: FileBody;    // 9-1-#8 刀2：文本附件
-  stream?: boolean;   // 9-4 自由发挥包：SSE 流式（思考+正文打字机）
-}
-
-// 9-4 流式 SSE 事件（server 契约：thinking/reply/status/tool/round/done/error）
-interface StreamEvent {
-  type?: string;
-  delta?: string;
-  text?: string;
-  name?: string;      // 9-12 tool 事件：正在调用的图书证名
-  args?: string;      // 9-12 tool 事件：参数摘要（server 已截 30 字）
-  round?: number;     // 9-12 round 事件：工具循环轮次边界（>0 时封上一轮步骤卡）
-  think_ms?: number;
-  tools?: ToolUseInfo[];
-  chat_id?: number;
-  dedup?: boolean;    // 9-12 去重命中：server 返回 JSON（非 SSE）原样还上次那句
-  reply?: string;     // 9-12 dedup JSON 的正文（server 字段名与流式事件不同）
-}
-
-// 文本附件：名字+全文（≤32KB）
-interface FileBody {
-  name: string;
-  content: string;
-}
-
-// CAL-01（9-13）日程上报形状：只带标题+开始时间（家训：只放必要信息）
-interface ScheduleItem {
-  time: string;    // 'HH:MM'
-  title: string;   // ≤20 字
-}
-
-interface ScheduleBody {
-  date: string;    // 'YYYY-MM-DD'
-  items: ScheduleItem[];
-}
-
-interface ChatReply {
-  reply?: string;
-  think_ms?: number;
-  tools?: ToolUseInfo[];
-  reasoning?: string;   // 二期d：思考链原文（思考模式开着且这轮有的话）
-}
-
-interface ToolUseInfo {
-  name: string;
-  args: string;
-  ms: number;
-  rounds: number;
-}
-
-interface HistoryMsg {
-  who: string;
-  text: string;
-  image: string | null;
-  time: string;
-  id?: number;              // 二期d：chats 行号，取思考链要用
-  has_thinking?: boolean;   // 二期d：这条姐姐回复有没有思考链
-  file?: string | null;     // 9-1-#8：附件文件名（〔附件：…〕解析出来的）
-}
-
-interface HistoryResp {
-  messages: HistoryMsg[];
-  has_more?: boolean | null;   // 9-23 V-1：更早还有没有（旧 server 不带此键=不分页）
-}
-
-interface StatusLoc {
-  lat: number;
-  lon: number;
-  time: string;
-  place?: string;
-}
-
-interface StatusResp {
-  now?: string;
-  weather?: string;
-  loc?: StatusLoc;
-  chats_today?: number;
-  asleep?: boolean;
-  server_up_since?: string | null;    // 9-4 自由发挥包：server 开工时间 HH:MM
-  server_up_min?: number | null;      // 9-4 自由发挥包：server 跑了多少分钟
-  favorites_count?: number;           // 9-4 自由发挥包：收藏夹照片数
-  letters_unread?: number;            // 9-9 家主信箱：未读来信数
-  longing_p?: number;                 // RHYTHM-V2·G：她此刻的想念值 0~1
-  rhythm_7d?: RhythmFacts;            // Seline 事实仪表（9-10）：近 7 天开口/回应/时延
-  garden_bridge?: boolean;            // 9-17 夜：Garden 耳朵（唤醒桥）在不在岗
-  garden_today?: number | null;       // 9-17 夜：今日园子动静（发帖+回帖条数）
-  garden_walk?: GardenWalk | null;    // 9-23：散步三闸现值（键缺/null→状态条整行不出）
-  last_letter?: LastLetter | null;    // 9-18：最近一条来信指纹（输入留痕可视化）
-  why_now?: WhyNow | null;            // 9-18 #15：想念仪表（Linux 端才有，旧 server 缺席→整行不出）
-  obs_7d?: ObsFacts | null;           // 9-23 能上批 c：对账观测十键（键缺/全 0 → 整段不出）
-  threads?: ThreadsSnap | null;       // 9-26：线头盒观测（悬线数/最老几天）——键缺/null → 整行不出
-  state?: StateSnap | null;           // 9-26：她此刻（只用 line 人话句；服务端标 server_only）
-  ledger?: LedgerSnap | null;         // 9-26 W2：两本影子账的人话投影——键缺/null → 整行不出
-}
-
-// 事件脊柱读端（W2，9-26）：status.ledger——只报事实不打分；since=影子账从哪天起记
-interface LedgerSnap {
-  days?: number | null;               // 窗口天数（默认 7）
-  his?: number | null;                // 他说了几句
-  hers?: number | null;               // 她说了几句
-  proactive?: number | null;          // 她主动开口几次（💌＋💬）
-  calls?: number | null;              // 引擎调用笔数
-  in_tokens?: number | null;          // 上下文 token
-  out_tokens?: number | null;         // 她写出来的 token
-  since?: string | null;              // 账从哪天起记
-}
-
-// 线头盒观测（9-26）：status.threads——悬线总数 + 最老挂了几天；只报事实，不打分
-interface ThreadsSnap {
-  open?: number | null;               // 悬线总数
-  oldest_days?: number | null;        // 最老一条挂了几天（空盒/算不出 → null）
-}
-
-// 她此刻·人话投影（9-26）：status.state——只用 line（服务端 _state_line 生成的人话句）。
-// server_only=true 是服务端的守门：这些值只给家主看，绝不接进任何模型侧文本。前端只读那句话。
-interface StateSnap {
-  line?: string | null;               // 人话句
-  server_only?: boolean;              // true＝只给家主看（不进她的行李）
-}
-
-// 对账观测（9-23 能上批 c）：/api/status.obs_7d 十键——只报事实不打分，零新请求
-// RV-01（9-23 小修批）：键名照服务端实测订正——五键带前缀（claim_* / l2_*），规格卷把键名写简了
-interface ObsFacts {
-  claim_named?: number | null;    // 对账：提名
-  claim_passed?: number | null;   // 对账：放行
-  claim_shadow?: number | null;   // 对账：影子
-  claim_held?: number | null;     // 对账：打回
-  fake_tool?: number | null;      // 假工具调用拦下次数
-  recall?: number | null;         // 开场检索次数
-  recall_hit?: number | null;     // 开场检索命中次数
-  l2_in_class?: number | null;    // 时机感知：上课压
-  l2_just_slept?: number | null;  // 时机感知：刚睡压
-  l2_idle_boost?: number | null;  // 时机感知：闲抬
-}
-
-// 最近来信指纹（9-18 优化批一）：她摆出「你说过 X」时，手机一眼对账
-interface LastLetter {
-  id?: number;
-  at?: string;
-  md5?: string;
-  peek?: string;
-}
-
-// 想念仪表（9-18 升级 #15）：引擎刚才在想什么——last 空=还没照过面；整个键缺席=旧 server，整行不出
-interface WhyNow {
-  last?: string;
-  last_open?: string;
-  opens_7d?: number;
-  holds_7d?: number;
-  recent?: string[];
-}
-
-// 散步三闸现值（9-23 Garden 前端三件②）：与真闸同源的只读投影——
-// walk_allowed=这会儿能不能出门；值 null=查询坏账（server 三键各回 null），UI 不出行
-interface GardenWalk {
-  walk_allowed?: boolean | null;
-  last_walk_ts?: string | null;
-  walks_today?: number | null;
-}
-
-// 拉耳朵响应（9-18 优化批二）
-interface BridgeUpResp {
-  ok?: boolean;
-  running?: boolean;
-  msg?: string;
-}
-
-interface GoodnightResp {
-  diary?: string;
-  note?: string;
-}
-
-// 工地日志（9-12）：GET /api/logs 的返回——server 日志尾部原样
-interface LogsResp {
-  lines?: string[];
-}
-
-// 共读书架（9-12）：一本书 + 你们俩先后落的批注（who 两色墨迹）
-interface BookMark {
-  id: number;
-  who: string;      // 小乖 | 姐姐
-  loc: string;      // 位置随手写：页码/章节/百分比
-  text: string;
-  time: string;
-  para?: number;    // 锚定的段落号（阅读器里点段落的批注；-1/undefined=不锚段落）
-}
-
-interface BookShelf {
-  id: number;
-  title: string;
-  author: string;
-  status: string;
-  file?: string;
-  pos_me?: number;    // 我的阅读进度（段落号）
-  pos_her?: number;   // 姐姐的阅读进度（段落号）
-  marks: BookMark[];
-}
-
-interface BooksResp {
-  books?: BookShelf[];
-}
-
-// FE-02（9-13）：她的独处格——her_traces 窗口（Garden 的痕迹，给人看的那面）
-interface TraceItem {
-  id: number;
-  ts: string;
-  ending: string;
-  fact: string;
-  content: string;
-}
-
-interface TracesResp {
-  traces?: TraceItem[];
-}
-
-// 情绪河快捷档（9-12）：「日/周/月」chips = 窗口 1/7/30 天的快捷键，缩放本身是连续的
-interface RVTab {
-  label: string;
-  days: number;
-}
-
-const RIVER_TABS: RVTab[] = [
-  { label: '日', days: 1 },
-  { label: '周', days: 7 },
-  { label: '月', days: 30 },
-];
-
-// 夜间模式三选（9-12）：关 / 开 / 跟随系统
-interface PrefTab {
-  value: string;
-  label: string;
-}
-
-const NIGHT_PREF_TABS: PrefTab[] = [
-  { value: 'off', label: '关闭' },
-  { value: 'on', label: '开启' },
-  { value: 'auto', label: '跟随系统' },
-];
-
-// 共读原文（9-12 下午）：GET /api/books/content?id= 的返回——txt 全文，app 本地切段
-interface BookContentResp {
-  ok?: boolean;
-  id?: number;
-  content?: string;
-  error?: string;
-}
-
-// 咱家的账本（9-12 晚）：GET /api/stats——总账上墙
-interface StatsResp {
-  chats?: number;         // 库内对话总条数
-  chars?: number;         // 库内对话总字符数
-  first_day?: string;     // 最早一条的日期
-  old_msgs?: number;      // 旧家档案条数（档案馆/旧家记录）
-  old_cn_chars?: number;  // 旧家档案中文字数
-  // 9-23 新门配套（只加不改）：总账页新键——旧五键继续给原卡用，两把尺别混
-  chats_cn_chars?: number | null;   // 中文字数（新口径；DB 忙时 null）
-  old_home?: LedgerPair | null;     // 旧家三卷账；null=缺席（不拿 0 冒充）
-  grand_total?: LedgerPair | null;  // 两本合账；null=算不齐
-}
-
-// 总账一格：条数 + 中文字数（old_home / grand_total 同款）
-interface LedgerPair {
-  msgs?: number;
-  cn_chars?: number;
-}
-
-// ── 档案馆（9-23 V-2「全都看得见」）──
-// 契约（服务端下一批）：GET /api/archive → items[{name,group,size}]；?name= → text（只读，限馆内）。
-// 列表五组（卡片馆/周卷/旧家三卷/全档案续页/大事记卷）由服务端 group 字段带出，前端不硬编码组名。
-interface ArchiveItem {
-  name?: string;
-  group?: string;
-  size?: number;
-}
-interface ArchiveResp {
-  ok?: boolean;
-  items?: ArchiveItem[];
-}
-interface ArchiveTextResp {
-  ok?: boolean;
-  text?: string;
-}
-// 卡片馆走现成 /api/cards（40 卡）：groups[{key,count,cards[{id,title,fact,source,confidence}]}]
-interface CardItem {
-  id?: string;
-  title?: string;
-  fact?: string;
-  source?: string;
-  confidence?: string;
-}
-interface CardGroup {
-  key?: string;
-  count?: number;
-  cards?: CardItem[];
-}
-interface CardsResp {
-  ok?: boolean;
-  count?: number;
-  groups?: CardGroup[];
-}
-// ── 9-23 能上批 a：照片墙——GET /api/favorites → {"photos":["x.jpg",…]}（只读，无参）──
-interface FavoritesResp {
-  photos?: string[];
-}
-// ── 9-23 能上批 b：门牌墙——GET /api/wall → {"pins":[{"pin_id","content"}]}（只读，无参）──
-interface WallPin {
-  pin_id?: number | string;   // 只作 ForEach key
-  content?: string;
-}
-interface WallResp {
-  ok?: boolean;
-  pins?: WallPin[];
-}
-// ── 9-23 能上批 d：周报（服务端本批配套）——列表/开卷契约照监理原文：
-// GET /api/lib_reports → {"ok":true,"items":[{id,date,kind,status,created_at,title}]}；
-// GET ?id=N → {"ok":true,id,title,status,text}。只读，终审是姐姐的笔（前端绝不代签） ──
-interface LibReportItem {
-  id?: number;
-  date?: string;
-  kind?: string;
-  status?: string;
-  created_at?: string;
-  title?: string;
-}
-interface LibReportsResp {
-  ok?: boolean;
-  items?: LibReportItem[];
-}
-interface LibReportDocResp {
-  ok?: boolean;
-  id?: number;
-  title?: string;
-  status?: string;
-  text?: string;
-}
-
-interface PromiseResp {
-  promise?: string;
-  first?: string | null;   // FE-02 门楣：今天日记的首句（server 只加不改，没有则 null）
-}
-
-// ── 9-29 §12 app 显示面：三只只读口的返回形状（字段全 optional，缺项照缺席渲染，不拿 0 冒充）──
-// 家的体检·观测层 /api/health（9-28 柔性批已上线；health_api 关着时 404）
-interface HealthSoftTop {
-  where?: string;
-  n?: number;
-}
-
-interface HealthSoftFail {
-  days?: number;
-  total?: number;
-  top3?: HealthSoftTop[];
-}
-
-interface HealthEmbed {
-  endpoint?: string;
-  model?: string;
-}
-
-interface HealthBackup {
-  file?: string;
-  at?: string;
-  age_h?: number;
-}
-
-interface HealthMechFace {
-  tunnel?: boolean;
-  tunnel_up?: boolean;
-  garden_bridge?: boolean;
-  embedding?: HealthEmbed | null;
-  last_backup?: HealthBackup | null;
-}
-
-interface HealthLedgerScene {
-  scene?: string;
-  calls?: number;
-  in?: number;
-  out?: number;
-  cached?: number;
-}
-
-interface HealthLedger {
-  date?: string;
-  calls?: number;
-  in_tokens?: number;
-  out_tokens?: number;
-  cached_tokens?: number;
-  cache_hit?: number | null;
-  cost_est?: number | null;
-  cost_mode?: string;
-  scenes?: HealthLedgerScene[];
-}
-
-interface HealthResp {
-  now?: string;
-  server_up_min?: number | null;
-  soft_fail?: HealthSoftFail | null;
-  mechanisms?: HealthMechFace | null;
-  ledger_today?: HealthLedger | null;
-}
-
-// 家的体检·影子读数 /api/shadows（9-29 服务端新件）——只有读数与条数，**不带她的原文**
-interface ShDesire {
-  D?: number | null;
-  blocked_by?: string | null;
-  ticks_today?: number;
-  fired_today?: number;
-  at?: string | null;
-}
-
-interface ShSingle {
-  tier?: number | null;
-  p?: number | null;
-  blocked_by?: string | null;
-  ticks_today?: number;
-  hits_today?: number;
-  at?: string | null;
-}
-
-interface ShRecall {
-  walks_today?: number;
-  cards_today?: number;
-  at?: string | null;
-}
-
-interface ShHuatou {
-  collected_today?: number;
-  delivered_today?: number;
-  said_today?: number;
-  held_today?: number;
-  at?: string | null;
-}
-
-interface ShGate {
-  samples_24h?: number;
-  delivered?: number;
-  kept?: number;
-  dropped?: number;
-  empty_rate?: number | null;
-}
-
-interface ShadowsResp {
-  ok?: boolean;
-  now?: string;
-  desire_v2?: ShDesire | null;
-  single?: ShSingle | null;
-  recall?: ShRecall | null;
-  huatou?: ShHuatou | null;
-  gate?: ShGate | null;
-}
-
-// 家的体检·机制台账公开段 /api/mech（9-29 服务端新件；私档段服务端已剔）
-interface MechSection {
-  title?: string;
-  text?: string;
-}
-
-interface MechResp {
-  ok?: boolean;
-  generated?: string | null;
-  sections?: MechSection[];
-}
-
-// 夜里·睡眠整理 /api/dream（9-29 服务端新件；牵线只给条数）
-interface DreamHeat {
-  hot?: number;
-  warm?: number;
-  cold?: number;
-}
-
-interface DreamMerge {
-  a?: string;
-  a_ref?: string;
-  b?: string;
-  b_ref?: string;
-  ratio?: number;
-}
-
-interface DreamReplay {
-  day_no?: number;
-  title?: string;
-  mood?: string;
-}
-
-interface DreamNight {
-  date?: string;
-  heat?: DreamHeat | null;
-  merge?: DreamMerge[];
-  link_n?: number;
-  replay?: DreamReplay[];
-}
-
-interface DreamResp {
-  ok?: boolean;
-  nights?: DreamNight[];
-}
-
-// 随手记 /api/notes（9-9 现成，此前 app 没接）
-interface NoteItem {
-  id?: number;
-  text?: string;
-  time?: string;
-}
-
-interface NotesResp {
-  notes?: NoteItem[];
-}
 
 // ── 轻动效（工单 FE-02）：按压反馈只动透明度——合成器逐帧廉价，120Hz 友好，不用毛玻璃不吃重阴影 ──
 @Styles
@@ -668,285 +269,11 @@ function pressFull() {
   .opacity(1)
 }
 
-// ── 聊天数据源（FE-02 要求6）：LazyForEach 的 IDataSource 适配器。
-// 数组是唯一真相，每次变更按需通知监听者——消息列表按需构建，一屏气泡一建，
-// 不再一次性铺满全天历史（低内存、首屏快，滚动丝滑）。 ──
-class ChatDataSource implements IDataSource {
-  private items: ChatItem[] = [];
-  private listeners: DataChangeListener[] = [];
 
-  totalCount(): number {
-    return this.items.length;
-  }
 
-  getData(index: number): ChatItem {
-    return this.items[index];
-  }
-
-  getAll(): ChatItem[] {
-    return this.items;
-  }
-
-  // 9-18 App深搜修（DS-02）：历史卷落地前认领活口用——浅拷一份当前列表（后续改列表不动这份快照）
-  snapshot(): ChatItem[] {
-    return this.items.slice();
-  }
-
-  registerDataChangeListener(listener: DataChangeListener): void {
-    if (this.listeners.indexOf(listener) < 0) {
-      this.listeners.push(listener);
-    }
-  }
-
-  unregisterDataChangeListener(listener: DataChangeListener): void {
-    const idx = this.listeners.indexOf(listener);
-    if (idx >= 0) {
-      this.listeners.splice(idx, 1);
-    }
-  }
-
-  private notify(fn: (l: DataChangeListener) => void): void {
-    for (let i = 0; i < this.listeners.length; i++) {
-      fn(this.listeners[i]);
-    }
-  }
-
-  append(item: ChatItem): void {
-    this.items.push(item);
-    this.notify((l: DataChangeListener) => l.onDataAdd(this.items.length - 1));
-  }
-
-  setAll(items: ChatItem[]): void {
-    this.items = items;
-    this.notify((l: DataChangeListener) => l.onDataReloaded());
-  }
-
-  // FE3-02（b）（9-23）：续载去重——服务端 id 唯一，已在列表里的同一条账不再接第二份。
-  // 无 id 的活口气泡（乐观气泡/时间线卡）不在此列，仍走 mergeWithLive 的认领口径。
-  private hasMsgId(id: number): boolean {
-    for (let i = 0; i < this.items.length; i++) {
-      if (this.items[i].msgId === id) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  // 9-23 V-1 全量浏览：老窗前插（旧在前）——倒序逐条 onDataAdd(0)，让列表
-  // maintainVisibleContentPosition 能按"插入在可视区外"维持眼前这屏（整卷 reload 会顶走位置）
-  prependAll(arr: ChatItem[]): void {
-    if (arr.length === 0) {
-      return;
-    }
-    for (let i = arr.length - 1; i >= 0; i--) {
-      const m = arr[i];
-      if (m.msgId !== undefined && this.hasMsgId(m.msgId)) {
-        continue;   // FE3-02（b）：已经有这条账了，跳过
-      }
-      this.items.unshift(m);
-      this.notify((l: DataChangeListener) => l.onDataAdd(0));
-    }
-  }
-
-  // 9-23 V-1：下翻续载——尾部顺序追加（与 prependAll 对称）
-  appendAll(arr: ChatItem[]): void {
-    for (let i = 0; i < arr.length; i++) {
-      const m = arr[i];
-      if (m.msgId !== undefined && this.hasMsgId(m.msgId)) {
-        continue;   // FE3-02（b）：老窗续载到今天的窗口时，同一句话不再出现第二份
-      }
-      this.items.push(m);
-      this.notify((l: DataChangeListener) => l.onDataAdd(this.items.length - 1));
-    }
-  }
-
-  removeWhere(pred: (m: ChatItem) => boolean): void {
-    for (let i = this.items.length - 1; i >= 0; i--) {
-      if (pred(this.items[i])) {
-        this.items.splice(i, 1);
-        this.notify((l: DataChangeListener) => l.onDataDelete(i));
-      }
-    }
-  }
-
-}
-
-interface ThinkingResp {
-  thinking?: string | null;
-}
-
-// 开门有信（9-2 #总）
-interface OutboxLetter {
-  id: number;
-  text: string;
-  time: string;
-}
-
-interface OutboxResp {
-  letters?: OutboxLetter[];
-}
-
-// ── 打卡（工单 9-1-#2） ──
-interface CheckinItem {
-  id: number;
-  name: string;
-  target_time: string | null;
-  created_at: string;
-}
-
-interface CheckinItemsResp {
-  items?: CheckinItem[];
-}
-
-interface TodayCheckin {
-  id: number;
-  item_id: number;
-  name: string;
-  time: string;
-}
-
-interface TodayCheckinsResp {
-  checkins?: TodayCheckin[];
-}
-
-// CHECKIN-2（9-13）：月视图——每项本月打卡日（day 数字数组）+ 连续/最长（里程碑在 server 侧入 Garden）
-interface MonthCheckinItem {
-  item_id: number;
-  name: string;
-  archived: boolean;
-  streak: number;
-  best: number;
-  days: number[];
-}
-
-interface MonthCheckinsResp {
-  month?: string;
-  items?: MonthCheckinItem[];
-}
-
-interface OkResp {
-  ok?: boolean;
-  id?: number;
-  error?: string;
-}
-
-// ── 心情曲线 v2（9-9） ──
-interface MoodPoint {
-  date: string;
-  score: number;      // 浓度 1~5（旧字段名 score 沿用 server 契约）
-  source: string;     // 小乖 | 姐姐 | 今日主色
-  note: string;
-  time: string;
-  hh?: number;        // 9-12：真小时数（0~23，-1=没解析出）。日视图按它分布——
-                      // 旧版从 time（MM-DD HH:MM）前两位抠出的是月份，全挤一列的血案
-  type: string;       // 词表词；空串=旧数字分
-}
-
-interface MoodsResp {
-  types?: MoodTypeItem[];
-  moods?: MoodPoint[];
-}
-
-// 心情打卡请求体（ArkTS 不许无类型对象字面量）
-interface MoodReqBody {
-  type: string;
-  intensity: number;
-  note: string;
-}
-
-// 情绪河墨点坐标缓存（RIVER-3）：画的时候记下每个星落在哪里，点了才知道弹哪条
-interface RiverDot {
-  x: number;
-  y: number;
-  point: MoodPoint;
-}
-
-// 日记馆（HALL-01，9-10）：两格合并条目——src='days' 是姐姐正典的投影，'hall' 是他投的
-interface HallEntry {
-  id: number;
-  src: string;
-  date: string;
-  author: string;
-  title: string;
-  content: string;
-  mood: string;
-  time: string;
-}
-
-interface HallResp {
-  entries?: HallEntry[];
-  error?: string;
-}
-
-interface HallReqBody {
-  title: string;
-  content: string;
-  mood: string;
-}
-
-// 两封信（HER-WORDS，9-10）：小乖的话（亲笔存储版优先，没写过回退常量）+ 姐姐的话（她的自留页最新版）
-interface WordsResp {
-  xiaoguai?: string;
-  xiaoguai_version?: number;   // 9-12：他亲笔的版号（0=还是工地代笔常量，没写过）
-  jiejie?: HerWords;
-}
-
-interface HerWords {
-  text?: string;
-  version?: number;
-  time?: string;
-}
-
-// Seline 事实仪表（9-10，波索斯家风：只报事实不打分）
-interface RhythmFacts {
-  letters?: number | null;
-  replies?: number | null;
-  avg_reply_min?: number | null;
-}
-
-// 家主信箱投信请求体（9-9）
-interface LetterReqBody {
-  message: string;
-}
-
-// 打卡请求体（ArkTS 不许无类型对象字面量）
-interface CheckinReqBody {
-  item_id: number;
-}
-
-interface ArchiveReqBody {
-  id: number;
-}
-
-// outbox 待发队列条目：message 必有，其余照发送时的可选字段原样存
-interface OutboxItem {
-  message: string;
-  msgId?: string;     // 9-12 消息身份证跟着排队走：补发时原样带回去重（绝不双发）
-  image?: string;
-  loc?: LocInfo;
-  place?: string;
-  file?: FileBody;    // 9-1-#8：附件跟着排队走
-  queuedAt: string;
-}
-
-interface ChatItem {
-  key: string;
-  who: string;      // '小乖' | '姐姐' | '系统' | '思考'
-  text: string;
-  imageUrl: string; // '' 表示无图；新拍的照片用 dataURL，历史图用 /photos/ URL
-  time: string;     // 'HH:MM' 或 '思考 X.Xs · HH:MM'
-  tools?: ToolUseInfo[];   // 姐姐动过的图书证，无则不渲染
-  msgId?: number;          // 二期d：chats 行号（历史才有）
-  hasThinking?: boolean;   // 二期d：这条有思考链可点开
-  fileName?: string;       // 9-1-#8：附件文件名（气泡里显示小片）
-  thinkDone?: boolean;     // 9-12 时间线：思考卡已封口（time=「思考了 Ns」，text=全文可展开）
-}
-
+// 9-30 拆分：实现已外提到 common/theme（纯函数），这里只留同名壳——22 处调用点一行不动。
 function errMsg(err: Object): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  return JSON.stringify(err);
+  return errText(err);
 }
 
 // 9-12 消息身份证：时间戳+随机，够防「同一条消息的两次重试」撞号——
@@ -955,559 +282,9 @@ function newMsgId(): string {
   return `m${Date.now().toString(36)}${Math.floor(Math.random() * 0xffffffff).toString(36)}`;
 }
 
-// ─────── CAL-02（9-13）课表本地化：节次时间正典 + 纯解析 ───────
-// #region CAL-02 沙盘转译区（纯函数、无副作用；_t_cal02 按此标记机械转译跑断言）
-// 改写法请保持简式：不用箭头函数、对象字面量单行、不碰 this 与外部状态
 
-// 节次时间正典（1=08:00-08:45 … 13=21:20-22:05）：与上报共用一份，硬编码就在这里。
-// 9-18 家主定口径：1-8 不动；新插 9=18:10-18:50、10=18:50-19:30（课外活动那档）；
-// 原 9-11 顺延成 11-13（19:40-20:25 / 20:30-21:15 / 21:20-22:05）——全校表共 13 节。
-const PERIOD_SLOTS: string[] = [
-  '08:00-08:45', '08:55-09:40', '10:00-10:45', '10:55-11:40',
-  '14:30-15:15', '15:20-16:05', '16:25-17:10', '17:15-18:00',
-  '18:10-18:50', '18:50-19:30', '19:40-20:25', '20:30-21:15', '21:20-22:05',
-];
 
-// 周名表：下标跟 Date.getDay() 同规（周日=0 … 周六=6）
-const WEEK_CN: string[] = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 
-interface TtSeg {
-  ok: boolean;     // 这一段看懂没有
-  from: number;    // 起节（1~13；直写时间的段为 0）
-  to: number;      // 止节（含；直写时间的段为 0）
-  title: string;   // 课名 + 可选 @地点（原文保留）
-  time?: string;   // 9-18 直写时间档：规整成 HH:MM-HH:MM（有它就不走节次正典）
-}
-
-interface TtEntry {
-  dow: number;     // 哪一天（周日=0 … 周六=6）
-  from: number;
-  to: number;
-  title: string;
-  time?: string;   // 9-18 直写时间档：原样上报、原样回写
-}
-
-interface TtParse {
-  entries: TtEntry[];   // 全周所有课（不分今天）
-  good: number;         // 看懂的行数
-  bad: string[];        // 没看懂的行（原样逐行列出——不许静默吞）
-}
-
-// 一段课次：「1-2节 高数」「1-2 高数」「3节 英语」「3 英语」都认；节次只认 1~13。
-// 9-18 新档：段首数字后面直接跟冒号的，按「直写时间」走（18:10-19:30 课外活动）——不再当节次；
-// 冒号半角「:」全角「：」都算（中文输入法的真实输入）。
-function parseTimetableSegment(seg: string): TtSeg {
-  const r: TtSeg = { ok: false, from: 0, to: 0, title: '' };
-  let i = 0;
-  while (i < seg.length && (seg.charCodeAt(i) === 32 || seg.charCodeAt(i) === 12288)) {
-    i++;   // 半角/全角空格都跳过
-  }
-  const a0 = i;
-  while (i < seg.length && seg.charCodeAt(i) >= 48 && seg.charCodeAt(i) <= 57) {
-    i++;   // 吃掉起节数字
-  }
-  if (i === a0) {
-    return r;
-  }
-  if (i < seg.length && isColon(seg.charAt(i))) {
-    return parseTimeSegment(seg, a0, i);   // 「18:10-19:30 课外活动」：直写时间档（冒号全半角都认）
-  }
-  let a = 0;
-  for (let k = a0; k < i; k++) {
-    a = a * 10 + (seg.charCodeAt(k) - 48);
-  }
-  let b = a;
-  if (i < seg.length && seg.charAt(i) === '-') {
-    i++;
-    const b0 = i;
-    while (i < seg.length && seg.charCodeAt(i) >= 48 && seg.charCodeAt(i) <= 57) {
-      i++;   // 吃掉止节数字
-    }
-    if (i === b0) {
-      return r;
-    }
-    b = 0;
-    for (let k = b0; k < i; k++) {
-      b = b * 10 + (seg.charCodeAt(k) - 48);
-    }
-  }
-  if (i < seg.length && seg.charAt(i) === '节') {
-    i++;   // 「节」可有可无
-  }
-  const title = seg.substring(i).trim();
-  if (title.length === 0 || a < 1 || b < 1 || a > 13 || b > 13 || a > b) {
-    return r;
-  }
-  r.ok = true;
-  r.from = a;
-  r.to = b;
-  r.title = title;
-  return r;
-}
-
-// 补零成两位：9 → 09（直写时间规整用）
-function pad2(n: number): string {
-  if (n < 10) {
-    return '0' + n;
-  }
-  return '' + n;
-}
-
-// 冒号容错：半角「:」和全角「：」都算——中文输入法打出来是后者（只在本解析里判，不动课名文本里的标点）
-function isColon(c: string): boolean {
-  return c === ':' || c === '：';
-}
-
-// 9-18 直写时间一段：「18:10-19:30 课外活动」「9:05~10:05 早读」都认，规整成 HH:MM-HH:MM（补零）。
-// 进来时第一段小时已经吃在 h0~i0、i0 正指着冒号；分隔符 - 或 ~ 都算。
-// 半截时间（18:10-、9:05、25:00-26:00、起≥止）一律 ok=false——进「没看懂」名单，不许静默吞。
-function parseTimeSegment(seg: string, h0: number, i0: number): TtSeg {
-  const r: TtSeg = { ok: false, from: 0, to: 0, title: '' };
-  let hh1 = 0;
-  for (let k = h0; k < i0; k++) {
-    hh1 = hh1 * 10 + (seg.charCodeAt(k) - 48);
-  }
-  let i = i0 + 1;   // 跳过第一段冒号
-  const m0 = i;
-  while (i < seg.length && seg.charCodeAt(i) >= 48 && seg.charCodeAt(i) <= 57) {
-    i++;   // 第一段分钟
-  }
-  if (i === m0 || i - m0 > 2) {
-    return r;
-  }
-  let mm1 = 0;
-  for (let k = m0; k < i; k++) {
-    mm1 = mm1 * 10 + (seg.charCodeAt(k) - 48);
-  }
-  if (!(i < seg.length && (seg.charAt(i) === '-' || seg.charAt(i) === '~'))) {
-    return r;   // 没有分隔符（18:10）→ 看不懂
-  }
-  i++;
-  const h2 = i;
-  while (i < seg.length && seg.charCodeAt(i) >= 48 && seg.charCodeAt(i) <= 57) {
-    i++;   // 第二段小时
-  }
-  if (i === h2 || i - h2 > 2 || !(i < seg.length && isColon(seg.charAt(i)))) {
-    return r;   // 半截（18:10-、9:05-10）→ 看不懂
-  }
-  let hh2 = 0;
-  for (let k = h2; k < i; k++) {
-    hh2 = hh2 * 10 + (seg.charCodeAt(k) - 48);
-  }
-  i++;   // 跳过第二段冒号
-  const m2 = i;
-  while (i < seg.length && seg.charCodeAt(i) >= 48 && seg.charCodeAt(i) <= 57) {
-    i++;   // 第二段分钟
-  }
-  if (i === m2 || i - m2 > 2) {
-    return r;
-  }
-  let mm2 = 0;
-  for (let k = m2; k < i; k++) {
-    mm2 = mm2 * 10 + (seg.charCodeAt(k) - 48);
-  }
-  const t1 = pad2(hh1) + ':' + pad2(mm1);
-  const t2 = pad2(hh2) + ':' + pad2(mm2);
-  const title = seg.substring(i).trim();
-  if (hh1 > 23 || mm1 > 59 || hh2 > 23 || mm2 > 59 || t1 >= t2 || title.length === 0) {
-    return r;
-  }
-  r.ok = true;
-  r.time = t1 + '-' + t2;
-  r.title = title;
-  return r;
-}
-
-// 整份课表逐行解析：行首必须是周X（也容忍「星期X」）；一行多段用；或，隔开，课次沿用行首周几。
-// 一行里只要有任一段没看懂，整行原样计入 bad（宁列出来，不悄悄吞半截）。
-function parseTimetable(raw: string): TtParse {
-  const entries: TtEntry[] = [];
-  const bad: string[] = [];
-  let good = 0;
-  const lines = raw.split('\n');
-  for (let li = 0; li < lines.length; li++) {
-    const rawLine = lines[li].trim();
-    if (rawLine.length === 0) {
-      continue;   // 空行不算课也不算错
-    }
-    // 行首认「周X」，也容忍「星期X」；这种换算只在行首做——课名里的「星期」两个字不许动
-    let dow = -1;
-    let rest = '';
-    for (let w = 0; w < WEEK_CN.length; w++) {
-      if (rawLine.startsWith(WEEK_CN[w])) {
-        dow = w;
-        rest = rawLine.substring(WEEK_CN[w].length);
-        break;
-      }
-    }
-    if (dow < 0 && rawLine.startsWith('星期')) {
-      const w2 = WEEK_CN.indexOf('周' + rawLine.substring(2, 3));
-      if (w2 >= 0) {
-        dow = w2;
-        rest = rawLine.substring(3);
-      }
-    }
-    if (dow < 0) {
-      bad.push(rawLine);   // 周几都没写 → 没看懂
-      continue;
-    }
-    const segs = rest.split('；').join('，').split('，');
-    const outs: TtEntry[] = [];
-    let lineOK = true;
-    for (let si = 0; si < segs.length; si++) {
-      const segText = segs[si].trim();
-      if (segText.length === 0) {
-        continue;   // 行尾多打了分隔符：空气段跳过，不吞内容
-      }
-      const one = parseTimetableSegment(segText);
-      if (!one.ok) {
-        lineOK = false;
-        break;
-      }
-      const e: TtEntry = { dow: dow, from: one.from, to: one.to, title: one.title, time: one.time };
-      outs.push(e);
-    }
-    if (lineOK && outs.length > 0) {
-      good = good + 1;
-      for (let ei = 0; ei < outs.length; ei++) {
-        entries.push(outs[ei]);
-      }
-    } else {
-      bad.push(rawLine);
-    }
-  }
-  const result: TtParse = { entries: entries, good: good, bad: bad };
-  return result;
-}
-
-// 取「今天」的课：节次范围展开成时间条（端到端=第一小节开始~最后一小节结束），
-// 按时间排序取前 5 条；title 保留课名与地点，超 20 字截断
-function pickTimetableToday(parsed: TtParse, dow: number): ScheduleItem[] {
-  const items: ScheduleItem[] = [];
-  for (let i = 0; i < parsed.entries.length; i++) {
-    const e = parsed.entries[i];
-    if (e.dow !== dow) {
-      continue;   // 不是今天的行不出现
-    }
-    let t = '';
-    if (e.time !== undefined && e.time.length > 0) {
-      t = e.time;   // 9-18 直写时间档：原样上报，不套正典节次
-    } else {
-      t = PERIOD_SLOTS[e.from - 1].split('-')[0] + '-' + PERIOD_SLOTS[e.to - 1].split('-')[1];
-    }
-    let title = e.title;
-    if (title.length > 20) {
-      title = title.substring(0, 20);
-    }
-    const item: ScheduleItem = { time: t, title: title };
-    items.push(item);
-  }
-  items.sort(timetableCmpTime);
-  return items.slice(0, 5);
-}
-
-function timetableCmpTime(x: ScheduleItem, y: ScheduleItem): number {
-  if (x.time < y.time) {
-    return -1;
-  }
-  if (x.time > y.time) {
-    return 1;
-  }
-  return 0;
-}
-
-// 课表条目按开始时间排序（独立函数——沙盘转译器只认独立函数，别用内嵌匿名函数）：
-// 直写时间条目用自己写的时刻，节次条目查正典——两种混排也按真实先后。
-function ttEntryCmp(a: TtEntry, b: TtEntry): number {
-  const at: string | undefined = a.time;
-  const bt: string | undefined = b.time;
-  const ta = at !== undefined && at.length > 0
-    ? at.substring(0, 5) : PERIOD_SLOTS[a.from - 1].substring(0, 5);
-  const tb = bt !== undefined && bt.length > 0
-    ? bt.substring(0, 5) : PERIOD_SLOTS[b.from - 1].substring(0, 5);
-  if (ta < tb) {
-    return -1;
-  }
-  if (ta > tb) {
-    return 1;
-  }
-  return 0;
-}
-
-// 课表序列化（9-17 夜·图形化编辑器）：条目 → 解析器认的文本格式（周一 1-2 高数；3-4 英语）。
-// 每天一行、按开始时间排序；直写时间条目按 `HH:MM-HH:MM 标题` 原样回写；
-// 空名条目跳过（没落格的草稿不落盘）；空课表输出空串——链路零改动。
-function serializeTimetable(entries: TtEntry[]): string {
-  const lines: string[] = [];
-  for (let d = 0; d < 7; d++) {
-    const day: TtEntry[] = [];
-    for (let i = 0; i < entries.length; i++) {
-      if (entries[i].dow === d && entries[i].title.trim().length > 0) {
-        day.push(entries[i]);
-      }
-    }
-    if (day.length === 0) {
-      continue;
-    }
-    day.sort(ttEntryCmp);
-    const segs: string[] = [];
-    for (let i = 0; i < day.length; i++) {
-      const segTime: string | undefined = day[i].time;
-      if (segTime !== undefined && segTime.length > 0) {
-        segs.push(segTime + ' ' + day[i].title);   // 9-18 直写时间档原样回写（编辑器文本往返不丢）
-      } else {
-        segs.push(day[i].from + '-' + day[i].to + ' ' + day[i].title);
-      }
-    }
-    lines.push(WEEK_CN[d] + ' ' + segs.join('；'));
-  }
-  return lines.join('\n');
-}
-
-// ─────── KB-TIME（9-18）按时间录入：时间模式纯函数 ───────
-// 「HH:MM」→ 零点起分钟数（只喂自家生成的两字符段）
-function ttMin(t: string): number {
-  return ((t.charCodeAt(0) - 48) * 10 + (t.charCodeAt(1) - 48)) * 60
-    + (t.charCodeAt(3) - 48) * 10 + (t.charCodeAt(4) - 48);
-}
-
-// 分钟数 → 「HH:MM」（补零借正典区的 pad2）
-function ttHHMM(minute: number): string {
-  return pad2(Math.floor(minute / 60)) + ':' + pad2(minute % 60);
-}
-
-const TT_TIME_CAP: number = 23 * 60 + 55;   // 时间控件天花板 23:55：分一次走 5 格，这是最后一格
-
-// ═══════════ 📖 Markdown 轻渲染 · A 段（模块级：解析器）═══════════
-// （9-27 夜 图书管理员批）用场：档案馆开卷 / 周报开卷——家里很多文件是 md，
-// 开卷按格式渲染；聊天/日记/信件/她的原话一律不走这里（一个字不改）。
-// 子集：标题 #~###### · 粗体 **…** · 斜体 *…* · 行内代码 `…` · 无序列表 - * + ·
-//       有序列表 1. 1、1) · 引用 > · 分隔线 --- *** ___ · 代码块 ```。
-// 表格/嵌套引用暂不渲染（按原文显示）。零第三方依赖。
-// 粘贴位置：Index.ets 顶部常量区（建议 const TT_TIME_CAP 那行之后，空一行）。
-interface MdSeg {
-  t: string;     // 文本
-  b: boolean;    // 粗
-  i: boolean;    // 斜
-  c: boolean;    // 行内代码
-}
-
-interface MdBlock {
-  k: number;      // 0=段落 1=标题 2=列表项 3=引用 4=分隔线 5=代码块
-  lv: number;     // 标题 1~6；列表缩进 0/1
-  t: string;      // 原文
-  segs: MdSeg[];  // 行内分段（解析一次，渲染零成本）
-}
-
-function mdInline(s: string): MdSeg[] {
-  const out: MdSeg[] = [];
-  const parts: string[] = s.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/);
-  for (let i = 0; i < parts.length; i++) {
-    const p: string = parts[i];
-    if (p === '') {
-      continue;
-    }
-    if (p.length > 4 && p.startsWith('**') && p.endsWith('**')) {
-      const sg: MdSeg = { t: p.slice(2, p.length - 2), b: true, i: false, c: false };
-      out.push(sg);
-    } else if (p.length > 2 && p.startsWith('`') && p.endsWith('`')) {
-      const sg: MdSeg = { t: p.slice(1, p.length - 1), b: false, i: false, c: true };
-      out.push(sg);
-    } else if (p.length > 2 && p.startsWith('*') && p.endsWith('*')) {
-      const sg: MdSeg = { t: p.slice(1, p.length - 1), b: false, i: true, c: false };
-      out.push(sg);
-    } else {
-      const sg: MdSeg = { t: p, b: false, i: false, c: false };
-      out.push(sg);
-    }
-  }
-  return out;
-}
-
-function mdParse(src: string): MdBlock[] {
-  const out: MdBlock[] = [];
-  const lines: string[] = (src === undefined || src === null ? '' : src).split('\n');
-  let inCode: boolean = false;
-  let codeBuf: string = '';
-  for (let i = 0; i < lines.length; i++) {
-    const raw: string = lines[i];
-    const t: string = raw.trim();
-    if (t.startsWith('```')) {   // 代码块围栏
-      if (inCode) {
-        const b0: MdBlock = { k: 5, lv: 0, t: codeBuf, segs: [] };
-        out.push(b0);
-        codeBuf = '';
-        inCode = false;
-      } else {
-        inCode = true;
-      }
-      continue;
-    }
-    if (inCode) {
-      codeBuf = codeBuf === '' ? raw : codeBuf + '\n' + raw;
-      continue;
-    }
-    if (t === '') {
-      continue;   // 空行=块分隔（渲染靠块间距）
-    }
-    if (t === '---' || t === '***' || t === '___') {
-      const b4: MdBlock = { k: 4, lv: 0, t: '', segs: [] };
-      out.push(b4);
-      continue;
-    }
-    if (t.charAt(0) === '#') {   // 标题（#后必须有空格，保护 #标签）
-      let lv: number = 0;
-      while (lv < t.length && t.charAt(lv) === '#') {
-        lv++;
-      }
-      if (lv <= 6 && lv < t.length && (t.charAt(lv) === ' ' || t.charAt(lv) === '　')) {
-        const ht: string = t.slice(lv + 1).trim();
-        const b1: MdBlock = { k: 1, lv: lv, t: ht, segs: mdInline(ht) };
-        out.push(b1);
-        continue;
-      }
-    }
-    if (t.charAt(0) === '>') {   // 引用
-      let s0: string = t;
-      while (s0.startsWith('>')) {
-        s0 = s0.slice(1).trim();
-      }
-      if (s0 === '') {
-        continue;
-      }
-      const b3: MdBlock = { k: 3, lv: 0, t: s0, segs: mdInline(s0) };
-      out.push(b3);
-      continue;
-    }
-    if (t.length > 2 && (t.startsWith('- ') || t.startsWith('* ') || t.startsWith('+ '))) {
-      let indent: number = 0;   // 缩进数（两个空格以上=二级）
-      while (indent < raw.length
-             && (raw.charAt(indent) === ' ' || raw.charAt(indent) === '　' || raw.charAt(indent) === '\t')) {
-        indent++;
-      }
-      const lt: string = t.slice(2).trim();
-      const b2: MdBlock = { k: 2, lv: indent >= 2 ? 1 : 0, t: lt, segs: mdInline(lt) };
-      out.push(b2);
-      continue;
-    }
-    let d: number = 0;   // 有序列表：1. 1、1)
-    while (d < t.length && t.charAt(d) >= '0' && t.charAt(d) <= '9') {
-      d++;
-    }
-    if (d > 0 && d <= 2 && d < t.length) {
-      const ch: string = t.charAt(d);
-      let bodyStart: number = -1;
-      if (ch === '、') {
-        bodyStart = d + 1;
-      } else if ((ch === '.' || ch === ')') && d + 1 < t.length && t.charAt(d + 1) === ' ') {
-        bodyStart = d + 2;
-      }
-      if (bodyStart > 0 && bodyStart < t.length) {
-        const ot: string = t.slice(0, d) + '. ' + t.slice(bodyStart).trim();
-        const b2o: MdBlock = { k: 2, lv: 0, t: ot, segs: mdInline(ot) };
-        out.push(b2o);
-        continue;
-      }
-    }
-    const bp: MdBlock = { k: 0, lv: 0, t: t, segs: mdInline(t) };   // 普通段落
-    out.push(bp);
-  }
-  if (inCode && codeBuf !== '') {
-    const b5: MdBlock = { k: 5, lv: 0, t: codeBuf, segs: [] };
-    out.push(b5);
-  }
-  return out;
-}
-
-// 走一步（±5 分钟 / ±1 小时），钳在 00:00~23:55：
-// 跨位自动进位（08:55+5=09:00、08:00−5=07:55），顶到边就停住——UI 只产 24 小时制合法值
-function ttStep(t: string, deltaMin: number): string {
-  let v = ttMin(t) + deltaMin;
-  if (v < 0) {
-    v = 0;
-  }
-  if (v > TT_TIME_CAP) {
-    v = TT_TIME_CAP;
-  }
-  return ttHHMM(v);
-}
-
-// 时间 → 最接近的正典节次：起、止各按最近时刻找（精确匹配差 0，自然胜出）；
-// 结果钳在 1~13，起晚于止就收成单节——绝不越界、绝不反向
-function ttClosestPeriod(t1: string, t2: string): number[] {
-  let from = 1;
-  let to = 1;
-  let d1Best = 100000;   // 一天最多 1440 分钟，初值给够大
-  let d2Best = 100000;
-  for (let i = 0; i < PERIOD_SLOTS.length; i++) {
-    const ss = PERIOD_SLOTS[i].split('-');
-    const d1 = Math.abs(ttMin(ss[0]) - ttMin(t1));
-    if (d1 < d1Best) {
-      d1Best = d1;
-      from = i + 1;
-    }
-    const d2 = Math.abs(ttMin(ss[1]) - ttMin(t2));
-    if (d2 < d2Best) {
-      d2Best = d2;
-      to = i + 1;
-    }
-  }
-  if (to < from) {
-    to = from;
-  }
-  return [from, to];
-}
-// #endregion CAL-02 沙盘转译区
-
-// ═══════════ 📖 Markdown 轻渲染 · 子组件 MdSegText（文件级 · struct Index 同级）═══════════
-// 9-28 真机修：真机上「Text 内 ForEach 生成 Span」不吃（开卷卡「正在开卷……」）——
-// 官方《文本显示 (Text/Span)》：Span 只能作 Text/ContainerSpan/RichEditor 的子组件；
-// 官方《场景化案例》：「Text 不支持自定义组件」（非容器组件，解析子组件时不展开）。
-// 故行内样式改走官方【属性字符串 StyledString】——数据对象，不是子组件树（官方原文：
-// 「拥有 Span 的所有的能力」）；块级排版照旧（标题/列表/引用/分隔线/代码块）。
-// 绑定时机：官方《属性字符串》指南——API 15 起 aboutToAppear 中 setStyledString 初始化即可显示
-//（本机 compatibleSdkVersion 23 ✓）。
-@Component
-struct MdSegText {
-  segs: MdSeg[] = [];
-  baseSize: number = FS_BODY;
-  baseColor: string = '#5c5348';
-  codeColor: string = '#b08968';
-  bold: boolean = false;
-  lh: number = 23;
-  private ctl: TextController = new TextController();
-
-  private styled(): MutableStyledString {
-    const ms: MutableStyledString = new MutableStyledString('');
-    for (let i = 0; i < this.segs.length; i++) {
-      const sg: MdSeg = this.segs[i];
-      const st: TextStyle = new TextStyle({
-        fontSize: LengthMetrics.vp(this.baseSize),   // TextStyle.fontSize 收 LengthMetrics（不是 number）
-        fontColor: sg.c ? this.codeColor : this.baseColor,
-        fontWeight: (sg.b || this.bold) ? FontWeight.Bold : FontWeight.Normal,
-        fontStyle: sg.i ? FontStyle.Italic : FontStyle.Normal
-      });
-      const opt: StyleOptions = {
-        start: 0,
-        length: sg.t.length,
-        styledKey: StyledStringKey.FONT,
-        styledValue: st
-      };
-      ms.appendStyledString(new StyledString(sg.t, [opt]));
-    }
-    return ms;
-  }
-
-  aboutToAppear(): void {
-    this.ctl.setStyledString(this.styled());
-  }
-
-  build() {
-    Text(undefined, { controller: this.ctl })
-      .width('100%')
-      .lineHeight(this.lh)
-  }
-}
 
 @Entry
 @Component
@@ -1531,140 +308,10 @@ struct Index {
   @State liveReplyText: string = '';         // 正在流的正文
   @State liveReplyTime: string = '';         // 正文气泡的时间戳（建卡时定）
   // 夜下取色：色值在 NIGHT_MAP 里就换夜装，查不到原样——一个函数，全屋换灯。
-  // pref 与系统色模式变化都会触发整树重渲染，色函数跟着重算。
+  // 9-30 拆分：实现外提到 common/theme（纯函数，别的页面文件也能用）；这里留同名壳，
+  // 474 处 this.dk(...) 调用点一行不动。
   private dk(c: string): string {
-    const dark: boolean = this.nightPref === 'on'
-      || (this.nightPref === 'auto' && (AppStorage.get<boolean>('sysDark') ?? false));
-    if (!dark) {
-      return c;
-    }
-    const n: string | undefined = NIGHT_MAP[c];
-    return n === undefined ? c : n;
-  }
-
-// ═══════════ 📖 Markdown 轻渲染 · B 段（struct Index 内：缓存 + 渲染）═══════════
-// 说明：①mdOfA/mdOfR 惰性缓存——同一文本只在变化时解析一次（滚/重渲染零成本）；
-//       ②MdDocView 是两处阅读器共用的渲染体（块级排版）；行内样式交给子组件 MdSegText
-//         （属性字符串 StyledString——9-28 真机修：Text 里不放 ForEach/Span 子组件树）；
-//       ③颜色全走 this.dk() + 现有色板，夜装自动跟；字号走四步进（20/16/14）。
-  private mdKeyA: string = '';
-  private mdCacheA: MdBlock[] = [];
-  private mdOfA(text: string): MdBlock[] {
-    if (text !== this.mdKeyA) {
-      this.mdKeyA = text;
-      this.mdCacheA = mdParse(text);
-    }
-    return this.mdCacheA;
-  }
-  private mdKeyR: string = '';
-  private mdCacheR: MdBlock[] = [];
-  private mdOfR(text: string): MdBlock[] {
-    if (text !== this.mdKeyR) {
-      this.mdKeyR = text;
-      this.mdCacheR = mdParse(text);
-    }
-    return this.mdCacheR;
-  }
-
-  // 9-28 真修②（与 v5 打字机同款坑）：@Builder 按值传参——参数变化不会刷新内部 UI。
-  // 改无参＋this 直读两个 @State：文本一变，本块随父重渲染重建，ForEach 取到最新解析。
-  // 取哪一卷由「当前开的是哪个阅读器」显式判定（不用「非档案馆即周报」的二元假设）——
-  // 两个全屏页互斥，顺序判即安全；将来加第三个 md 阅读口，只在这里添一行。
-  private mdOpenBlocks(): MdBlock[] {
-    if (this.archiveOpen) {
-      return this.mdOfA(this.archDocText);
-    }
-    if (this.repOpen) {
-      return this.mdOfR(this.repDocText);
-    }
-    return [];
-  }
-
-  @Builder
-  MdDocView() {
-    Column() {
-      ForEach(this.mdOpenBlocks(), (blk: MdBlock, idx: number) => {
-        if (blk.k === 1) {
-          // 标题：# 与 ## 大字，### 起小一号；字重分级
-          MdSegText({
-            segs: blk.segs,
-            baseSize: blk.lv <= 1 ? FS_TITLE : (blk.lv === 2 ? FS_BODY : FS_SUB),
-            baseColor: this.dk(C_TEXT),
-            codeColor: this.dk(C_ACCENT),
-            bold: blk.lv <= 2,
-            lh: 24
-          })
-            .width('100%')
-            .margin({ top: idx === 0 ? 0 : 12, bottom: 4 })
-        } else if (blk.k === 2) {
-          // 列表项：· 前缀（缩进项给全角空格）；行内样式走 Span
-          Row() {
-            Text(blk.lv > 0 ? '　·' : '·')
-              .fontSize(FS_BODY)
-              .fontColor(this.dk(C_TEXT_3))
-            MdSegText({
-              segs: blk.segs,
-              baseSize: FS_BODY,
-              baseColor: this.dk(C_TEXT_2),
-              codeColor: this.dk(C_ACCENT),
-              lh: 23
-            })
-              .layoutWeight(1)
-          }
-          .width('100%')
-          .alignItems(VerticalAlign.Top)
-          .margin({ top: 3 })
-        } else if (blk.k === 3) {
-          // 引用：左侧竖条 + 弱化文字
-          Row() {
-            Text('▎')
-              .fontSize(FS_BODY)
-              .fontColor(this.dk(C_DOT_BORDER))
-            MdSegText({
-              segs: blk.segs,
-              baseSize: FS_BODY,
-              baseColor: this.dk(C_TEXT_3),
-              codeColor: this.dk(C_ACCENT),
-              lh: 23
-            })
-              .layoutWeight(1)
-          }
-          .width('100%')
-          .alignItems(VerticalAlign.Top)
-          .margin({ top: 4 })
-        } else if (blk.k === 4) {
-          Divider()
-            .strokeWidth(1)
-            .color(this.dk(C_DOT_BORDER))
-            .margin({ top: 10, bottom: 10 })
-        } else if (blk.k === 5) {
-          // 代码块：卡片底 + 原样文本
-          Text(blk.t)
-            .fontSize(FS_SUB)
-            .fontColor(this.dk(C_TEXT_2))
-            .lineHeight(21)
-            .width('100%')
-            .padding(10)
-            .backgroundColor(this.dk(C_CARD))
-            .borderRadius(R_SM)
-            .margin({ top: 6 })
-        } else {
-          // 段落
-          MdSegText({
-            segs: blk.segs,
-            baseSize: FS_BODY,
-            baseColor: this.dk(C_TEXT_2),
-            codeColor: this.dk(C_ACCENT),
-            lh: 23
-          })
-            .width('100%')
-            .margin({ top: 4 })
-        }
-      }, (blk: MdBlock, idx: number) => idx + ':' + blk.k + ':' + blk.lv + ':' + blk.t)   // key 含全文：防切文档不刷新
-    }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start)
-    .padding({ left: M_PAGE, right: M_PAGE, bottom: 24 })
+    return dkColor(c, this.nightPref);
   }
 
   @State chatData: ChatDataSource = new ChatDataSource();   // FE-02：LazyForEach 数据源（原 messages 数组收编）
@@ -1724,11 +371,11 @@ struct Index {
   @State monthItems: MonthCheckinItem[] = [];   // CHECKIN-2（9-13）：当月月视图（连续🔥/热力图取数）
   @State checkinDetailId: number = -1;          // CHECKIN-2：项详情二级态（-1=列表，>=0=某 item）
   @State checkinBusy: boolean = false;          // 9-18 App深搜修（DS-05）：打卡防连点（xgBusy 家风）
-  private checkinTapTs: number = 0;             // LAY-07（9-23）：打卡按钮落点记账——防整行点击把详情顺带打开
   // ── outbox 待发队列（工单 9-1-#2） ──
   @State outboxCount: number = 0;
   @State outboxFlushing: boolean = false;   // 补发期间标题栏亮「补发中…」（9-1-#3）
   private outboxBusy: boolean = false;
+  private outboxFetchBusy: boolean = false;   // 10-02：fetchOutboxLetters 的闸（boot＋60s 轮询别重叠）
   private outboxRetry: number = 0;          // 退避重试计数：5s、15s 各一次（9-1-#3）
   private netConn?: connection.NetConnection;
   @State safeTopPad: number = 28;           // 打卡页避让状态栏（9-1-#3，全屏模态不吃系统默认安全区）
@@ -1769,17 +416,8 @@ struct Index {
   @State timetableMsg: string = '';          // 课表保存校验结果（N 行懂了、M 行没看懂）
   // KB-EDIT（9-17 夜·课表图形化编辑器）：周网格点选编课，保存时序列化回原文本格式
   @State kbEditOpen: boolean = false;        // 编辑器全屏开关
-  @State kbEntries: TtEntry[] = [];          // 编辑中的全周条目
-  @State kbSel: number = -1;                 // 正在编辑的条目下标（-1=没选）
-  @State kbName: string = '';                // 编辑条：课名
-  @State kbFrom: number = 1;                 // 编辑条：起节
-  @State kbTo: number = 2;                   // 编辑条：止节
-  @State kbTimeMode: boolean = false;        // 编辑条模式（9-18）：false=按节次，true=按时间（课外活动那档）
-  @State kbTFrom: string = '08:00';          // 时间模式：起点 HH:MM
-  @State kbTTo: string = '09:40';            // 时间模式：终点 HH:MM
   // 9-18 修复批八（APP2-01）：打开编辑器时没看懂的行——界面列出来、保存时原样拼回，
   // 编辑器只管它看得懂的条目，坏行不许被它无声抹掉（parseTimetable 的「不许静默吞」口径）
-  @State kbBadLines: string[] = [];
   @State logsBusy: boolean = false;
   // ── 日记馆（HALL-01，9-10）──
   @State hallShelf: string = '姐姐';         // 当前展开的格（数据键）：姐姐 / 小乖 / 两封信
@@ -1959,6 +597,10 @@ struct Index {
     if (this.thinkTimer >= 0) {
       clearInterval(this.thinkTimer);
       this.thinkTimer = -1;
+    }
+    if (this.bootDotTimer >= 0) {   // 10-02 修：原先漏了这个——loadHistory 卡住时页面销毁后仍 animateTo
+      clearInterval(this.bootDotTimer);
+      this.bootDotTimer = -1;
     }
     if (this.netConn) {
       try {
@@ -2550,31 +1192,83 @@ struct Index {
   @Builder
   CoverHub() {
     if (this.thinkingOpen) {
-      this.ThinkingPage()
+      ThinkingPage({ safeTopPad: this.safeTopPad, thinkingText: this.thinkingText, thinkingOpen: $thinkingOpen })
     } else if (this.riverFullOpen) {
       this.RiverFullPage()
     } else if (this.readingOpen) {
-      this.ReaderPage()
+      ReaderPage({
+        safeLeftPad: this.safeLeftPad, safeTopPad: this.safeTopPad, readBusy: this.readBusy,
+        readParas: this.readParas, readBook: this.readBook,
+        readSelPara: $readSelPara, readParaMark: $readParaMark, scroller: this.readerScroller,
+        onClose: () => { this.closeReader(); },
+        onIndexChange: (i: number) => { this.readerFirstIdx = i; this.reportReadPos(i); },
+        onSubmitMark: () => { this.submitParaMark(); }
+      })
     } else if (this.logsOpen) {
-      this.LogsPage()
+      LogsPage({
+        safeTopPad: this.safeTopPad, logsBusy: this.logsBusy, logsText: this.logsText,
+        logsOpen: $logsOpen, onRefresh: () => { this.fetchLogs(); }
+      })
     } else if (this.statsOpen) {
-      this.StatsPage()          // 9-23 B2-1：账本全屏页
+      StatsPage({          // 9-23 B2-1：账本全屏页
+        safeTopPad: this.safeTopPad, statsData: this.statsData,
+        statsFullBusy: this.statsFullBusy, statsFullMsg: this.statsFullMsg,
+        statsOpen: $statsOpen, onRefresh: () => { this.reloadStats(); }
+      })
     } else if (this.archiveOpen) {
-      this.ArchivePage()        // 9-23 V-2：档案馆全屏页
+      ArchivePage({        // 9-23 V-2：档案馆全屏页
+        safeTopPad: this.safeTopPad, archBusy: this.archBusy, archCards: this.archCards,
+        archItems: this.archItems, archMsg: this.archMsg,
+        archiveOpen: $archiveOpen, archDocTitle: $archDocTitle, archDocText: $archDocText,
+        onRefresh: () => { this.fetchArchive(); this.fetchCards(); },
+        onOpenCard: (c: CardItem) => { this.openCard(c); },
+        onOpenDoc: (n: string) => { this.fetchArchiveDoc(n); }
+      })
     } else if (this.favOpen && this.imgPreviewUrl === '') {
-      this.PhotoWallPage()      // 9-23 能上批 a：照片墙（收藏夹只读画廊）
+      PhotoWallPage({
+        safeTopPad: this.safeTopPad, favBusy: this.favBusy, favMsg: this.favMsg,
+        favPhotos: this.favPhotos, imgErrKeys: this.imgErrKeys, favOpen: $favOpen,
+        imgPreviewUrl: $imgPreviewUrl,
+        onRefresh: () => { this.fetchFavorites(); },
+        onImgErr: (u: string) => { this.markImgErr(u); },
+        favUrl: (n: string) => this.favPhotoUrl(n)
+      })
     } else if (this.imgPreviewUrl !== '') {
       // FE-02 ②：点图看大图；9-23 能上批 a——照片墙里点开的图也走这里，
       // 所以大图层要排在墙前面判：关掉大图后墙还在，不会把人甩回书架
-      this.ImagePreviewPage()
+      ImagePreviewPage({
+        safeTopPad: this.safeTopPad, imgErrKeys: this.imgErrKeys,
+        imgPreviewUrl: $imgPreviewUrl, onImgErr: (u: string) => { this.markImgErr(u); }
+      })
     } else if (this.wallOpen) {
-      this.WallPage()           // 9-23 能上批 b：门牌墙（她每天开场读的）
+      WallPage({
+        safeTopPad: this.safeTopPad, wallBusy: this.wallBusy, wallMsg: this.wallMsg,
+        wallPins: this.wallPins, wallOpen: $wallOpen, onRefresh: () => { this.fetchWall(); }
+      })
     } else if (this.repOpen) {
-      this.ReportsPage()        // 9-23 能上批 d：周报阅读器（只读）
+      ReportsPage({        // 9-23 能上批 d：周报阅读器（只读）
+        safeTopPad: this.safeTopPad, repBusy: this.repBusy, repMsg: this.repMsg,
+        repItems: this.repItems, repDocTitle: this.repDocTitle, repDocStatus: this.repDocStatus,
+        repOpen: $repOpen, repTab: $repTab, repDocId: $repDocId, repDocText: $repDocText,
+        onRefresh: () => { this.fetchReports(); },
+        onOpenReport: (it: LibReportItem) => { this.openReport(it); }
+      })
     } else if (this.xgEditOpen) {
       this.XgWordsEditPage()    // 9-17 夜：改这封信（全屏，替代原 120vp 内联小框）
     } else if (this.kbEditOpen) {
-      this.KbEditPage()         // 9-17 夜：周课表图形化编辑器
+      KbEditPage({         // 9-17 夜：周课表图形化编辑器
+        draft: this.timetableDraft, safeTopPad: this.safeTopPad,
+        onClose: () => { this.kbEditOpen = false; },
+        onSave: (text: string, renamed: number) => {
+          this.timetableDraft = text;
+          this.saveTimetable();   // 老路：存偏好 + 校验提示（timetableMsg 显示在设置页）
+          if (renamed > 0) {
+            this.timetableMsg = this.timetableMsg
+              + `（${renamed} 条课名里的「，；」已存成「·」——这俩是课表格式的分段符）`;
+          }
+          this.kbEditOpen = false;
+        }
+      })
     } else if (this.healthOpen) {
       this.HealthPage()         // 9-29 §12：🩺 家的体检（只读；三页共用 InfoPage 骨架）
     } else if (this.nightOpen) {
@@ -2658,501 +1352,12 @@ struct Index {
     .backgroundColor(this.dk(C_BG))
   }
 
-  // ── 周课表·图形化编辑器（9-17 夜·家主令「图形化添加课表，不要输入文字」）──
-  // 7 天点选：点＋加课、点课程格子改课；保存时序列化回原文本格式（解析/上报链路零改动）。
-  @Builder
-  KbDayRow(d: number) {
-    Column({ space: 4 }) {
-      Row() {
-        Text(WEEK_CN[d])
-          .fontSize(FS_SUB)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(this.dk(C_TEXT))
-          .width(56)
-        Blank()
-        Text('＋ 加课')
-          .fontSize(FS_AUX)
-          .fontColor(this.dk(C_ACCENT))
-          .padding({ left: 10, right: 4, top: 6, bottom: 6 })
-          .stateStyles({ pressed: pressDim, normal: pressFull })
-          .onClick(() => {
-            this.kbAdd(d);
-          })
-      }
-      .width('100%')
-      Flex({ wrap: FlexWrap.Wrap }) {
-        ForEach(this.kbDayList(d), (t: TtEntry, k: number) => {
-          Text(`${t.time !== undefined && t.time.length > 0 ? t.time : t.from + '-' + t.to} ${t.title === '' ? '新课…' : t.title}`)
-            .fontSize(FS_AUX)
-            .fontColor(t.title === '' ? this.dk(C_TEXT_4) : this.dk(C_ACCENT))
-            .backgroundColor(this.dk(C_WHITE))
-            .borderRadius(R_PILL)
-            .border({ width: 1, color: this.dk(C_DOT_BORDER) })
-            .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-            .margin({ right: 6, bottom: 6 })
-            .stateStyles({ pressed: pressDim, normal: pressFull })
-            .onClick(() => {
-              const idx = this.kbIndexOf(d, k);
-              if (idx >= 0) {
-                this.kbPick(idx);
-              }
-            })
-        }, (t: TtEntry, k: number) => `${d}-${k}-${t.title}`)
-      }
-      .width('100%')
-    }
-    .width('100%')
-  }
-
-  // 时间模式的步进钮（KB-TIME，9-18）：时/分 × ± 各一枚，样式跟全屋小按钮一致
-  @Builder
-  KbTBtn(fromSide: boolean, hourStep: boolean, delta: number) {
-    Text(delta > 0 ? '＋' : '−')
-      .fontSize(FS_BODY)
-      .fontColor(this.dk(C_ACCENT))
-      .padding({ left: 10, right: 10, top: 2, bottom: 2 })
-      .backgroundColor(this.dk(C_BG))
-      .borderRadius(R_PILL)
-      .stateStyles({ pressed: pressDim, normal: pressFull })
-      .onClick(() => {
-        this.kbTStep(fromSide, hourStep, delta);
-      })
-  }
-
-  @Builder
-  KbEditPage() {
-    Column({ space: 8 }) {
-      Row() {
-        Text('📅 周课表')
-          .fontSize(FS_TITLE)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(this.dk(C_TEXT))
-          .layoutWeight(1)
-        Text('关闭')
-          .fontSize(FS_SUB)
-          .fontColor(this.dk(C_ACCENT))
-          .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-          .stateStyles({ pressed: pressDim, normal: pressFull })
-          .onClick(() => {
-            this.kbEditOpen = false;
-          })
-      }
-      .width('100%')
-      // 9-18 修复批八（APP2-01）：没看懂的行摆在明面上——保存时会原样拼回文本尾部，不动它们
-      if (this.kbBadLines.length > 0) {
-        Column({ space: 3 }) {
-          Text(`${this.kbBadLines.length} 行没看懂（原样保留，保存时一起留着）：`)
-            .fontSize(FS_AUX)
-            .fontColor(this.dk(C_TEXT_3))
-            .width('100%')
-          ForEach(this.kbBadLines, (b: string) => {
-            Text(b)
-              .fontSize(FS_AUX)
-              .fontColor(this.dk(C_TEXT_4))
-              .width('100%')
-          }, (b: string, i: number) => `kbBad${i}_${b}`)
-        }
-        .width('100%')
-        .padding(10)
-        .backgroundColor(this.dk(C_CARD))
-        .borderRadius(R_MD)
-      }
-      Scroll() {
-        Column({ space: 10 }) {
-          // 显示顺序：周一最上、周日收尾（下标仍是 getDay 规矩=周天0，只是铺排顺序换了，语义不动）
-          ForEach([1, 2, 3, 4, 5, 6, 0], (d: number) => {
-            this.KbDayRow(d)
-          }, (d: number) => `${d}`)
-        }
-        .width('100%')
-        .padding({ bottom: 6 })
-      }
-      .layoutWeight(1)
-      if (this.kbSel >= 0 && this.kbSel < this.kbEntries.length) {
-        Column({ space: 6 }) {
-          Text(`编辑「${WEEK_CN[this.kbEntries[this.kbSel].dow]}」这一门`)
-            .fontSize(FS_AUX)
-            .fontColor(this.dk(C_TEXT_2))
-            .width('100%')
-          TextInput({ placeholder: '课程名（地点可写在里面，如 高数 @十教）', text: this.kbName })
-            .fontSize(FS_SUB)
-            .backgroundColor(this.dk(C_WHITE))
-            .borderRadius(R_MD)
-            .width('100%')
-            .onChange((v: string) => {
-              this.kbName = v;
-            })
-          // 模式切换（KB-TIME，9-18）：按节次走正典 1~13；按时间直写 HH:MM（课外活动等不定节次的课）
-          Row({ space: 8 }) {
-            Text('按节次')
-              .fontSize(FS_SUB)
-              .fontColor(!this.kbTimeMode ? this.dk(C_WHITE) : this.dk(C_TEXT_2))
-              .padding({ left: 14, right: 14, top: 6, bottom: 6 })
-              .borderRadius(R_PILL)
-              .backgroundColor(!this.kbTimeMode ? this.dk(C_ACCENT) : this.dk(C_BG))
-              .border({ width: 1, color: !this.kbTimeMode ? this.dk(C_ACCENT) : this.dk(C_DOT_BORDER) })
-              .stateStyles({ pressed: pressDim, normal: pressFull })
-              .onClick(() => {
-                this.kbSetTimeMode(false);
-              })
-            Text('按时间')
-              .fontSize(FS_SUB)
-              .fontColor(this.kbTimeMode ? this.dk(C_WHITE) : this.dk(C_TEXT_2))
-              .padding({ left: 14, right: 14, top: 6, bottom: 6 })
-              .borderRadius(R_PILL)
-              .backgroundColor(this.kbTimeMode ? this.dk(C_ACCENT) : this.dk(C_BG))
-              .border({ width: 1, color: this.kbTimeMode ? this.dk(C_ACCENT) : this.dk(C_DOT_BORDER) })
-              .stateStyles({ pressed: pressDim, normal: pressFull })
-              .onClick(() => {
-                this.kbSetTimeMode(true);
-              })
-            Blank()
-          }
-          .width('100%')
-          if (!this.kbTimeMode) {
-            Row({ space: 6 }) {
-              Text('从')
-                .fontSize(FS_AUX)
-                .fontColor(this.dk(C_TEXT_3))
-              Text('−')
-                .fontSize(FS_BODY)
-                .fontColor(this.dk(C_ACCENT))
-                .padding({ left: 12, right: 12, top: 4, bottom: 4 })
-                .stateStyles({ pressed: pressDim, normal: pressFull })
-                .onClick(() => {
-                  this.kbStep(true, -1);
-                })
-              Text(`${this.kbFrom}`)
-                .fontSize(FS_SUB)
-                .fontColor(this.dk(C_TEXT))
-              Text('＋')
-                .fontSize(FS_BODY)
-                .fontColor(this.dk(C_ACCENT))
-                .padding({ left: 12, right: 12, top: 4, bottom: 4 })
-                .stateStyles({ pressed: pressDim, normal: pressFull })
-                .onClick(() => {
-                  this.kbStep(true, 1);
-                })
-              Text('到')
-                .fontSize(FS_AUX)
-                .fontColor(this.dk(C_TEXT_3))
-              Text('−')
-                .fontSize(FS_BODY)
-                .fontColor(this.dk(C_ACCENT))
-                .padding({ left: 12, right: 12, top: 4, bottom: 4 })
-                .stateStyles({ pressed: pressDim, normal: pressFull })
-                .onClick(() => {
-                  this.kbStep(false, -1);
-                })
-              Text(`${this.kbTo}`)
-                .fontSize(FS_SUB)
-                .fontColor(this.dk(C_TEXT))
-              Text('＋')
-                .fontSize(FS_BODY)
-                .fontColor(this.dk(C_ACCENT))
-                .padding({ left: 12, right: 12, top: 4, bottom: 4 })
-                .stateStyles({ pressed: pressDim, normal: pressFull })
-                .onClick(() => {
-                  this.kbStep(false, 1);
-                })
-              Text(`${PERIOD_SLOTS[this.kbFrom - 1].split('-')[0]}~${PERIOD_SLOTS[this.kbTo - 1].split('-')[1]}`)
-                .fontSize(FS_AUX)
-                .fontColor(this.dk(C_TEXT_4))
-                .layoutWeight(1)
-                .textAlign(TextAlign.End)
-            }
-            .width('100%')
-          } else {
-            Row({ space: 6 }) {
-              Text('从')
-                .fontSize(FS_AUX)
-                .fontColor(this.dk(C_TEXT_3))
-              Text('时')
-                .fontSize(FS_AUX)
-                .fontColor(this.dk(C_TEXT_4))
-              this.KbTBtn(true, true, -1)
-              this.KbTBtn(true, true, 1)
-              Text('分')
-                .fontSize(FS_AUX)
-                .fontColor(this.dk(C_TEXT_4))
-              this.KbTBtn(true, false, -1)
-              this.KbTBtn(true, false, 1)
-              Text(this.kbTFrom)
-                .fontSize(FS_SUB)
-                .fontColor(this.dk(C_TEXT))
-                .layoutWeight(1)
-                .textAlign(TextAlign.End)
-            }
-            .width('100%')
-            Row({ space: 6 }) {
-              Text('到')
-                .fontSize(FS_AUX)
-                .fontColor(this.dk(C_TEXT_3))
-              Text('时')
-                .fontSize(FS_AUX)
-                .fontColor(this.dk(C_TEXT_4))
-              this.KbTBtn(false, true, -1)
-              this.KbTBtn(false, true, 1)
-              Text('分')
-                .fontSize(FS_AUX)
-                .fontColor(this.dk(C_TEXT_4))
-              this.KbTBtn(false, false, -1)
-              this.KbTBtn(false, false, 1)
-              Text(this.kbTTo)
-                .fontSize(FS_SUB)
-                .fontColor(this.dk(C_TEXT))
-                .layoutWeight(1)
-                .textAlign(TextAlign.End)
-            }
-            .width('100%')
-          }
-          Row({ space: 8 }) {
-            Button('删除这条')
-              .fontSize(FS_SUB)
-              .height(40)
-              .fontColor(this.dk(C_TEXT_2))
-              .backgroundColor(this.dk(C_BG))
-              .border({ width: 1, color: this.dk(C_DOT_BORDER) })
-              .borderRadius(R_PILL)
-              .layoutWeight(1)
-              .stateStyles({ pressed: pressDim, normal: pressFull })
-              .onClick(() => {
-                this.kbDelete();
-              })
-            Button('落格（保存这条）')
-              .fontSize(FS_SUB)
-              .height(40)
-              .fontColor(this.dk(C_WHITE))
-              .backgroundColor(this.kbName.trim() !== '' ? this.dk(C_ACCENT) : this.dk(C_DISABLED))
-              .borderRadius(R_PILL)
-              .enabled(this.kbName.trim() !== '')
-              .layoutWeight(1)
-              .stateStyles({ pressed: pressDim, normal: pressFull })
-              .onClick(() => {
-                this.kbApply();
-              })
-          }
-          .width('100%')
-        }
-        .width('100%')
-        .padding(10)
-        .backgroundColor(this.dk(C_CARD))
-        .borderRadius(R_MD)
-      } else {
-        Text('点课程格子改课，或点某天的「＋ 加课」。')
-          .fontSize(FS_AUX)
-          .fontColor(this.dk(C_TEXT_4))
-          .width('100%')
-      }
-      Row({ space: 8 }) {
-        Button('不改了')
-          .fontSize(FS_SUB)
-          .height(42)
-          .fontColor(this.dk(C_TEXT_2))
-          .backgroundColor(this.dk(C_CARD))
-          .borderRadius(R_PILL)
-          .layoutWeight(1)
-          .stateStyles({ pressed: pressDim, normal: pressFull })
-          .onClick(() => {
-            this.kbEditOpen = false;
-          })
-        Button('保存课表')
-          .fontSize(FS_SUB)
-          .height(42)
-          .fontColor(this.dk(C_WHITE))
-          .backgroundColor(this.dk(C_ACCENT))
-          .borderRadius(R_PILL)
-          .layoutWeight(1)
-          .stateStyles({ pressed: pressDim, normal: pressFull })
-          .onClick(() => {
-            this.kbSaveAll();
-          })
-      }
-      .width('100%')
-    }
-    .width('100%')
-    .height('100%')
-    .padding({ left: M_PAGE, right: M_PAGE, top: this.safeTopPad, bottom: 16 })
-    .backgroundColor(this.dk(C_BG))
-  }
-
-  // ── 工地日志全屏页（9-13 家主令：拉日志开界面，不再内嵌设置页）──
-  // 工具有没有真调，一页看尽；右上角可再拉一把刷新。
-  @Builder
-  LogsPage() {
-    Column() {
-      Row() {
-        Text('📜 工地日志')
-          .fontSize(FS_TITLE)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(this.dk(C_TEXT))
-          .layoutWeight(1)
-        Text(this.logsBusy ? '取日志中…' : '刷新')
-          .fontSize(FS_SUB)
-          .fontColor(this.dk(C_ACCENT))
-          .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-          .enabled(!this.logsBusy)
-          .stateStyles({ pressed: pressDim, normal: pressFull })
-          .onClick(() => {
-            this.fetchLogs();
-          })
-        Text('关闭')
-          .fontSize(FS_SUB)
-          .fontColor(this.dk(C_ACCENT))
-          .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-          .stateStyles({ pressed: pressDim, normal: pressFull })
-          .onClick(() => {
-            this.logsOpen = false;
-          })
-      }
-      .width('100%')
-      .padding({ left: M_PAGE, right: M_PAGE, top: 14, bottom: 8 })
-
-      Scroll() {
-        Text(this.logsBusy && !this.logsText ? '取日志中…' : (this.logsText || '（点右上角刷新拉取）'))
-          .fontSize(FS_AUX)
-          .fontFamily('monospace')
-          .fontColor(this.dk(C_TEXT_2))
-          .lineHeight(18)
-          .width('100%')
-          .padding({ left: M_PAGE, right: M_PAGE, bottom: 20 })
-      }
-      .layoutWeight(1)
-      .width('100%')
-    }
-    .width('100%')
-    .height('100%')
-    .padding({ top: this.safeTopPad })
-    .backgroundColor(this.dk(C_BG))
-  }
-
-  // ── 共读阅读器（9-12 下午重做）：全屏翻书，段落旁两色墨迹，点段批注 ──
-  @Builder
-  ReaderPage() {
-    Column({ space: 8 }) {
-      Row({ space: 10 }) {
-        Text('✕')
-          .fontSize(FS_BODY)
-          .fontColor(this.dk(C_ACCENT))
-          .width(40)
-          .height(40)
-          .textAlign(TextAlign.Center)
-          .onClick(() => {
-            this.closeReader();
-          })
-        Text(this.readBook ? `《${(this.readBook as BookShelf).title}》` : '')
-          .fontSize(FS_BODY)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(this.dk(C_TEXT))
-          .layoutWeight(1)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-        Text(this.readBook ? `她读到 ${(this.readBook as BookShelf).pos_her ?? 0}` : '')
-          .fontSize(FS_AUX)
-          .fontColor(this.dk(C_TEXT_4))
-      }
-      .width('100%')
-      .padding({ left: M_PAGE, right: M_PAGE, top: 10, bottom: 4 })
-
-      List({ space: 10, scroller: this.readerScroller }) {
-        ForEach(this.readParas, (p: string, i: number) => {
-          ListItem() {
-            Column({ space: 6 }) {
-              Text(p)
-                .fontSize(FS_BODY)
-                .lineHeight(26)
-                .fontColor(this.dk(C_TEXT))
-                .width('100%')
-                .padding({ left: 4, right: 4 })
-                .onClick(() => {
-                  this.readSelPara = this.readSelPara === i ? -1 : i;
-                  this.readParaMark = '';
-                })
-              // 这一段的批注（两个人的墨迹都挂着）
-              ForEach(this.paraMarksOf(i), (mk: BookMark) => {
-                Column({ space: 2 }) {
-                  Text(`${mk.who === '姐姐' ? '👩 姐姐' : '🐱 我'}${mk.time === '' ? '' : ' · ' + mk.time}`)
-                    .fontSize(FS_AUX)
-                    .fontColor(mk.who === '姐姐' ? this.dk(C_ACCENT) : this.dk(C_TEXT_4))
-                  Text(mk.text)
-                    .fontSize(FS_SUB)
-                    .fontColor(this.dk(C_TEXT_2))
-                    .lineHeight(18)
-                    .width('100%')
-                }
-                .padding(8)
-                .backgroundColor(mk.who === '姐姐' ? this.dk(C_BG) : this.dk(C_CARD))
-                .borderRadius(R_SM)
-                .width('100%')
-              }, (mk: BookMark) => `${mk.id}-${mk.text}`)
-              // 点中的段：就地落笔
-              if (this.readSelPara === i) {
-                Row({ space: 8 }) {
-                  TextInput({ placeholder: '在这段旁边落一笔……', text: this.readParaMark })
-                    .fontSize(FS_SUB)
-                    .backgroundColor(this.dk(C_WHITE))
-                    .borderRadius(R_MD)
-                    .layoutWeight(1)
-                    .onChange((v: string) => {
-                      this.readParaMark = v;
-                    })
-                  Button(this.readBusy ? '…' : '落笔')
-                    .fontSize(FS_SUB)
-                    .height(36)
-                    .fontColor(this.dk(C_WHITE))
-                    .backgroundColor(this.readParaMark.trim() !== '' && !this.readBusy
-                      ? this.dk(C_ACCENT) : this.dk(C_DISABLED))
-                    .borderRadius(R_PILL)
-                    .enabled(this.readParaMark.trim() !== '' && !this.readBusy)
-                    .onClick(() => {
-                      this.submitParaMark();
-                    })
-                }
-                .width('100%')
-              }
-            }
-            .width('100%')
-          }
-        }, (p: string, i: number) => `${i}-${p.length}`)
-      }
-      .layoutWeight(1)
-      .width('100%')
-      .padding({ left: M_PAGE, right: M_PAGE, bottom: 10 })
-      .onScrollIndex((start: number) => {
-        this.readerFirstIdx = start;   // 9-29：本地也记一份——退出再进要回到这里
-        this.reportReadPos(start);
-      })
-      .scrollBar(BarState.Auto)
-    }
-    .width('100%')
-    .height('100%')
-    // LAY-01（9-23·P0 修复）：全屏模态不吃系统默认安全区——顶部避让照 ThinkingPage，
-    // 横屏左右照 RiverFullPage（此前阅读器是全家唯一漏网的，「✕」与书名会被状态栏压住）
-    .padding({ left: this.safeLeftPad, right: this.safeLeftPad, top: this.safeTopPad })
-    .backgroundColor(this.dk(C_BG))
-  }
-
   // 书脊色池：每本书按上架顺序取一色，架上看去像真的书排
   private bookSpineColors: string[] =
     ['#a86450', '#7a8a5a', '#5a6e8a', '#8a6e5a', '#6e5a8a', '#8a7a4a'];
 
   private bookSpineColor(i: number): string {
     return this.bookSpineColors[Math.abs(i) % this.bookSpineColors.length];
-  }
-
-  // 某段落的批注（阅读器渲染用）
-  private paraMarksOf(i: number): BookMark[] {
-    const bk = this.readBook;
-    if (!bk) {
-      return [];
-    }
-    const out: BookMark[] = [];
-    for (const mk of (bk as BookShelf).marks) {
-      if (mk.para === i) {
-        out.push(mk);
-      }
-    }
-    return out;
   }
 
   // 点中墨点弹的小卡（RIVER-3）：当时记了什么——词、浓度、谁的笔、备注
@@ -3164,7 +1369,7 @@ struct Index {
           .width(10)
           .height(10)
           .fill(p.type ? (this.moodColorOf(p.type) as ResourceColor) : MOOD_LEGACY_COLOR)
-        Text(`${p.date.substring(5).replace('-', '/')} ${p.time} · ${this.moodNameOf(p.type) || '旧记分'} ×${p.score} · ${p.source}`)
+        Text(`${p.date.substring(5).replace('-', '/')} ${p.time} · ${moodNameOf(p.type) || '旧记分'} ×${p.score} · ${p.source}`)
           .fontSize(FS_SUB)
           .fontColor(this.dk(C_TEXT))
           .layoutWeight(1)
@@ -3724,16 +1929,22 @@ struct Index {
       } else {
       // ── 格内：已点进某格，看全文 ──
       if (this.hallBrowse === '信箱') {
-        this.LetterPage()
+        LetterPage({
+          stLetters: this.stLetters, letterText: $letterText,
+          letterMsg: this.letterMsg, letterBusy: this.letterBusy,
+          onSend: () => { this.sendLetter(); }
+        })
       } else if (this.hallBrowse === '她的独处') {
-        this.TracesPage()
+        TracesPage({
+          traceMsg: this.traceMsg, tracesList: this.tracesList, traceOpenId: $traceOpenId
+        })
       } else {
       List({ space: 12 }) {
         ForEach(this.hallEntries, (e: HallEntry) => {
           ListItem() {
             Column({ space: 6 }) {
               Row({ space: 10 }) {
-                Text(e.mood ? this.moodNameOf(e.mood).substring(0, 1) : (e.author === '姐姐' ? '宁' : '乖'))
+                Text(e.mood ? moodNameOf(e.mood).substring(0, 1) : (e.author === '姐姐' ? '宁' : '乖'))
                   .width(34)
                   .height(34)
                   .textAlign(TextAlign.Center)
@@ -3931,27 +2142,6 @@ struct Index {
     }
   }
 
-  // 账本页的人话格式：条数直出；字数过万（同一把 4 位一把的圆算，看着不晕）
-  private numTxt(n?: number | null): string {
-    return n === undefined || n === null ? '—' : `${n}`;
-  }
-  private wanTxt(n?: number | null): string {
-    return n === undefined || n === null ? '—' : `${(n / 10000).toFixed(1)} 万`;
-  }
-  // 档案条目体积（9-23 监理补）：服务端给的是字节——≥1KB 显示 KB，否则字节，不再裸数字
-  private fmtSize(n?: number | null): string {
-    if (n === undefined || n === null) {
-      return '';
-    }
-    return n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} 字节`;
-  }
-  // 从哪天记起（首日缺就诚实说「在一起那天」）
-  private ledgerFirst(): string {
-    const d = this.statsData as StatsResp;
-    const first = (d.first_day ?? '').substring(0, 10);
-    return first === '' ? '在一起那天' : first;
-  }
-
   // 咱家的账本卡（设置页）
   @Builder
   StatsCard() {
@@ -3990,187 +2180,8 @@ struct Index {
   }
 
   // 总账页·数字卡（9-23 B2-1）：大数字 + 小注解，不堆表
-  @Builder
-  LedgerCard(title: string, bigA: string, labelA: string, bigB: string, labelB: string, note: string) {
-    Column({ space: 6 }) {
-      Text(title)
-        .fontSize(FS_SUB)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(this.dk(C_TEXT))
-        .width('100%')
-      Row({ space: 28 }) {
-        Column({ space: 2 }) {
-          Text(bigA)
-            .fontSize(FS_TITLE)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(this.dk(C_ACCENT))
-          Text(labelA)
-            .fontSize(FS_AUX)
-            .fontColor(this.dk(C_TEXT_4))
-        }
-        .alignItems(HorizontalAlign.Start)
-        Column({ space: 2 }) {
-          Text(bigB)
-            .fontSize(FS_TITLE)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(this.dk(C_ACCENT))
-          Text(labelB)
-            .fontSize(FS_AUX)
-            .fontColor(this.dk(C_TEXT_4))
-        }
-        .alignItems(HorizontalAlign.Start)
-        Blank()
-      }
-      .width('100%')
-      if (note !== '') {
-        Text(note)
-          .fontSize(FS_AUX)
-          .fontColor(this.dk(C_TEXT_5))
-          .width('100%')
-      }
-    }
-    .padding(12)
-    .backgroundColor(this.dk(C_CARD))
-    .borderRadius(R_MD)
-    .width('100%')
-  }
-
   // 总账页·缺席卡（9-23 B2-1）：账没数到就诚实说缺席，不拿 0 冒充
-  @Builder
-  LedgerAbsent(title: string, line: string, note: string) {
-    Column({ space: 6 }) {
-      Text(title)
-        .fontSize(FS_SUB)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(this.dk(C_TEXT))
-        .width('100%')
-      Text(line)
-        .fontSize(FS_BODY)
-        .fontColor(this.dk(C_TEXT_3))
-        .width('100%')
-      Text(note)
-        .fontSize(FS_AUX)
-        .fontColor(this.dk(C_TEXT_5))
-        .width('100%')
-    }
-    .padding(12)
-    .backgroundColor(this.dk(C_CARD))
-    .borderRadius(R_MD)
-    .width('100%')
-  }
-
   // ── 咱家的账本·全屏页（9-23 B2-1：总账上墙，点开看全）——照工地日志家风带刷新/关闭 ──
-  @Builder
-  StatsPage() {
-    Column() {
-      Row() {
-        Text('📖 咱家的账本')
-          .fontSize(FS_TITLE)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(this.dk(C_TEXT))
-          .layoutWeight(1)
-        Text(this.statsFullBusy ? '数数中…' : '刷新')
-          .fontSize(FS_SUB)
-          .fontColor(this.dk(C_ACCENT))
-          .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-          .enabled(!this.statsFullBusy)
-          .stateStyles({ pressed: pressDim, normal: pressFull })
-          .onClick(() => {
-            this.reloadStats();
-          })
-        Text('关闭')
-          .fontSize(FS_SUB)
-          .fontColor(this.dk(C_ACCENT))
-          .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-          .stateStyles({ pressed: pressDim, normal: pressFull })
-          .onClick(() => {
-            this.statsOpen = false;
-          })
-      }
-      .width('100%')
-      .padding({ left: M_PAGE, right: M_PAGE, top: 14, bottom: 8 })
-
-      Scroll() {
-        Column({ space: 12 }) {
-          if (this.statsData === null) {
-            Text(this.statsFullMsg !== '' ? this.statsFullMsg : '正在数……')
-              .fontSize(FS_SUB)
-              .fontColor(this.dk(C_TEXT_3))
-              .width('100%')
-          } else {
-            // ④ 从哪天起——先挂门楣再翻账
-            Text(`从 ${this.ledgerFirst()} 记起——一笔一划都在这。`)
-              .fontSize(FS_AUX)
-              .fontColor(this.dk(C_TEXT_3))
-              .width('100%')
-            // ① 现在的家：条数 + 中文字数（新口径）
-            this.LedgerCard('现在的家（app 库）',
-              this.numTxt((this.statsData as StatsResp).chats), '条对话',
-              this.wanTxt((this.statsData as StatsResp).chats_cn_chars), '个中文字',
-              this.ledgerNowNote())
-            // ② 旧家三卷：缺席走诚实卡
-            if ((this.statsData as StatsResp).old_home) {
-              this.LedgerCard('旧家三卷（档案馆/旧家记录）',
-                this.ledgerMsgs((this.statsData as StatsResp).old_home), '条对话',
-                this.ledgerCn((this.statsData as StatsResp).old_home), '个中文字', '')
-            } else {
-              this.LedgerAbsent('旧家三卷（档案馆/旧家记录）', '旧家账暂缺席',
-                '那边还没数到——缺的账不拿 0 冒充，数到就上墙。')
-            }
-            // ③ 合计：两本都数得出才有
-            if ((this.statsData as StatsResp).grand_total) {
-              this.LedgerCard('两本合账',
-                this.ledgerMsgs((this.statsData as StatsResp).grand_total), '条对话',
-                this.ledgerCn((this.statsData as StatsResp).grand_total), '个中文字',
-                '现在的家 + 旧家三卷，同一把中文字尺。')
-            } else {
-              this.LedgerAbsent('两本合账', '总账暂时算不齐',
-                '等两本账都数得出再合——不拿半本账冒充。')
-            }
-            if (this.statsFullMsg !== '') {
-              Text(this.statsFullMsg)
-                .fontSize(FS_AUX)
-                .fontColor(this.dk(C_TEXT_4))
-                .width('100%')
-            }
-            Text('账本只读：只数不写，翻页不改账。')
-              .fontSize(FS_AUX)
-              .fontColor(this.dk(C_TEXT_5))
-              .width('100%')
-          }
-        }
-        .width('100%')
-        .padding({ left: M_PAGE, right: M_PAGE, top: 4, bottom: 20 })
-        .alignItems(HorizontalAlign.Start)
-      }
-      .layoutWeight(1)
-      .width('100%')
-      .align(Alignment.Top)
-      .scrollBar(BarState.Off)
-    }
-    .width('100%')
-    .height('100%')
-    .padding({ top: this.safeTopPad })
-    .backgroundColor(this.dk(C_BG))
-  }
-
-  // ① 卡的小注：中文字数没数上就诚实说，数上了就提一嘴口径
-  private ledgerNowNote(): string {
-    const d = this.statsData as StatsResp;
-    if (d.chats_cn_chars === undefined || d.chats_cn_chars === null) {
-      return '中文字这次没数上（库在忙）——点右上角刷新再试。';
-    }
-    return '';
-  }
-
-  // 旧家/合账两卡的取值壳：null 已由外层 if 拦掉，这里只做类型收口
-  private ledgerMsgs(p: LedgerPair | null | undefined): string {
-    return this.numTxt(p ? p.msgs : null);
-  }
-  private ledgerCn(p: LedgerPair | null | undefined): string {
-    return this.wanTxt(p ? p.cn_chars : null);
-  }
-
   // ── 9-29 §12：三页只读信息页（骨架在 pages/InfoPage.ets；这里只做 props 装配）──
   // 拆出去的好处：这三页的排版/空态/按压反馈都在 InfoPage 一处，本文件只管"取数 + 喂进去"。
   @Builder
@@ -4262,7 +2273,7 @@ struct Index {
         }
       } else {
         // FE3-09（9-23）：服务端给人话错误就显示人话（解析不动再退回「没开门」）
-        this.archMsg = this.httpErrMsg(res.result as string, '这间屋还没开门');
+        this.archMsg = httpErrMsg(res.result as string, '这间屋还没开门');
       }
     } catch (err) {
       this.archMsg = '这间屋还没开门';
@@ -4274,17 +2285,6 @@ struct Index {
 
   // FE3-09（9-23）：服务端已给人话错误（如「这卷太大（超 2MB），开不动」）——能解析就显示人话，
   // 解析不动退回调用方给的兜底（HTTP 码等）。同类推广到 /api/archive 列表。
-  private httpErrMsg(raw: string, fallback: string): string {
-    try {
-      const d = JSON.parse(raw) as OkResp;
-      if (d.error !== undefined && d.error !== null && d.error !== '') {
-        return d.error;
-      }
-    } catch (err) {
-      // 不是 JSON（断网 HTML/空体）——退回兜底
-    }
-    return fallback;
-  }
 
   // 开卷：?name= 取全文（只读，限馆内）；先亮卷题再落字，长文交给滚动
   private async fetchArchiveDoc(name: string): Promise<void> {
@@ -4309,7 +2309,7 @@ struct Index {
         this.archDocText = d.text ?? '（这卷是空的）';
       } else {
         // FE3-09（9-23）：服务端给人话就显示人话
-        this.archDocText = '（没取到：' + this.httpErrMsg(res.result as string, `HTTP ${res.responseCode}`) + '）';
+        this.archDocText = '（没取到：' + httpErrMsg(res.result as string, `HTTP ${res.responseCode}`) + '）';
       }
     } catch (err) {
       if (seq === this.archDocSeq) {
@@ -4480,7 +2480,7 @@ struct Index {
         }
         this.repDocText = d.text ?? '（这份是空的）';
       } else {
-        this.repDocText = '（没取到：' + this.httpErrMsg(res.result as string, `HTTP ${res.responseCode}`) + '）';
+        this.repDocText = '（没取到：' + httpErrMsg(res.result as string, `HTTP ${res.responseCode}`) + '）';
       }
     } catch (err) {
       if (seq === this.repDocSeq) {
@@ -4489,548 +2489,6 @@ struct Index {
     } finally {
       req.destroy();
     }
-  }
-
-  // 周报列表按 chips 过滤（待审 / 已入库；服务端状态词做包含匹配，缺键自己不出现）
-  private repItemsOfTab(): LibReportItem[] {
-    const out: LibReportItem[] = [];
-    for (let i = 0; i < this.repItems.length; i++) {
-      const st = this.repItems[i].status ?? '';
-      const hit = this.repTab === '待审' ? st.indexOf('待') >= 0 : st.indexOf('入库') >= 0;
-      if (hit) {
-        out.push(this.repItems[i]);
-      }
-    }
-    return out;
-  }
-
-  // 分组渲染帮手：组名按返回顺序去重；卡片馆单独走 /api/cards，
-  // 档案里若也带「卡片」组则跳过（防同一间屋摆两张牌）
-  private archGroupsList(): string[] {
-    const out: string[] = [];
-    for (const it of this.archItems) {
-      const g = it.group ?? '未归类';
-      if (g.indexOf('卡片') >= 0) {
-        continue;
-      }
-      if (out.indexOf(g) < 0) {
-        out.push(g);
-      }
-    }
-    return out;
-  }
-
-  private archItemsOf(g: string): ArchiveItem[] {
-    const out: ArchiveItem[] = [];
-    for (const it of this.archItems) {
-      const itg = it.group ?? '未归类';
-      if (itg === g && itg.indexOf('卡片') < 0) {
-        out.push(it);
-      }
-    }
-    return out;
-  }
-
-  // ── 档案馆全屏页（9-23 V-2）：列表态 / 阅读态页内切换，照工地日志家风带刷新/关闭/返回 ──
-  @Builder
-  ArchivePage() {
-    Column() {
-      if (this.archDocTitle !== '') {
-        // 阅读态：返回 + 卷题 + 全文滚动（长文可滚）
-        Row({ space: 10 }) {
-          Text('‹ 返回')
-            .fontSize(FS_SUB)
-            .fontColor(this.dk(C_ACCENT))
-            .padding({ left: 12, right: 12, top: 12, bottom: 12 })   // LAY-07：触摸目标补到 ≥40vp
-            .stateStyles({ pressed: pressDim, normal: pressFull })
-            .onClick(() => {
-              this.archDocTitle = '';
-              this.archDocText = '';
-            })
-          Text(this.archDocTitle)
-            .fontSize(FS_BODY)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(this.dk(C_TEXT))
-            .layoutWeight(1)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-          // LAY-10（9-23）：阅读态给个进度感——卷题旁挂字数（本地 length，零接口）
-          if (this.archDocText !== '' && this.archDocText !== '正在开卷……') {
-            Text(`· ${this.archDocText.length} 字`)
-              .fontSize(FS_AUX)
-              .fontColor(this.dk(C_TEXT_4))
-          }
-        }
-        .width('100%')
-        .padding({ left: M_PAGE, right: M_PAGE, top: 10, bottom: 6 })
-
-        Scroll() {
-          this.MdDocView()
-        }
-        .layoutWeight(1)
-        .width('100%')
-        .align(Alignment.Top)
-        .scrollBar(BarState.Off)
-      } else {
-        // 列表态
-        Row() {
-          Text('🗄 档案馆')
-            .fontSize(FS_TITLE)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(this.dk(C_TEXT))
-            .layoutWeight(1)
-          Text(this.archBusy ? '开门中…' : '刷新')
-            .fontSize(FS_SUB)
-            .fontColor(this.dk(C_ACCENT))
-            .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-            .enabled(!this.archBusy)
-            .stateStyles({ pressed: pressDim, normal: pressFull })
-            .onClick(() => {
-              this.fetchArchive();
-              this.fetchCards();
-            })
-          Text('关闭')
-            .fontSize(FS_SUB)
-            .fontColor(this.dk(C_ACCENT))
-            .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-            .stateStyles({ pressed: pressDim, normal: pressFull })
-            .onClick(() => {
-              this.archiveOpen = false;
-            })
-        }
-        .width('100%')
-        .padding({ left: M_PAGE, right: M_PAGE, top: 14, bottom: 8 })
-
-        Scroll() {
-          Column({ space: 12 }) {
-            // ① 卡片馆（现成 /api/cards）
-            if (this.archCards.length > 0) {
-              Text('🗂 卡片馆')
-                .fontSize(FS_SUB)
-                .fontWeight(FontWeight.Medium)
-                .fontColor(this.dk(C_TEXT))
-                .width('100%')
-              ForEach(this.archCards, (g: CardGroup) => {
-                Column({ space: 4 }) {
-                  Text(`${g.key ?? ''} · ${g.cards ? g.cards.length : 0} 张`)
-                    .fontSize(FS_AUX)
-                    .fontColor(this.dk(C_TEXT_3))
-                    .width('100%')
-                  ForEach(g.cards ?? [], (c: CardItem) => {
-                    Row({ space: 8 }) {
-                      Text(c.id ?? '')
-                        .fontSize(FS_AUX)
-                        .fontColor(this.dk(C_TEXT_4))
-                      Text(c.title ?? '')
-                        .fontSize(FS_SUB)
-                        .fontColor(this.dk(C_TEXT_2))
-                        .layoutWeight(1)
-                        .maxLines(1)
-                        .textOverflow({ overflow: TextOverflow.Ellipsis })
-                      Text('开 ›')
-                        .fontSize(FS_AUX)
-                        .fontColor(this.dk(C_ACCENT))
-                    }
-                    .width('100%')
-                    .padding(10)
-                    .backgroundColor(this.dk(C_CARD))
-                    .borderRadius(R_MD)
-                    .stateStyles({ pressed: pressDim, normal: pressFull })
-                    .onClick(() => {
-                      this.openCard(c);
-                    })
-                  }, (c: CardItem) => `${g.key}-${c.id}`)
-                }
-                .width('100%')
-              }, (g: CardGroup) => `${g.key}`)
-            }
-
-            // ②-⑤ 周卷 / 旧家三卷 / 全档案续页 / 大事记卷（/api/archive，服务端下一批）
-            if (this.archGroupsList().length > 0) {
-              ForEach(this.archGroupsList(), (g: string) => {
-                Column({ space: 4 }) {
-                  Text(g)
-                    .fontSize(FS_SUB)
-                    .fontWeight(FontWeight.Medium)
-                    .fontColor(this.dk(C_TEXT))
-                    .width('100%')
-                  ForEach(this.archItemsOf(g), (it: ArchiveItem) => {
-                    Row({ space: 8 }) {
-                      Text(it.name ?? '')
-                        .fontSize(FS_SUB)
-                        .fontColor(this.dk(C_TEXT_2))
-                        .layoutWeight(1)
-                        .maxLines(1)
-                        .textOverflow({ overflow: TextOverflow.Ellipsis })
-                      if (it.size !== undefined && it.size !== null) {
-                        Text(this.fmtSize(it.size))
-                          .fontSize(FS_AUX)
-                          .fontColor(this.dk(C_TEXT_4))
-                      }
-                      Text('开 ›')
-                        .fontSize(FS_AUX)
-                        .fontColor(this.dk(C_ACCENT))
-                    }
-                    .width('100%')
-                    .padding(10)
-                    .backgroundColor(this.dk(C_CARD))
-                    .borderRadius(R_MD)
-                    .stateStyles({ pressed: pressDim, normal: pressFull })
-                    .onClick(() => {
-                      this.fetchArchiveDoc(it.name ?? '');
-                    })
-                  }, (it: ArchiveItem) => `${g}-${it.name}`)
-                }
-                .width('100%')
-              }, (g: string) => g)
-            } else if (!this.archBusy) {
-              Text(this.archMsg !== '' ? this.archMsg : '这间屋还没开门')
-                .fontSize(FS_SUB)
-                .fontColor(this.dk(C_TEXT_3))
-                .width('100%')
-            }
-            Text('档案只读：翻卷不改字。')
-              .fontSize(FS_AUX)
-              .fontColor(this.dk(C_TEXT_5))
-              .width('100%')
-          }
-          .width('100%')
-          .padding({ left: M_PAGE, right: M_PAGE, top: 4, bottom: 20 })
-          .alignItems(HorizontalAlign.Start)
-        }
-        .layoutWeight(1)
-        .width('100%')
-        .align(Alignment.Top)
-        .scrollBar(BarState.Off)
-      }
-    }
-    .width('100%')
-    .height('100%')
-    .padding({ top: this.safeTopPad })
-    .backgroundColor(this.dk(C_BG))
-  }
-
-  // ── 📷 照片墙·全屏页（9-23 能上批 a）：收藏夹只读画廊——网格缩略图，点开复用现成大图层 ──
-  @Builder
-  PhotoWallPage() {
-    Column() {
-      Row() {
-        Text('📷 照片墙')
-          .fontSize(FS_TITLE)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(this.dk(C_TEXT))
-          .layoutWeight(1)
-        Text(this.favBusy ? '翻夹中…' : '刷新')
-          .fontSize(FS_SUB)
-          .fontColor(this.dk(C_ACCENT))
-          .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-          .enabled(!this.favBusy)
-          .stateStyles({ pressed: pressDim, normal: pressFull })
-          .onClick(() => {
-            this.fetchFavorites();
-          })
-        Text('关闭')
-          .fontSize(FS_SUB)
-          .fontColor(this.dk(C_ACCENT))
-          .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-          .stateStyles({ pressed: pressDim, normal: pressFull })
-          .onClick(() => {
-            this.favOpen = false;
-          })
-      }
-      .width('100%')
-      .padding({ left: M_PAGE, right: M_PAGE, top: 14, bottom: 8 })
-
-      Scroll() {
-        Column({ space: 12 }) {
-          if (this.favPhotos.length === 0) {
-            Text(this.favBusy ? '翻夹中…'
-              : (this.favMsg !== '' ? this.favMsg : '夹里还空着——她收藏的照片会摆在这儿'))
-              .fontSize(FS_SUB)
-              .fontColor(this.dk(C_TEXT_3))
-              .width('100%')
-          } else {
-            Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Start }) {
-              ForEach(this.favPhotos, (name: string) => {
-                if (this.imgErrKeys.includes(this.favPhotoUrl(name))) {
-                  // FE3-08 家风：取不到的那张摊个小格直说，不摆裂图
-                  // RV-03（9-23 小尾批）：文案与气泡/大图统一为完整字样（96 格内至多两行）
-                  Text('图没取到（门锁/隧道）')
-                    .fontSize(FS_AUX)
-                    .fontColor(this.dk(C_TEXT_5))
-                    .width(96)
-                    .height(96)
-                    .textAlign(TextAlign.Center)
-                    .border({ width: 1, color: this.dk(C_DOT_BORDER) })
-                    .borderRadius(R_SM)
-                    .margin({ right: 8, bottom: 8 })
-                } else {
-                  Image(this.favPhotoUrl(name))
-                    .width(96)
-                    .height(96)
-                    .objectFit(ImageFit.Cover)
-                    .borderRadius(R_SM)
-                    .margin({ right: 8, bottom: 8 })
-                    .stateStyles({ pressed: pressDim, normal: pressFull })
-                    .onClick(() => {
-                      this.imgPreviewUrl = this.favPhotoUrl(name);   // 复用现成大图层
-                    })
-                    .onError(() => {
-                      this.markImgErr(this.favPhotoUrl(name));   // FE3-08 家风：取不到就记上
-                    })
-                }
-              }, (name: string) => name)
-            }
-            .width('100%')
-          }
-          Text('照片墙只读：她收进来的照片摆在这儿，点一张看大图。')
-            .fontSize(FS_AUX)
-            .fontColor(this.dk(C_TEXT_5))
-            .width('100%')
-        }
-        .width('100%')
-        .padding({ left: M_PAGE, right: M_PAGE, top: 4, bottom: 20 })
-        .alignItems(HorizontalAlign.Start)
-      }
-      .layoutWeight(1)
-      .width('100%')
-      .align(Alignment.Top)
-      .scrollBar(BarState.Off)
-    }
-    .width('100%')
-    .height('100%')
-    .padding({ top: this.safeTopPad })
-    .backgroundColor(this.dk(C_BG))
-  }
-
-  // ── 🧱 门牌墙·全屏页（9-23 能上批 b）：/api/wall 只读——她每天开场读到什么，一页看尽 ──
-  // 骨架照工地日志（LogsPage）：标题 + 刷新 + 关闭 + 滚一列；每条=序号+content，pin_id 只作 key
-  @Builder
-  WallPage() {
-    Column() {
-      Row() {
-        Text('🧱 门牌墙')
-          .fontSize(FS_TITLE)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(this.dk(C_TEXT))
-          .layoutWeight(1)
-        Text(this.wallBusy ? '取墙中…' : '刷新')
-          .fontSize(FS_SUB)
-          .fontColor(this.dk(C_ACCENT))
-          .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-          .enabled(!this.wallBusy)
-          .stateStyles({ pressed: pressDim, normal: pressFull })
-          .onClick(() => {
-            this.fetchWall();
-          })
-        Text('关闭')
-          .fontSize(FS_SUB)
-          .fontColor(this.dk(C_ACCENT))
-          .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-          .stateStyles({ pressed: pressDim, normal: pressFull })
-          .onClick(() => {
-            this.wallOpen = false;
-          })
-      }
-      .width('100%')
-      .padding({ left: M_PAGE, right: M_PAGE, top: 14, bottom: 8 })
-
-      Scroll() {
-        Column({ space: 8 }) {
-          if (this.wallPins.length === 0) {
-            Text(this.wallBusy ? '取墙中…' : (this.wallMsg !== '' ? this.wallMsg : '墙还没挂上'))
-              .fontSize(FS_SUB)
-              .fontColor(this.dk(C_TEXT_3))
-              .width('100%')
-          } else {
-            ForEach(this.wallPins, (p: WallPin, i: number) => {
-              Row({ space: 8 }) {
-                Text(`${i + 1}`)
-                  .fontSize(FS_AUX)
-                  .fontColor(this.dk(C_TEXT_5))
-                Text(p.content ?? '')
-                  .fontSize(FS_AUX)
-                  .fontColor(this.dk(C_TEXT_2))
-                  .lineHeight(18)
-                  .layoutWeight(1)
-              }
-              .width('100%')
-              .padding(10)
-              .backgroundColor(this.dk(C_CARD))
-              .borderRadius(R_SM)
-            }, (p: WallPin) => `${p.pin_id}`)
-          }
-          Text('门牌墙只读：她每天开场看到的就是这些。')
-            .fontSize(FS_AUX)
-            .fontColor(this.dk(C_TEXT_5))
-            .width('100%')
-        }
-        .width('100%')
-        .padding({ left: M_PAGE, right: M_PAGE, top: 4, bottom: 20 })
-        .alignItems(HorizontalAlign.Start)
-      }
-      .layoutWeight(1)
-      .width('100%')
-      .align(Alignment.Top)
-      .scrollBar(BarState.Off)
-    }
-    .width('100%')
-    .height('100%')
-    .padding({ top: this.safeTopPad })
-    .backgroundColor(this.dk(C_BG))
-  }
-
-  // ── 🗂 周报阅读器（9-23 能上批 d）：待审/已入库 chips → 列表 → 点开全文；只读 ──
-  // 边界（有意设计）：绝不设「通过/驳回」按钮——终审是姐姐的笔，这里不代签。
-  // 降级：接口 404/失败 → 「账房还没接线（等服务端换新）」；空态「这周还没交稿（周日 21 点）」。
-  @Builder
-  ReportsPage() {
-    Column() {
-      if (this.repDocId >= 0) {
-        // 阅读态：返回 + 题 + 字数 + 全文滚动（照档案馆家风）
-        Row({ space: 10 }) {
-          Text('‹ 返回')
-            .fontSize(FS_SUB)
-            .fontColor(this.dk(C_ACCENT))
-            .padding({ left: 12, right: 12, top: 12, bottom: 12 })
-            .stateStyles({ pressed: pressDim, normal: pressFull })
-            .onClick(() => {
-              this.repDocId = -1;
-              this.repDocTitle = '';
-              this.repDocText = '';
-              this.repDocStatus = '';
-            })
-          Text(this.repDocTitle === '' ? '周报' : this.repDocTitle)
-            .fontSize(FS_BODY)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(this.dk(C_TEXT))
-            .layoutWeight(1)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-          if (this.repDocStatus !== '') {
-            Text(this.repDocStatus)
-              .fontSize(FS_AUX)
-              .fontColor(this.dk(C_TEXT_4))
-          }
-        }
-        .width('100%')
-        .padding({ left: M_PAGE, right: M_PAGE, top: 10, bottom: 6 })
-
-        Scroll() {
-          this.MdDocView()
-        }
-        .layoutWeight(1)
-        .width('100%')
-        .align(Alignment.Top)
-        .scrollBar(BarState.Off)
-      } else {
-        // 列表态：标题 + 刷新 + 关闭 → chips → 列表
-        Row() {
-          Text('🗂 周报')
-            .fontSize(FS_TITLE)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(this.dk(C_TEXT))
-            .layoutWeight(1)
-          Text(this.repBusy ? '取稿中…' : '刷新')
-            .fontSize(FS_SUB)
-            .fontColor(this.dk(C_ACCENT))
-            .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-            .enabled(!this.repBusy)
-            .stateStyles({ pressed: pressDim, normal: pressFull })
-            .onClick(() => {
-              this.fetchReports();
-            })
-          Text('关闭')
-            .fontSize(FS_SUB)
-            .fontColor(this.dk(C_ACCENT))
-            .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-            .stateStyles({ pressed: pressDim, normal: pressFull })
-            .onClick(() => {
-              this.repOpen = false;
-            })
-        }
-        .width('100%')
-        .padding({ left: M_PAGE, right: M_PAGE, top: 14, bottom: 8 })
-
-        Row({ space: 8 }) {
-          ForEach(['待审', '已入库'], (t: string) => {
-            Text(t)
-              .fontSize(FS_SUB)
-              .fontColor(this.repTab === t ? this.dk(C_WHITE) : this.dk(C_TEXT_2))
-              .padding({ left: 16, right: 16, top: 8, bottom: 8 })
-              .borderRadius(R_PILL)
-              .backgroundColor(this.repTab === t ? this.dk(C_ACCENT) : this.dk(C_CARD))
-              .border({ width: 1, color: this.repTab === t ? this.dk(C_ACCENT) : this.dk(C_DOT_BORDER) })
-              .stateStyles({ pressed: pressDim, normal: pressFull })
-              .onClick(() => {
-                this.repTab = t;
-              })
-          }, (t: string) => t)
-          Blank()
-        }
-        .width('100%')
-        .padding({ left: M_PAGE, right: M_PAGE, bottom: 6 })
-
-        Scroll() {
-          Column({ space: 8 }) {
-            if (this.repItemsOfTab().length === 0) {
-              Text(this.repBusy ? '取稿中…'
-                : (this.repMsg !== '' ? this.repMsg : '这周还没交稿（周日 21 点）'))
-                .fontSize(FS_SUB)
-                .fontColor(this.dk(C_TEXT_3))
-                .width('100%')
-            } else {
-              ForEach(this.repItemsOfTab(), (it: LibReportItem) => {
-                Column({ space: 4 }) {
-                  Row({ space: 8 }) {
-                    Text(it.date ?? '')
-                      .fontSize(FS_AUX)
-                      .fontColor(this.dk(C_TEXT_4))
-                    Text(it.kind ?? '')
-                      .fontSize(FS_AUX)
-                      .fontColor(this.dk(C_TEXT_4))
-                    Blank()
-                    Text(it.status ?? '')
-                      .fontSize(FS_AUX)
-                      .fontColor(this.dk(C_ACCENT))
-                  }
-                  .width('100%')
-                  Text((it.title ?? '') === '' ? '（无题）' : (it.title ?? ''))
-                    .fontSize(FS_SUB)
-                    .fontColor(this.dk(C_TEXT))
-                    .maxLines(2)
-                    .textOverflow({ overflow: TextOverflow.Ellipsis })
-                    .width('100%')
-                }
-                .width('100%')
-                .padding(10)
-                .backgroundColor(this.dk(C_CARD))
-                .borderRadius(R_MD)
-                .stateStyles({ pressed: pressDim, normal: pressFull })
-                .onClick(() => {
-                  this.openReport(it);
-                })
-              }, (it: LibReportItem) => `${it.id}-${it.status}`)
-            }
-            Text('只读：终审是姐姐的笔，这里不代签。')
-              .fontSize(FS_AUX)
-              .fontColor(this.dk(C_TEXT_5))
-              .width('100%')
-          }
-          .width('100%')
-          .padding({ left: M_PAGE, right: M_PAGE, top: 4, bottom: 20 })
-          .alignItems(HorizontalAlign.Start)
-        }
-        .layoutWeight(1)
-        .width('100%')
-        .align(Alignment.Top)
-        .scrollBar(BarState.Off)
-      }
-    }
-    .width('100%')
-    .height('100%')
-    .padding({ top: this.safeTopPad })
-    .backgroundColor(this.dk(C_BG))
   }
 
 
@@ -5489,25 +2947,29 @@ struct Index {
     return `${d.getFullYear()}-${this.pad2(d.getMonth() + 1)}-${this.pad2(d.getDate())}`;
   }
 
-  // 节流器：每天首次进入（一天一次）+ 发送前（30 分钟一次）；失败全静默
-  private async maybeReportSchedule(fromEntry: boolean): Promise<void> {
+  // 节流器：每天首次进入（一天一次）+ 发送前（30 分钟一次）；force=true 绕过节流（保存课表用）。
+  // P-b（10-01）：课表空**也报**（items: []）——"诚实缺席"不等于"不上报"：删了课表，必须让
+  //   server 收到「今天没日程」它才会清旧账；收不到"空"，它会一直记着老样子
+  //   （今天「数电」事故的根：他删了课表，她照旧念着）。失败全静默，不挡聊天。
+  private async maybeReportSchedule(fromEntry: boolean, force: boolean = false): Promise<void> {
     try {
       const prefs = preferences.getPreferencesSync(getContext(this), { name: 'zanjia' });
       const today = this.todayDateStr();
       const lastDay = (prefs.getSync('calendar_last_day', '') as string);
       const lastTs = (prefs.getSync('calendar_last_ts', 0) as number);
-      if (fromEntry && lastDay === today) {
-        return;   // 今天首次进入已经报过了
+      if (!force) {
+        if (fromEntry && lastDay === today) {
+          return;   // 今天首次进入已经报过了
+        }
+        if (Date.now() - lastTs < 30 * 60 * 1000) {
+          return;   // 距上次上报不到 30 分钟，不重查
+        }
       }
-      if (Date.now() - lastTs < 30 * 60 * 1000) {
-        return;   // 距上次上报不到 30 分钟，不重查
-      }
-      // 9-17 夜：日历链路下线——来源只剩课表；课表空 = 不上报（诚实缺席，不空报）
       const ttRaw = (prefs.getSync('timetable_text', '') as string);
-      if (ttRaw.trim().length === 0) {
-        return;
+      let items: ScheduleItem[] = [];
+      if (ttRaw.trim().length !== 0) {
+        items = pickTimetableToday(parseTimetable(ttRaw), new Date().getDay());
       }
-      const items = pickTimetableToday(parseTimetable(ttRaw), new Date().getDay());
       const ok = await this.postSchedule(today, items);
       if (ok) {
         prefs.putSync('calendar_last_day', today);
@@ -5543,212 +3005,8 @@ struct Index {
   // ── CAL-02（9-13）：课表保存——原文存 preferences（存了就一直在），
   // 当场解析校验：N 行懂了、M 行没看懂，没看懂的行原样列出来并给格式提示（不许静默吞行）──
   // ── KB-EDIT（9-17 夜）：课表图形化编辑器——载入/增删改/保存（保存仍走 saveTimetable）──
-  private openKbEditor(): void {
-    const parsed = parseTimetable(this.timetableDraft);
-    const arr: TtEntry[] = [];
-    for (let i = 0; i < parsed.entries.length; i++) {
-      arr.push({ dow: parsed.entries[i].dow, from: parsed.entries[i].from,
-        to: parsed.entries[i].to, title: parsed.entries[i].title, time: parsed.entries[i].time });
-    }
-    this.kbEntries = arr;
-    this.kbBadLines = parsed.bad;   // 9-18 修复批八（APP2-01）：坏行带进编辑器（面板列出），保存时拼回
-    this.kbSel = -1;
+  private openKbEditor(): void {   // 9-30 拆分：解析与编辑整套搬进 view/KbEditPage，这里只开门
     this.kbEditOpen = true;
-  }
-
-  private kbDayList(d: number): TtEntry[] {
-    const out: TtEntry[] = [];
-    for (let i = 0; i < this.kbEntries.length; i++) {
-      if (this.kbEntries[i].dow === d) {
-        out.push(this.kbEntries[i]);
-      }
-    }
-    return out;
-  }
-
-  private kbIndexOf(d: number, k: number): number {
-    let seen = 0;
-    for (let i = 0; i < this.kbEntries.length; i++) {
-      if (this.kbEntries[i].dow === d) {
-        if (seen === k) {
-          return i;
-        }
-        seen = seen + 1;
-      }
-    }
-    return -1;
-  }
-
-  private kbAdd(d: number): void {
-    const arr: TtEntry[] = [];
-    for (let i = 0; i < this.kbEntries.length; i++) {
-      if (this.kbEntries[i].title.trim().length > 0) {
-        arr.push(this.kbEntries[i]);   // 加新课前先丢弃没落格的草稿（等于放弃未保存的编辑）
-      }
-    }
-    if (this.kbTimeMode) {
-      // 9-18：时间模式下加课——草稿直接按直写时间立（from/to 归 0，沿用既有约定），默认 08:00-09:40
-      arr.push({ dow: d, from: 0, to: 0, title: '', time: '08:00-09:40' });
-      this.kbTFrom = '08:00';
-      this.kbTTo = '09:40';
-    } else {
-      arr.push({ dow: d, from: 1, to: 2, title: '' });
-    }
-    this.kbEntries = arr;
-    this.kbSel = arr.length - 1;
-    this.kbName = '';
-    this.kbFrom = 1;
-    this.kbTo = 2;
-  }
-
-  private kbPick(i: number): void {
-    const e = this.kbEntries[i];
-    this.kbSel = i;
-    this.kbName = e.title;
-    this.kbFrom = e.from;
-    this.kbTo = e.to;
-    if (this.kbFrom < 1) {
-      this.kbFrom = 1;   // 9-18 直写时间条目（from=0）：节次控件给安全初值——防编辑面板取正典节次时越界
-    }
-    if (this.kbTo < 1) {
-      this.kbTo = 2;
-    }
-    const t: string | undefined = e.time;
-    if (t !== undefined && t.length > 0) {
-      // 9-18：点开直写时间条目——回填原时间、直接以时间模式打开（节次控件只是安全占位）
-      this.kbTimeMode = true;
-      this.kbTFrom = t.substring(0, 5);
-      this.kbTTo = t.substring(6, 11);
-    } else {
-      this.kbTimeMode = false;
-    }
-  }
-
-  private kbStep(fromSide: boolean, delta: number): void {
-    if (fromSide) {
-      let v = this.kbFrom + delta;
-      if (v < 1) {
-        v = 1;
-      }
-      if (v > 13) {
-        v = 13;
-      }
-      this.kbFrom = v;
-      if (this.kbTo < v) {
-        this.kbTo = v;
-      }
-    } else {
-      let v = this.kbTo + delta;
-      if (v < 1) {
-        v = 1;
-      }
-      if (v > 13) {
-        v = 13;
-      }
-      this.kbTo = v;
-      if (this.kbFrom > v) {
-        this.kbFrom = v;
-      }
-    }
-  }
-
-  // 9-18 模式切换：节次→时间按正典展开（此节开始~彼节结束）；时间→节次找最近的正典节次（精确匹配优先）
-  private kbSetTimeMode(on: boolean): void {
-    if (on === this.kbTimeMode) {
-      return;
-    }
-    if (on) {
-      this.kbTFrom = PERIOD_SLOTS[this.kbFrom - 1].split('-')[0];
-      this.kbTTo = PERIOD_SLOTS[this.kbTo - 1].split('-')[1];
-    } else {
-      const k = ttClosestPeriod(this.kbTFrom, this.kbTTo);
-      this.kbFrom = k[0];
-      this.kbTo = k[1];
-    }
-    this.kbTimeMode = on;
-  }
-
-  // 时间模式步进：先走一步，再静默钳住 从<到——到 ≤ 从 就把「到」推到「从」+5 分钟，
-  // 「到」已在 23:55 顶格则把「从」退到 23:50；不弹错，绝不越界
-  private kbTStep(fromSide: boolean, hourStep: boolean, delta: number): void {
-    const d = (hourStep ? 60 : 5) * delta;
-    if (fromSide) {
-      this.kbTFrom = ttStep(this.kbTFrom, d);
-    } else {
-      this.kbTTo = ttStep(this.kbTTo, d);
-    }
-    if (ttMin(this.kbTTo) <= ttMin(this.kbTFrom)) {
-      this.kbTTo = ttStep(this.kbTFrom, 5);
-    }
-    if (ttMin(this.kbTTo) <= ttMin(this.kbTFrom)) {
-      this.kbTFrom = ttStep(this.kbTTo, -5);
-    }
-  }
-
-  private kbApply(): void {
-    const name = this.kbName.trim();
-    if (this.kbSel < 0 || this.kbSel >= this.kbEntries.length || name === '') {
-      return;
-    }
-    const arr: TtEntry[] = [];
-    for (let i = 0; i < this.kbEntries.length; i++) {
-      if (i === this.kbSel) {
-        if (this.kbTimeMode) {
-          // 9-18 时间模式：直写时间条目（from/to 归 0，沿用既有约定）——取代旧的「只改名保留时间」hack
-          arr.push({ dow: this.kbEntries[i].dow, from: 0, to: 0, title: name,
-            time: this.kbTFrom + '-' + this.kbTTo });
-        } else {
-          // 节次模式：写节次、不带 time（切回节次=接受丢直写时间，回正典节次）
-          arr.push({ dow: this.kbEntries[i].dow, from: this.kbFrom,
-            to: this.kbTo, title: name });
-        }
-      } else {
-        arr.push(this.kbEntries[i]);
-      }
-    }
-    this.kbEntries = arr;
-    this.kbSel = -1;
-  }
-
-  private kbDelete(): void {
-    if (this.kbSel < 0 || this.kbSel >= this.kbEntries.length) {
-      return;
-    }
-    const arr: TtEntry[] = [];
-    for (let i = 0; i < this.kbEntries.length; i++) {
-      if (i !== this.kbSel) {
-        arr.push(this.kbEntries[i]);
-      }
-    }
-    this.kbEntries = arr;
-    this.kbSel = -1;
-  }
-
-  private kbSaveAll(): void {
-    // 9-18 修复批八（APP2-01）：课名里的「，」「；」是格式的分段符，存下去这条课会整行解析失败——
-    // 存前换成「·」（比拒绝少一次往返，提示语里说一声）
-    let renamed = 0;
-    const arr: TtEntry[] = [];
-    for (let i = 0; i < this.kbEntries.length; i++) {
-      const e = this.kbEntries[i];
-      const t = e.title.split('，').join('·').split('；').join('·');
-      if (t !== e.title) {
-        renamed = renamed + 1;
-      }
-      arr.push({ dow: e.dow, from: e.from, to: e.to, title: t, time: e.time });
-    }
-    let text = serializeTimetable(arr);
-    if (this.kbBadLines.length > 0) {
-      // 没看懂的行原样拼回尾部：编辑器只管它看懂的条目，坏行不许被它无声抹掉
-      text = text + (text === '' ? '' : '\n') + this.kbBadLines.join('\n');
-    }
-    this.timetableDraft = text;
-    this.saveTimetable();   // 老路：存偏好 + 校验提示（timetableMsg 显示在设置页）
-    if (renamed > 0) {
-      this.timetableMsg = this.timetableMsg
-        + `（${renamed} 条课名里的「，；」已存成「·」——这俩是课表格式的分段符）`;
-    }
-    this.kbEditOpen = false;
   }
 
   private saveTimetable(): void {
@@ -5760,6 +3018,9 @@ struct Index {
     } catch (err) {
       // 存不下也先把校验结果给到——大不了下次再存一遍
     }
+    // P-b（10-01）：课表一改，**立刻**把"今天到底有没有课"如实报一次——空也报、绕过节流。
+    //   删课表＝报空 → server 当场清旧账（治今天「数电」那事）。失败静默，不挡保存回执。
+    this.maybeReportSchedule(false, true).then(() => {}).catch(() => {});
     const parsed = parseTimetable(raw);
     const m = parsed.bad.length;
     if (raw.trim() === '') {
@@ -5776,45 +3037,6 @@ struct Index {
     }
     msg = msg + '格式示例：周一 1-2节 高数 @十教 / 周四 18:10-19:30 课外活动（行首周X；课次写节次 1~13 或直接写时间都行；一行多门用；隔开）';
     this.timetableMsg = msg;
-  }
-
-  // ── 思考链查看页（工单 9-1-#4）：点开「💭 看看想法」全屏看原文 ──
-  @Builder
-  ThinkingPage() {
-    Column() {
-      Row() {
-        Text('💭 姐姐刚才的想法')
-          .fontSize(FS_TITLE)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(this.dk(C_TEXT))
-          .layoutWeight(1)
-        Text('关闭')
-          .fontSize(FS_SUB)
-          .fontColor(this.dk(C_ACCENT))
-          .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-.stateStyles({ pressed: pressDim, normal: pressFull })
-          .onClick(() => {
-            this.thinkingOpen = false;
-          })
-      }
-      .width('100%')
-      .padding({ left: M_PAGE, right: M_PAGE, top: 14, bottom: 8 })
-
-      Scroll() {
-        Text(this.thinkingText)
-          .fontSize(FS_SUB)
-          .lineHeight(22)
-          .fontColor(this.dk(C_TEXT))
-          .width('100%')
-          .padding({ left: M_PAGE, right: M_PAGE, bottom: 20 })
-      }
-      .layoutWeight(1)
-      .width('100%')
-    }
-    .width('100%')
-    .height('100%')
-    .padding({ top: this.safeTopPad })
-    .backgroundColor(this.dk(C_BG))
   }
 
   // 先查本地缓存（本轮新回复直接有），没有再问 server 要（历史气泡）
@@ -5872,7 +3094,14 @@ struct Index {
 
       Scroll() {
         Column() {
-          this.CheckinPage()
+          CheckinPage({
+            checkedToday: this.checkedToday, checkinBusy: this.checkinBusy,
+            checkinItems: this.checkinItems, monthItems: this.monthItems,
+            checkinMsg: this.checkinMsg, checkinDetailId: $checkinDetailId,
+            onEnter: () => { this.fetchCheckinData(); this.fetchMonthCheckins(); },
+            onCheckin: (it: CheckinItem) => { this.doCheckin(it); },
+            onArchive: (it: CheckinItem) => { this.confirmArchive(it); }
+          })
           Divider()
             .color(this.dk(C_DOT_BORDER))
             .margin({ left: M_PAGE, right: M_PAGE })
@@ -5888,211 +3117,6 @@ struct Index {
     .width('100%')
     .height('100%')
     .backgroundColor(this.dk(C_BG))
-  }
-
-  @Builder
-  CheckinPage() {
-    Column() {
-      Row() {
-        Text('✓ 打卡')
-          .fontSize(FS_TITLE)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(this.dk(C_TEXT))
-          .layoutWeight(1)
-      }
-      .width('100%')
-      .padding({ left: M_PAGE, right: M_PAGE, top: 14, bottom: 8 })
-
-      if (this.checkinDetailId >= 0) {
-        this.CheckinDetailPage()
-      } else {
-      // ── 今日进度环（CHECKIN-2）：完成 N/M——打一项亮一格，漏了就是漏了（不许补打） ──
-      Row({ space: 14 }) {
-        Progress({ value: this.checkinDoneCount(), total: this.checkinTotalCount() > 0 ? this.checkinTotalCount() : 1, type: ProgressType.Ring })
-          .width(64)
-          .height(64)
-          .color(this.dk(C_ACCENT))
-          .backgroundColor(this.dk(C_CARD))
-          .style({ strokeWidth: 6 })
-        Column({ space: 3 }) {
-          Text(`今天 ${this.checkinDoneCount()}/${this.checkinTotalCount()}`)
-            .fontSize(FS_TITLE)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(this.dk(C_TEXT))
-          Text(this.checkinTotalCount() > 0 ? `完成 ${this.checkinDoneCount()}/${this.checkinTotalCount()} 项` : '还没有打卡项')
-            .fontSize(FS_AUX)
-            .fontColor(this.dk(C_TEXT_4))
-        }
-        .alignItems(HorizontalAlign.Start)
-        .layoutWeight(1)
-      }
-      .width('100%')
-      .padding({ left: M_PAGE, right: M_PAGE, top: 2, bottom: 6 })
-
-      Text('点按打卡，长按归档（归档不删历史）')
-        .fontSize(FS_AUX)
-        .fontColor(this.dk(C_TEXT_5))
-        .width('100%')
-        .padding({ left: M_PAGE, right: M_PAGE, bottom: 6 })
-
-      if (this.checkinMsg) {
-        Text(this.checkinMsg)
-          .fontSize(FS_AUX)
-          .fontColor(this.dk(C_TEXT_3))
-          .width('100%')
-          .padding({ left: M_PAGE, right: M_PAGE, bottom: 6 })
-      }
-
-      // 内层不再用 List（9-12 修「日常页滚不动」：嵌套可滚组件抢手势，统一外层滚）
-      Column({ space: 8 }) {
-        ForEach(this.checkinItems, (item: CheckinItem) => {
-            Row() {
-              Column({ space: 2 }) {
-                Row({ space: 6 }) {
-                  Text(item.name)
-                    .fontSize(FS_BODY)
-                    .fontColor(this.dk(C_TEXT))
-                  if (this.streakOf(item.id) >= 2) {
-                    Text(`🔥 连续 ${this.streakOf(item.id)} 天`)
-                      .fontSize(FS_AUX)
-                      .fontColor(this.dk(C_ACCENT))
-                  }
-                }
-                if (item.target_time) {
-                  Text(`目标 ${item.target_time}`)
-                    .fontSize(FS_AUX)
-                    .fontColor(this.dk(C_TEXT_5))
-                }
-              }
-              .alignItems(HorizontalAlign.Start)
-              .layoutWeight(1)
-
-              if (this.checkedToday.includes(item.id)) {
-                Text('已打 ✓')
-                  .fontSize(FS_SUB)
-                  .fontColor(this.dk(C_OK))
-                  .padding({ left: 12, right: 4 })
-              } else {
-                Button('打卡')
-                  .fontSize(FS_SUB)
-                  .height(40)
-                  .fontColor(this.dk(C_WHITE))
-                  .backgroundColor(this.checkinBusy ? this.dk(C_DISABLED) : this.dk(C_ACCENT))
-                  .borderRadius(R_PILL)
-                  .enabled(!this.checkinBusy)   // 9-18 App深搜修（DS-05）：在途置灰防连点
-.stateStyles({ pressed: pressDim, normal: pressFull })
-                  .onClick(() => {
-                    this.checkinTapTs = Date.now();   // LAY-07：点「打卡」就是打卡，别顺带把详情也开了
-                    this.doCheckin(item);
-                  })
-              }
-
-              // 右侧箭头 → 项详情（CHECKIN-2）：点开看这个月的月历热力图
-              // LAY-07（9-23）：箭头补竖 padding ≥40vp；整行也可点进详情（长按归档保留）
-              Text('›')
-                .fontSize(22)
-                .fontColor(this.dk(C_TEXT_5))
-                .padding({ left: 10, right: 8, top: 5, bottom: 5 })
-                .stateStyles({ pressed: pressDim, normal: pressFull })
-                .onClick(() => {
-                  this.checkinDetailId = item.id;
-                })
-            }
-            .width('100%')
-            .padding({ left: 14, right: 14, top: 10, bottom: 10 })
-            .backgroundColor(this.dk(C_PANEL))
-            .borderRadius(R_MD)
-            .stateStyles({ pressed: pressDim, normal: pressFull })
-            .onClick(() => {
-              // LAY-07：整行点开详情；刚点过「打卡」的那一下不算（点击是否冒泡到这儿都稳）
-              if (Date.now() - this.checkinTapTs < 500) {
-                return;
-              }
-              this.checkinDetailId = item.id;
-            })
-            .gesture(LongPressGesture().onAction(() => {
-              this.confirmArchive(item);
-            }))
-        }, (item: CheckinItem) => `${item.id}`)
-
-        // 打卡项增删走姐姐（9-2 #总）：页内不再自助，跟姐姐说一声就办了
-        Text('想加项、想去项？跟姐姐说一声就好')
-          .fontSize(FS_AUX)
-          .fontColor(this.dk(C_TEXT_5))
-          .width('100%')
-          .textAlign(TextAlign.Center)
-          .padding({ top: 12, bottom: 12 })
-      }
-      .width('100%')
-      .padding({ left: M_PAGE, right: M_PAGE, top: 4 })
-      }   // else（列表态）收口——CHECKIN-2
-    }
-    .width('100%')
-    .padding({ top: 12 })   // 常驻分页后系统自动避让，不再吃模态避让区
-    .backgroundColor(this.dk(C_BG))
-    .onAppear(() => {
-      this.fetchCheckinData();
-      this.fetchMonthCheckins();   // CHECKIN-2（9-13）：进打卡页顺手拉月视图（失败静默保留旧数据）
-    })
-  }
-
-  // ── 项详情（CHECKIN-2）：月历热力图。7 列网格、本月实际天数；打过=墨色圆点、漏打=空——
-  // 灰格子点了没反应（不许补打：漏了就是灰格子，账本是诚实的） ──
-  @Builder
-  CheckinDetailPage() {
-    Column({ space: 10 }) {
-      Row({ space: 8 }) {
-        Text('‹ 返回')
-          .fontSize(FS_SUB)
-          .fontColor(this.dk(C_ACCENT))
-          .padding({ left: 12, right: 12, top: 12, bottom: 12 })   // LAY-07：触摸目标补到 ≥40vp
-          .stateStyles({ pressed: pressDim, normal: pressFull })
-          .onClick(() => {
-            this.checkinDetailId = -1;
-          })
-        Text(this.detailName())
-          .fontSize(FS_BODY)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(this.dk(C_TEXT))
-          .layoutWeight(1)
-      }
-      .width('100%')
-
-      Text(`本月 ${this.detailDays().length} 天 · 最长 🔥${this.detailBest()} 天`)
-        .fontSize(FS_SUB)
-        .fontColor(this.dk(C_TEXT_2))
-        .width('100%')
-
-      Column({ space: 6 }) {
-        ForEach(this.detailWeeks(), (row: number[]) => {
-          Row({ space: 6 }) {
-            ForEach(row, (d: number) => {
-              Stack() {
-                Text(`${d}`)
-                  .fontSize(FS_AUX)
-                  .fontColor(this.detailHasDay(d) ? this.dk(C_WHITE) : this.dk(C_TEXT_5))
-              }
-              .width(32)
-              .height(32)
-              .borderRadius(16)
-              .backgroundColor(this.detailHasDay(d) ? this.dk(C_ACCENT) : this.dk(C_CARD))
-            }, (d: number) => `${d}`)
-          }
-          .width('100%')
-        }, (row: number[]) => `r${row[0]}`)
-      }
-      .width('100%')
-
-      if (this.detailDays().length === 0) {
-        Text('这个月还空着——今天打上，第一格就亮。')
-          .fontSize(FS_AUX)
-          .fontColor(this.dk(C_TEXT_5))
-          .width('100%')
-      }
-    }
-    .width('100%')
-    .padding({ left: M_PAGE, right: M_PAGE, top: 2 })
-    .alignItems(HorizontalAlign.Start)
   }
 
   // 拉在册打卡项 + 今日已打，合成"已打"状态
@@ -6156,30 +3180,6 @@ struct Index {
     }
   }
 
-  // CHECKIN-2：进度环与连续🔥的小账房
-  private checkinDoneCount(): number {
-    let n = 0;
-    for (let i = 0; i < this.checkinItems.length; i++) {
-      if (this.checkedToday.includes(this.checkinItems[i].id)) {
-        n++;
-      }
-    }
-    return n;
-  }
-
-  private checkinTotalCount(): number {
-    return this.checkinItems.length;
-  }
-
-  private streakOf(itemId: number): number {
-    for (let i = 0; i < this.monthItems.length; i++) {
-      if (this.monthItems[i].item_id === itemId) {
-        return this.monthItems[i].streak;
-      }
-    }
-    return 0;
-  }
-
   // CHECKIN-2 项详情取数（月视图没拉到就先空着——灰着是灰着）
   private detailName(): string {
     for (let i = 0; i < this.checkinItems.length; i++) {
@@ -6212,13 +3212,9 @@ struct Index {
     return this.detailDays().includes(d);
   }
 
-  private detailMonthDays(): number {
-    const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  }
 
   private detailWeeks(): number[][] {
-    const total = this.detailMonthDays();
+    const total = detailMonthDays();
     const out: number[][] = [];
     let row: number[] = [];
     for (let d = 1; d <= total; d++) {
@@ -6251,7 +3247,7 @@ struct Index {
       });
       if (res.responseCode === 200) {
         this.checkedToday = this.checkedToday.concat(item.id);
-        this.checkinMsg = `已打卡：${item.name} ${this.nowTime()}`;
+        this.checkinMsg = `已打卡：${item.name} ${nowTime()}`;
         this.fetchMonthCheckins();   // CHECKIN-2（9-13）：打卡成功后顺手刷新月视图（连续🔥涨一格）
       } else if (res.responseCode === 404) {
         this.checkinMsg = `「${item.name}」已归档，列表刷新一下`;
@@ -6427,7 +3423,7 @@ struct Index {
             Column({ space: 4 }) {
               ForEach(item.tools, (t: ToolUseInfo, idx: number) => {
                 Row({ space: 6 }) {
-                  Text(`${this.toolCn(t.name)} ${this.toolSummary(t.name, t.args)}`.trim())
+                  Text(`${toolCn(t.name)} ${toolSummary(t.name, t.args)}`.trim())
                     .fontSize(FS_AUX)
                     .fontColor(this.dk(C_TEXT_3))
                     .layoutWeight(1)
@@ -6506,90 +3502,9 @@ struct Index {
     }
   }
 
-  private nowTime(): string {
-    const d = new Date();
-    const h = d.getHours();
-    const m = d.getMinutes();
-    return `${h < 10 ? '0' + h : h}:${m < 10 ? '0' + m : m}`;
-  }
 
-  private toolCn(name: string): string {
-    if (name === 'search_chats') {
-      return '📖 翻聊天记录';
-    }
-    if (name === 'search_diary') {
-      return '📔 翻日记';
-    }
-    if (name === 'search_archive') {
-      return '🗂 翻档案';
-    }
-    // 手表已清退（9-23）；这两条标签保留——历史消息里的工具卡还靠它显示中文
-    if (name === 'get_heart_rate') {
-      return '❤️ 看了眼你的心跳';
-    }
-    if (name === 'request_heart') {
-      return '💓 姐姐想听你的心跳';
-    }
-    if (name === 'get_checkins') {
-      return '✓ 看了眼打卡';
-    }
-    // ── FE-03 补全：十六只图书证每只都有人话名（与 server LIBRARY_TOOLS 一一对照）──
-    if (name === 'search_events') {
-      return '📜 翻大事记';
-    }
-    if (name === 'search_memory') {
-      return '🔍 翻了翻咱家记忆';
-    }
-    if (name === 'get_notes') {
-      return '📝 看了眼小本本';
-    }
-    if (name === 'read_letters') {
-      return '✉️ 拆开你的来信';
-    }
-    if (name === 'jot_down') {
-      return '📝 悄悄记了一笔';
-    }
-    if (name === 'favorite_photo') {
-      return '🖼 收进了收藏夹';
-    }
-    if (name === 'add_checkin_item') {
-      return '✓ 加了个打卡项';
-    }
-    if (name === 'archive_checkin_item') {
-      return '📦 归档了打卡项';
-    }
-    if (name === 'write_diary') {
-      return '📔 写了篇日记';
-    }
-    if (name === 'compose_letter') {
-      return '💌 写了封长信';
-    }
-    if (name === 'send_email') {
-      return '📧 寄了封真信';
-    }
-    return name;
-  }
 
   // ── FE-03 要求2：动作工具的内容摘要——args 是 JSON 串，解析出人话；解析不动就空着只显示友好名 ──
-  private toolSummary(name: string, argsJson: string): string {
-    let a: Record<string, string> = {};
-    try {
-      a = JSON.parse(argsJson) as Record<string, string>;
-    } catch (err) {
-      return '';
-    }
-    if (name === 'jot_down') {
-      const t = a['text'] ?? '';
-      return t.length > 40 ? t.substring(0, 40) + '…' : t;   // 记的纸条前 40 字
-    }
-    if (name === 'add_checkin_item' || name === 'archive_checkin_item') {
-      return a['name'] ?? '';   // 打卡项名
-    }
-    if (name === 'favorite_photo') {
-      return a['name'] ?? '';   // 照片文件名
-    }
-    return '';
-  }
 
   private appendMsg(who: string, text: string, imageUrl: string, time?: string, tools?: ToolUseInfo[],
                     hasThinking?: boolean, msgId?: number, fileName?: string): string {
@@ -6598,7 +3513,7 @@ struct Index {
       who: who,
       text: text,
       imageUrl: imageUrl,
-      time: time ?? this.nowTime(),
+      time: time ?? nowTime(),
       tools: tools,
       msgId: msgId,
       hasThinking: hasThinking,
@@ -6676,7 +3591,7 @@ struct Index {
         const d = JSON.parse(res.result as string) as StatusResp;
         this.stNow = d.now ?? '—';
         this.stWeather = d.weather ?? '—';
-        if (d.loc) {
+        if (d.loc && typeof d.loc.lat === 'number' && typeof d.loc.lon === 'number') {
           const coord = `北纬 ${d.loc.lat.toFixed(4)}，东经 ${d.loc.lon.toFixed(4)}`;
           this.stPlace = d.loc.place ? `${d.loc.place}（${coord}）` : coord;
           this.stLocTime = d.loc.time ?? '';
@@ -6832,6 +3747,13 @@ struct Index {
     this.stState = '';
     this.stLedger = '';
     this.stWalk = '';
+    // 10-02 修：断网时这几格原样留着旧值 → 面板会显示"假在岗"（server 跑了多久／耳朵✓／信箱N封）
+    this.stServer = '—';
+    this.stGarden = '—';
+    this.stFav = '—';
+    this.stLetter = '—';
+    this.stLetters = 0;
+    this.stBridgeUp = false;
   }
 
   // ── 桌面卡片推送：写 preferences（系统定时刷新读它），并主动 updateForm 已添加的卡片 ──
@@ -7216,7 +4138,7 @@ struct Index {
                     .width(8)
                     .height(8)
                     .fill(p.type ? (this.moodColorOf(p.type) as ResourceColor) : MOOD_LEGACY_COLOR)
-                  Text(`${p.time} · ${this.moodNameOf(p.type) || '旧记分'} ×${p.score} · ${p.source}`)
+                  Text(`${p.time} · ${moodNameOf(p.type) || '旧记分'} ×${p.score} · ${p.source}`)
                     .fontSize(FS_AUX)
                     .fontColor(this.dk(C_TEXT_3))
                 }
@@ -7245,21 +4167,9 @@ struct Index {
   }
 
   // MOOD-V1（9-12）词表九并六：先并类再取名——type 不在现词表就查 LEGACY_MOOD_MAP
-  private moodNameOf(name: string): string {
-    if (!name) {
-      return name;
-    }
-    for (let i = 0; i < MOOD_TYPES.length; i++) {
-      if (MOOD_TYPES[i].name === name) {
-        return name;
-      }
-    }
-    const legacy: string | undefined = LEGACY_MOOD_MAP[name];
-    return legacy === undefined ? name : legacy;
-  }
 
   private moodColorOf(name: string): string {
-    const n = this.moodNameOf(name);   // 先并类（旧记录不炸）再取色
+    const n = moodNameOf(name);   // 先并类（旧记录不炸）再取色
     for (let i = 0; i < MOOD_TYPES.length; i++) {
       if (MOOD_TYPES[i].name === n) {
         return MOOD_TYPES[i].color;
@@ -7277,57 +4187,10 @@ struct Index {
   }
 
   // '#RRGGBB' → 'rgba(r,g,b,a)'（画布渐变要带透明度的色）
-  private hexToRgba(hex: string, alpha: number): string {
-    let h = hex;
-    if (h.startsWith('#')) {
-      h = h.substring(1);
-    }
-    if (h.length !== 6) {
-      return `rgba(201,190,176,${alpha})`;
-    }
-    const r = parseInt(h.substring(0, 2), 16);
-    const g = parseInt(h.substring(2, 4), 16);
-    const b = parseInt(h.substring(4, 6), 16);
-    return `rgba(${r},${g},${b},${alpha})`;
-  }
 
   // 十字星（RIVER-3）：他的笔。四芒 sparkle——两条纺锤交叉，凹腰收光
-  private drawSpark4(ctx: CanvasRenderingContext2D, x: number, y: number, r: number,
-                     color: string, alpha: number): void {
-    ctx.globalAlpha = alpha;
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.moveTo(x, y - r);
-    ctx.quadraticCurveTo(x, y, x + r, y);
-    ctx.quadraticCurveTo(x, y, x, y + r);
-    ctx.quadraticCurveTo(x, y, x - r, y);
-    ctx.quadraticCurveTo(x, y, x, y - r);
-    ctx.closePath();
-    ctx.fill();
-    ctx.globalAlpha = 1;
-  }
 
   // 五角星（RIVER-3）：她的笔。外半径 r，内半径 0.45r，正五角
-  private drawStar5(ctx: CanvasRenderingContext2D, x: number, y: number, r: number,
-                    color: string, alpha: number): void {
-    ctx.globalAlpha = alpha;
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    for (let k = 0; k < 10; k++) {
-      const rad = k % 2 === 0 ? r : r * 0.45;
-      const ang = -Math.PI / 2 + k * Math.PI / 5;
-      const px = x + rad * Math.cos(ang);
-      const py = y + rad * Math.sin(ang);
-      if (k === 0) {
-        ctx.moveTo(px, py);
-      } else {
-        ctx.lineTo(px, py);
-      }
-    }
-    ctx.closePath();
-    ctx.fill();
-    ctx.globalAlpha = 1;
-  }
 
   // 一天里出现最多的情绪词（河床染它）；没记录的日子退回中性河沙色
   private dominantColorOfDay(keys: string[]): string {
@@ -7464,9 +4327,9 @@ struct Index {
       const half = bandH / 2 + Math.min(count, 6) * (big ? 6 : 3);
       const grad = ctx.createLinearGradient(cx, cy - half, cx, cy + half);
       const aTop = count > 0 ? 0.16 : 0.08;
-      grad.addColorStop(0, this.hexToRgba(color, 0));
-      grad.addColorStop(0.5, this.hexToRgba(color, aTop));
-      grad.addColorStop(1, this.hexToRgba(color, 0));
+      grad.addColorStop(0, hexToRgba(color, 0));
+      grad.addColorStop(0.5, hexToRgba(color, aTop));
+      grad.addColorStop(1, hexToRgba(color, 0));
       ctx.fillStyle = grad;
       ctx.fillRect(cx, cy - half, colW + 0.5, half * 2);
     }
@@ -7522,17 +4385,17 @@ struct Index {
         const glowR = dotR * (big ? 3.4 : 3.0);
         const glow = ctx.createRadialGradient(x, y, dotR * 0.4, x, y, glowR);
         const glowA = source === '今日主色' ? 0.10 : 0.16 + 0.05 * score;
-        glow.addColorStop(0, this.hexToRgba(color, glowA));
-        glow.addColorStop(1, this.hexToRgba(color, 0));
+        glow.addColorStop(0, hexToRgba(color, glowA));
+        glow.addColorStop(1, hexToRgba(color, 0));
         ctx.fillStyle = glow;
         ctx.fillRect(x - glowR, y - glowR, glowR * 2, glowR * 2);
         // 星形：十字星=他/旧分，五角星=她；今日主色淡一档像河的底调
         const isHer = source === '姐姐';
         const alpha = source === '今日主色' ? 0.45 : (mtype ? 0.95 : 0.55);
         if (isHer) {
-          this.drawStar5(ctx, x, y, dotR, color, alpha);
+          drawStar5(ctx, x, y, dotR, color, alpha);
         } else {
-          this.drawSpark4(ctx, x, y, dotR, color, alpha);
+          drawSpark4(ctx, x, y, dotR, color, alpha);
         }
         // 记进缓存（point 回链原数据，弹详情用）
         for (let k = 0; k < this.moodMarks.length; k++) {
@@ -7698,7 +4561,7 @@ struct Index {
         // 本地补一笔（服务端时间戳拿不到就用当前时刻），整对象重赋值触发渲染
         const mk: BookMark = {
           id: Math.floor(Math.random() * 100000), who: '小乖', loc: '',
-          text: text, time: this.nowTime().substring(0, 5), para: this.readSelPara
+          text: text, time: nowTime().substring(0, 5), para: this.readSelPara
         };
         const marks: BookMark[] = [];
         for (const m0 of (this.readBook as BookShelf).marks) {
@@ -7951,18 +4814,6 @@ struct Index {
   }
 
   // FE-02 ①：结局标签人话（trace=心事 / silent=静默 / message=来找过他）
-  private traceEndingCn(ending: string): string {
-    if (ending === 'trace') {
-      return '心事';
-    }
-    if (ending === 'silent') {
-      return '静默';
-    }
-    if (ending === 'message') {
-      return '来找过他';
-    }
-    return ending;
-  }
 
   // ══ 9-29 §12 app 显示面（家主令「能显示的都显示，除她的隐私空间」）═══════════════
   // 三页共用 pages/InfoPage 的只读骨架；**取数与文案整形都在这边**（它手里有门牌与钥匙）。
@@ -8003,13 +4854,17 @@ struct Index {
       req.destroy();
     }
     // ② 影子读数 + ③ 台账公开段（各自单独取，谁挂谁诚实说，不互相连坐）
-    groups.push({ title: '影子读数（今天）', lines: await this.fetchShadowLines() });
-    const mech: InfoGroup[] = await this.fetchMechGroups();
-    for (let i = 0; i < mech.length; i++) {
-      groups.push(mech[i]);
+    // 10-02 修：这两段原先不在 try/finally 内——任一处抛出会永久卡「取数中」（拒绝再刷新）
+    try {
+      groups.push({ title: '影子读数（今天）', lines: await this.fetchShadowLines() });
+      const mech: InfoGroup[] = await this.fetchMechGroups();
+      for (let i = 0; i < mech.length; i++) {
+        groups.push(mech[i]);
+      }
+      this.healthGroups = groups;
+    } finally {
+      this.healthBusy = false;
     }
-    this.healthGroups = groups;
-    this.healthBusy = false;
   }
 
   // 观测层 → 人话：开机 / 软失败 / 机制面（门·桥·嵌入·备份）/ 当日账
@@ -8050,7 +4905,7 @@ struct Index {
     } else {
       const lines: string[] = [];
       const hit: number | null | undefined = lg.cache_hit;
-      lines.push(`调用 ${lg.calls ?? 0} 次 · 进 ${this.wanTxt(lg.in_tokens)} / 出 ${this.wanTxt(lg.out_tokens)} tokens`
+      lines.push(`调用 ${lg.calls ?? 0} 次 · 进 ${wanTxt(lg.in_tokens)} / 出 ${wanTxt(lg.out_tokens)} tokens`
         + `（缓存命中 ${hit === null || hit === undefined ? '—' : `${Math.round(hit * 100)}%`}）`);
       const cost: number | null | undefined = lg.cost_est;
       lines.push(cost === null || cost === undefined
@@ -8058,7 +4913,7 @@ struct Index {
         : `估价：约 ¥${cost.toFixed(2)}（单价取自私档，不在这儿回显）`);
       const sc: HealthLedgerScene[] = lg.scenes ?? [];
       for (let i = 0; i < sc.length; i++) {
-        lines.push(`　${sc[i].scene ?? '?'}：${sc[i].calls ?? 0} 次 · 进 ${this.wanTxt(sc[i].in)} / 出 ${this.wanTxt(sc[i].out)}`);
+        lines.push(`　${sc[i].scene ?? '?'}：${sc[i].calls ?? 0} 次 · 进 ${wanTxt(sc[i].in)} / 出 ${wanTxt(sc[i].out)}`);
       }
       groups.push({ title: '今天的账', lines: lines });
     }
@@ -8142,7 +4997,7 @@ struct Index {
         return out;
       }
       for (let i = 0; i < secs.length; i++) {
-        out.push({ title: secs[i].title ?? '台账', lines: this.mechTextToLines(secs[i].text ?? '') });
+        out.push({ title: secs[i].title ?? '台账', lines: mechTextToLines(secs[i].text ?? '') });
       }
     } catch (err) {
       out.push({ title: '机制台账·公开段', lines: ['（没取到：' + errMsg(err as Object) + '）'] });
@@ -8153,40 +5008,6 @@ struct Index {
   }
 
   // markdown 表格行 → 「`名` = 现值」人话行；非表格行原样（缩进两格）
-  private mechTextToLines(text: string): string[] {
-    const out: string[] = [];
-    const rows: string[] = text.split('\n');
-    for (let i = 0; i < rows.length; i++) {
-      const ln: string = rows[i].trim();
-      if (ln === '' || ln.startsWith('|---') || ln.startsWith('| ---')) {
-        continue;
-      }
-      if (!ln.startsWith('|')) {
-        out.push('　' + ln);
-        continue;
-      }
-      const cells: string[] = ln.split('|');
-      const parts: string[] = [];
-      for (let k = 0; k < cells.length; k++) {
-        const c: string = cells[k].trim();
-        if (c !== '') {
-          parts.push(c);
-        }
-      }
-      if (parts.length === 0 || parts[0] === '开关名' || parts[0] === '键名') {
-        continue;   // 表头跳过
-      }
-      let line: string = '　' + parts[0];
-      if (parts.length >= 3) {
-        line += ` ＝ ${parts[2]}`;
-      }
-      if (parts.length >= 5 && parts[4] !== '—' && parts[4] !== '') {
-        line += `　（${parts[4]}）`;
-      }
-      out.push(line);
-    }
-    return out;
-  }
 
   // 🌙 夜里：睡眠整理（归拢/回望给条目；**牵线只给条数**）
   private openNight(): void {
@@ -8464,139 +5285,6 @@ struct Index {
     }
   }
 
-  // ── 家主信箱（9-9）：小乖写信给姐姐，投进信箱她来读 ──
-  @Builder
-  LetterPage() {
-    Column({ space: 12 }) {
-      Row() {
-        Text('✉️ 给姐姐写信')
-          .fontSize(FS_TITLE)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(this.dk(C_TEXT))
-          .layoutWeight(1)
-        Text(`信箱：${this.stLetters} 封待她读`)
-          .fontSize(FS_AUX)
-          .fontColor(this.dk(C_TEXT_4))
-      }
-      .width('100%')
-
-      Text('想说的话，慢慢写。投进信箱，姐姐读到了会接住的。')
-        .fontSize(FS_SUB)
-        .fontColor(this.dk(C_TEXT_3))
-        .width('100%')
-
-      TextArea({
-        text: this.letterText,
-        placeholder: '亲爱的姐姐……'
-      })
-        .fontSize(FS_BODY)
-        .lineHeight(26)
-        .placeholderFont({ size: FS_BODY })
-        .backgroundColor(this.dk(C_WHITE))
-        .borderRadius(R_MD)
-        .maxLength(2000)
-        .constraintSize({ minHeight: 240 })
-        .width('100%')
-        .onChange((v: string) => {
-          this.letterText = v;
-        })
-
-      Text(`${this.letterText.length} / 2000`)
-        .fontSize(FS_AUX)
-        .fontColor(this.dk(C_TEXT_5))
-        .width('100%')
-        .textAlign(TextAlign.End)
-
-      Button('投进信箱')
-        .fontSize(FS_BODY)
-        .height(44)
-        .fontColor(this.dk(C_WHITE))
-        .backgroundColor(this.letterText.trim() ? this.dk(C_ACCENT) : this.dk(C_DISABLED))
-        .borderRadius(R_PILL_XL)
-        .enabled(this.letterText.trim().length > 0 && !this.letterBusy)
-        .width('100%')
-.stateStyles({ pressed: pressDim, normal: pressFull })
-        .onClick(() => {
-          this.sendLetter();
-        })
-
-      if (this.letterMsg) {
-        Text(this.letterMsg)
-          .fontSize(FS_SUB)
-          .fontColor(this.dk(C_OK))
-          .width('100%')
-      }
-    }
-    .width('100%')
-    .padding({ left: M_PAGE, right: M_PAGE, top: 12, bottom: 16 })
-    .backgroundColor(this.dk(C_BG))
-  }
-
-  // ── 她的独处格（FE-02 ①）：Garden 的痕迹——时间 + 结局标签 + fact；trace 点行见全文，
-  // 静默卡只有 fact（content 没有就是没有，不许造）──
-  @Builder
-  TracesPage() {
-    Column({ space: 10 }) {
-      if (this.traceMsg !== '') {
-        Text(this.traceMsg)
-          .fontSize(FS_AUX)
-          .fontColor(this.dk(C_TEXT_4))
-          .width('100%')
-      }
-      if (this.tracesList.length === 0) {
-        Text('她还没有独处的记录——安静也是她在过日子。')
-          .fontSize(FS_SUB)
-          .fontColor(this.dk(C_TEXT_4))
-          .width('100%')
-          .textAlign(TextAlign.Center)
-          .padding({ top: 24, bottom: 24 })
-      }
-      ForEach(this.tracesList, (t: TraceItem) => {
-        Column({ space: 6 }) {
-          Row({ space: 8 }) {
-            Text(t.ts.length >= 16 ? t.ts.substring(5, 16) : t.ts)
-              .fontSize(FS_AUX)
-              .fontColor(this.dk(C_TEXT_5))
-            Text(this.traceEndingCn(t.ending))
-              .fontSize(FS_AUX)
-              .fontColor(this.dk(C_ACCENT))
-              .padding({ left: 8, right: 8, top: 1, bottom: 1 })
-              .border({ width: 1, color: this.dk(C_ACCENT) })
-              .borderRadius(R_LG)
-          }
-          .width('100%')
-          if (t.fact !== '') {
-            Text(t.fact)
-              .fontSize(FS_SUB)
-              .fontColor(this.dk(C_TEXT_2))
-              .lineHeight(20)
-              .width('100%')
-          }
-          if (this.traceOpenId === t.id && t.content !== '') {
-            Text(t.content)
-              .fontSize(FS_SUB)
-              .fontColor(this.dk(C_TEXT))
-              .lineHeight(20)
-              .width('100%')
-              .padding({ top: 4 })
-          }
-        }
-        .padding(12)
-        .backgroundColor(this.dk(C_CARD))
-        .borderRadius(R_MD)
-        .width('100%')
-        .onClick(() => {
-          if (t.content !== '') {
-            this.traceOpenId = this.traceOpenId === t.id ? -1 : t.id;
-          }
-        })
-      }, (t: TraceItem) => `${t.id}`)
-    }
-    .width('100%')
-    .padding({ left: M_PAGE, right: M_PAGE, top: 2 })
-    .alignItems(HorizontalAlign.Start)
-  }
-
   // FE3-08（9-23）：图没取到时的占位（门锁/隧道）——诚实给字，不静默裂图
   @Builder
   ImgGoneTip() {
@@ -8613,47 +5301,6 @@ struct Index {
     if (url !== '' && !this.imgErrKeys.includes(url)) {
       this.imgErrKeys = this.imgErrKeys.concat(url);
     }
-  }
-
-  // ── 点图看大图（FE-02 ②）：黑底 contain 居中——点任意处/系统返回键关（v1 克制，不做缩放）──
-  // LAY-09（9-23）：右上角常驻 ✕ 关闭提示——长辈从气泡点图放大是惯性操作，没提示会卡住
-  @Builder
-  ImagePreviewPage() {
-    Stack({ alignContent: Alignment.TopEnd }) {
-      if (this.imgErrKeys.includes(this.imgPreviewUrl)) {
-        Text('图没取到（门锁/隧道）')
-          .fontSize(FS_BODY)
-          .fontColor(Color.White)
-          .opacity(0.85)
-      } else {
-        Image(this.imgPreviewUrl)
-          .width('100%')
-          .height('100%')
-          .objectFit(ImageFit.Contain)
-          .onError(() => {
-            this.markImgErr(this.imgPreviewUrl);
-          })
-      }
-      // 可见关闭提示：40×40，半透明黑底白字（点任意处也能关，这只是给个明说）
-      Text('✕')
-        .fontSize(FS_BODY)
-        .fontColor(Color.White)
-        .width(40)
-        .height(40)
-        .textAlign(TextAlign.Center)
-        .backgroundColor('#66000000')
-        .borderRadius(20)
-        .margin({ top: this.safeTopPad + 6, right: 12 })
-        .onClick(() => {
-          this.imgPreviewUrl = '';
-        })
-    }
-    .width('100%')
-    .height('100%')
-    .backgroundColor(Color.Black)
-    .onClick(() => {
-      this.imgPreviewUrl = '';
-    })
   }
 
   private async sendLetter(): Promise<void> {
@@ -8688,11 +5335,6 @@ struct Index {
   }
 
   // ── 超时对账：超时/断线先等几秒拉 history，消息和回复已入库就直接显示，绝不盲目自动重发 ──
-  private sleepMs(ms: number): Promise<void> {
-    return new Promise<void>((resolve) => {
-      setTimeout(() => resolve(), ms);
-    });
-  }
 
   // 9-9 对账加固：history 的 time 是 "MM-DD HH:MM"，同文本消息可能发过两次（如两次「嗯」），
   // 只按文本匹配会把旧的那条误判成已送达。给每条待发消息算一个时间下限（queuedAt 前推 2 分钟），
@@ -8705,7 +5347,7 @@ struct Index {
   }
 
   private async reconcile(sentText: string, sinceMs: number): Promise<string | null> {
-    await this.sleepMs(3000);
+    await sleepMs(3000);
     const floor = this.histFloorKey(sinceMs);
     const req = http.createHttp();
     try {
@@ -8723,7 +5365,7 @@ struct Index {
         const cur = data.messages[i];
         const prev = data.messages[i - 1];
         if (cur.who === '姐姐' && prev.who === '小乖'
-          && this.histTextHit(prev.text, sentText)
+          && histTextHit(prev.text, sentText)
           && (prev.time ?? '') >= floor) {
           return cur.text;
         }
@@ -8743,6 +5385,8 @@ struct Index {
       const prefs = preferences.getPreferencesSync(getContext(this), { name: 'zanjia' });
       return JSON.parse(prefs.getSync('outbox', '[]') as string) as OutboxItem[];
     } catch (err) {
+      // 10-02：解析失败别静默——留一行日志（原空 catch 让人以为"没待发"）
+      hilog.error(0x0000, HILOG_TAG, 'outbox 解析失败（待发队列可能已损坏）: %{public}s', JSON.stringify(err));
       return [];
     }
   }
@@ -8750,10 +5394,14 @@ struct Index {
   private saveOutbox(items: OutboxItem[]): void {
     try {
       const prefs = preferences.getPreferencesSync(getContext(this), { name: 'zanjia' });
-      prefs.putSync('outbox', JSON.stringify(items));
+      // 10-02 修：同 chat_cache——带图待发的 base64 会撑爆单个 preferences 值（8192B）→ 剔图
+      let json = JSON.stringify(items);
+      json = json.replace(/"imageUrl":"data:[^"]*"/g, '"imageUrl":""');
+      prefs.putSync('outbox', json);
       prefs.flushSync();
     } catch (err) {
       // 持久化失败不阻断主链路
+      hilog.warn(0x0000, HILOG_TAG, 'outbox 落盘失败: %{public}s', JSON.stringify(err));
     }
     this.outboxCount = items.length;
   }
@@ -8848,7 +5496,7 @@ struct Index {
           floor = '';   // queuedAt 解析不了就退回纯文本匹配
         }
         const delivered = hist.some((m: HistoryMsg) => m.who === '小乖'
-          && this.histTextHit(m.text, item.message)
+          && histTextHit(m.text, item.message)
           && (floor === '' || (m.time ?? '') >= floor));
         if (delivered) {
           changed = true;
@@ -9000,6 +5648,10 @@ struct Index {
   }
 
   private async fetchOutboxLetters(notify: boolean = false): Promise<void> {
+    if (this.outboxFetchBusy) {
+      return;   // 10-02 修：boot 与 60s 轮询重叠时，同一条信可能被取两遍（重复气泡＋重复通知）
+    }
+    this.outboxFetchBusy = true;
     const req = http.createHttp();
     try {
       const res = await req.request(OUTBOX_URL, {
@@ -9021,6 +5673,7 @@ struct Index {
       // 没信或没网都不吱声
     } finally {
       req.destroy();
+      this.outboxFetchBusy = false;
     }
   }
 
@@ -9050,13 +5703,32 @@ struct Index {
   // 打开时拉全部历史渲染（时间用服务端 time 字段）
   // ── 9-12 聊天本地存储：history 拉到就存一份进 preferences——
   // server 够不着时（离线/Tailscale 断），手机上照样能翻近三天的家 ──
+  // 10-02 修：preferences 单值上限 8192B——带图消息的 imageUrl 是 base64 dataURL（单张数百 KB），
+  //   聊得久整份也超；原 `JSON.stringify(items)` 直接超限、putSync 抛错被空 catch 吞掉
+  //   → 缓存静默不再更新（断网底稿丢）。改成：从最近往前攒、剔图、攒到 ~7500B 为止。
+  private packCacheJson(items: ChatItem[]): string {
+    const parts: string[] = [];
+    let total = 0;
+    for (let i = items.length - 1; i >= 0; i--) {
+      let one = JSON.stringify(items[i]);
+      one = one.replace(/"imageUrl":"data:[^"]*"/g, '"imageUrl":""');
+      if (total + one.length + 1 > 7500) {
+        break;
+      }
+      parts.unshift(one);
+      total += one.length + 1;
+    }
+    return '[' + parts.join(',') + ']';
+  }
+
   private saveChatCache(items: ChatItem[]): void {
     try {
       const prefs = preferences.getPreferencesSync(getContext(this), { name: 'zanjia' });
-      prefs.putSync('chat_cache', JSON.stringify(items));
+      prefs.putSync('chat_cache', this.packCacheJson(items));
       prefs.flushSync();
     } catch (err) {
-      // 缓存失败不影响主链路
+      // 缓存失败不影响主链路（但不静默：留一行日志）
+      hilog.warn(0x0000, HILOG_TAG, 'chat_cache 落盘失败: %{public}s', JSON.stringify(err));
     }
   }
 
@@ -9092,12 +5764,6 @@ struct Index {
 
   // 9-18 App深搜修（DS-04）：带图/附件消息落库时正文后拼「 〔附图1张〕/〔附件：名〕」标记——
   // 全等匹配不到。前缀命中限定在标记形状（sent + ' 〔'）上，避免把新发的「嗯」错认进旧消息「嗯，我在」。
-  private histTextHit(stored: string, sent: string): boolean {
-    if (stored === sent) {
-      return true;
-    }
-    return sent !== '' && stored.startsWith(sent + ' 〔');
-  }
 
   // 9-18 App深搜修（DS-02）：loadHistory 整卷替换前认领「活口」——历史里还没有、不该被吞掉的气泡。
   // 口径（宁多保勿丢）：①系统提示；②开门有信（💌，server 取走即消费，得等下次历史才回来）；
@@ -9142,7 +5808,7 @@ struct Index {
           continue;   // 认领过的不再参与：同文本第二条活口得另找下家
         }
         if (items[hi].who === cur.who && cur.text !== ''
-          && this.histTextHit(items[hi].text, cur.text)) {
+          && histTextHit(items[hi].text, cur.text)) {
           claimed[hi] = true;
           inHistory = true;   // 已进历史：收掉活口，避免重开重复
           break;
@@ -9168,7 +5834,7 @@ struct Index {
       for (let li = list.length - 1; li >= 0; li--) {
         const cur = list[li];
         if (cur.msgId !== undefined || !this.keepLiveBubble(cur) || cur.who !== m.who
-          || cur.text === '' || !this.histTextHit(m.text, cur.text)) {
+          || cur.text === '' || !histTextHit(m.text, cur.text)) {
           continue;
         }
         const key = cur.key;
@@ -9179,6 +5845,46 @@ struct Index {
   }
 
   // 历史消息 → 气泡件（9-23 V-1：loadHistory 与上翻老窗共用同一套字段映射，别再各写一份）
+  // APP-01（10-01）：一条历史可能带着**全过程**（turns）——展开成
+  // 「思考卡 / 工具卡 / 中间话 / 最终气泡」；老消息 turns 为空 → 逐字回到原来的单气泡。
+  private histMsgToItems(msg: HistoryMsg): ChatItem[] {
+    const out: ChatItem[] = [];
+    const turns: TurnInfo[] | null | undefined = msg.turns;
+    if (turns && turns.length > 0 && msg.who === '姐姐') {
+      for (let ti = 0; ti < turns.length; ti++) {
+        const t: TurnInfo = turns[ti];
+        const th: string = t.think ? t.think : '';
+        const sy: string = t.say ? t.say : '';
+        const isFinal: boolean = t.final === true;
+        // 思考卡：全文进 thinkingCache（key 带 chat_id + 轮号），点一下就能看——不用再走网络
+        if (th.length > 0 && !isFinal) {
+          const tk: string = `think-h${msg.id}-${t.r}`;
+          this.thinkingCache.set(tk, th);
+          out.push({ key: tk, who: '思考', text: th, imageUrl: '',
+                     time: `思考 · ${msg.time}`, thinkDone: true, msgId: msg.id });
+        }
+        // 工具卡：调了哪只证、回了什么
+        const tls: TurnTool[] | undefined = t.tools;
+        if (tls) {
+          for (let i = 0; i < tls.length; i++) {
+            const tl: TurnTool = tls[i];
+            const br: string = tl.brief ? tl.brief : '';
+            out.push({ key: `tool-h${msg.id}-${t.r}-${i}`, who: '工具',
+                       text: `调用工具 ${tl.name}` + (br.length > 0 ? `：${br}` : ''),
+                       imageUrl: '', time: msg.time, msgId: msg.id });
+          }
+        }
+        // 中间那段回复（不是收尾那条）——单独一个气泡，别让它丢
+        if (sy.length > 0 && !isFinal) {
+          out.push({ key: `say-h${msg.id}-${t.r}`, who: '姐姐', text: sy, imageUrl: '',
+                     time: msg.time, msgId: msg.id });
+        }
+      }
+    }
+    out.push(this.histMsgToItem(msg));   // 收尾那条（正文气泡）照旧
+    return out;
+  }
+
   private histMsgToItem(msg: HistoryMsg): ChatItem {
     const item: ChatItem = {
       key: `k${this.keySeq++}`,
@@ -9215,7 +5921,9 @@ struct Index {
         const data = JSON.parse(res.result as string) as HistoryResp;
         const items: ChatItem[] = [];
         for (const msg of data.messages) {
-          items.push(this.histMsgToItem(msg));
+          for (const _hi of this.histMsgToItems(msg)) {
+            items.push(_hi);
+          }
         }
         // 9-23 V-1 全量浏览：记分页状态——服务端带 has_more 才开翻页闸（旧 server 没有=不开，防重拉打转）
         this.histPaging = data.has_more !== undefined && data.has_more !== null;
@@ -9273,7 +5981,9 @@ struct Index {
         const d = JSON.parse(res.result as string) as HistoryResp;
         const older: ChatItem[] = [];
         for (const msg of d.messages) {
-          older.push(this.histMsgToItem(msg));
+          for (const _hi of this.histMsgToItems(msg)) {
+            older.push(_hi);
+          }
         }
         this.histOldestThrough = through;
         if (d.has_more !== undefined && d.has_more !== null) {
@@ -9322,7 +6032,9 @@ struct Index {
         const d = JSON.parse(res.result as string) as HistoryResp;
         const newer: ChatItem[] = [];
         for (const msg of d.messages) {
-          newer.push(this.histMsgToItem(msg));
+          for (const _hi of this.histMsgToItems(msg)) {
+            newer.push(_hi);
+          }
         }
         this.histNewestThrough = through;
         // 这段的 has_more 说的是"更早还有没有"，与下翻无关，不动它
@@ -9391,7 +6103,9 @@ struct Index {
         const data = JSON.parse(res.result as string) as HistoryResp;
         const items: ChatItem[] = [];
         for (const msg of data.messages) {
-          items.push(this.histMsgToItem(msg));
+          for (const _hi of this.histMsgToItems(msg)) {
+            items.push(_hi);
+          }
         }
         this.histPaging = data.has_more !== undefined && data.has_more !== null;
         this.histHasMore = this.histPaging && data.has_more === true;
@@ -9815,15 +6529,15 @@ struct Index {
             // 每只图书证一动立刻上卡：🔧 调用工具 XX（截图同款）
             sealThink();
             const tn = obj.name ?? '';
-            const summary = this.toolSummary(tn, obj.args ?? '').trim();
-            this.appendMsg('工具', `调用工具 ${this.toolCn(tn)}${summary ? ' · ' + summary : ''}`, '');
+            const summary = toolSummary(tn, obj.args ?? '').trim();
+            this.appendMsg('工具', `调用工具 ${toolCn(tn)}${summary ? ' · ' + summary : ''}`, '');
           } else if (obj.type === 'reply') {
             sealThink();
             replyText += obj.delta ?? '';
             if (!this.liveReplyOn) {
               // 9-27 v5：正文走 live 气泡（@State 驱动 → 逐字长）
               this.liveReplyOn = true;
-              this.liveReplyTime = `… ${this.nowTime()}`;
+              this.liveReplyTime = `… ${nowTime()}`;
               this.liveReplyText = replyText;
               this.scrollToEnd();
             } else {
@@ -9913,7 +6627,7 @@ struct Index {
                   this.pendingFileName = '';
                   this.pendingFileContent = '';
                 }
-                this.appendMsg('姐姐', dj.reply ?? '（姐姐刚才回过这句了）', '', this.nowTime(),
+                this.appendMsg('姐姐', dj.reply ?? '（姐姐刚才回过这句了）', '', nowTime(),
                   dj.tools ?? []);
                 this.fetchStatus();
                 return;
@@ -9948,7 +6662,7 @@ struct Index {
             const finalKey = `k${this.keySeq++}`;
             const finalMsg: ChatItem = {
               key: finalKey, who: '姐姐', text: finalText, imageUrl: '',
-              time: `思考 ${thinkSec.toFixed(1)}s · ${this.nowTime()}`,
+              time: `思考 ${thinkSec.toFixed(1)}s · ${nowTime()}`,
               tools: [], msgId: d.chat_id, hasThinking: allThink.length > 0,
             };
             if (allThink) {

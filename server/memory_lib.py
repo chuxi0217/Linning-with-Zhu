@@ -4,6 +4,17 @@
 
 **版本变更史（v0.1.1 ~ 至今）已抽出 → 见 `说明/变更史_memory_lib.md`**
 （2026-10-01 大扫除批：注释归集，代码里只留指针。）
+
+──────────────────── 检索目录（2026-10-02 整理）────────────────────
+每段以 `# ── 主题（版本/工单）──` 开头；**grep 主题名**即可跳到（行号会漂，不写死）。
+  · 检索/向量：全文检索(FTS5) · 同义词词典 · 查询清洗 · V2 实验旋钮 · 向量层 · 向量列存法 ·
+             检索层统一(search_all) · 父子索引(2-A)
+  · 她的东西：日记馆 · 线头盒 · 姐姐的话 · 门牌墙亲笔 · 生活账 · 作息起落 · 共读书架 ·
+             心情曲线 · 主权三件（她的三本账）
+  · 账/观测：观测补格 · why_now 影子 · 硬事实表 · W2 账读端 · 图书管理员报告 · 报告只读接口
+  · 日常：打卡 · 思考链 · 开门有信(她发的) · 家主信箱(他写的) · 推送令牌 · 随手记
+  · 时机：渴望状态 · 今日挂念弧 · GARDEN-01 自主唤醒(世界事件/独处痕迹) · 嵌入队列
+所有 SQL 只住本文件；server 侧不直接拼 SQL（图省事也只走这里的函数）。
 """
 
 import sqlite3
@@ -1209,7 +1220,10 @@ def fts_search(query, kinds=("day", "note", "letter", "favorite"), limit=20, exp
             for _k, _rows in out.items():
                 if _k == "favorite":
                     continue
-                score_out[_k] = _fts_rank_scores(c, _k, [r[0] for r in _rows], expr)
+                # 10-02 修：**合并**而非整卷替换——多查询（retrieval_multiquery）会拿同一 score_out
+                #   连调本函数，原赋值会把前一路的分整卷冲掉（只来自第一条查询的行变 base=None→0.5）。
+                score_out.setdefault(_k, {}).update(
+                    _fts_rank_scores(c, _k, [r[0] for r in _rows], expr))
     finally:
         conn.close()
     return out
@@ -3426,7 +3440,7 @@ def thinking_chat_ids(date):
 
 def thinkings_map_for_date(date):
     """（9-27 夜·Preserved Thinking 灌回修）某天 chat_id → 思考原文 的字典（同 chat 多条取最新）。
-    只读；给「重启灌回带上 reasoning」用（K3 多轮要求原样回传完整 assistant 消息）。"""
+    只读；给「重启灌回带上 reasoning」用（主引擎多轮要求原样回传完整 assistant 消息；K3 起，DS 同）。"""
     conn = _conn()
     c = conn.cursor()
     c.execute('''SELECT t.chat_id, t.content FROM thinkings t
@@ -3529,8 +3543,8 @@ def consume_outbox(ids):
 
 def has_outbox_today(marker):
     """（v0.1.6 新增）今天有没有发过含 marker 的信（打卡念叨去重用）。"""
-    # 9-18 后院深搜修（P2-8）：当天窗口按家风日界（凌晨 4 点前算昨天）——原 0 点口径
-    # 会把 0~4 点的信切给「明天」，日上限/去重跟着错位。
+    # 9-18 后院深搜修（P2-8）：当天窗口按 `DAY_START_HOUR` 日界（现=0＝自然日）算；
+    # 写死"凌晨 4 点前算昨天"会与常量脱钩（10-02 已订正）。
     today = f"{house_today_str()} {DAY_START_HOUR:02d}:00:00"
     conn = _conn()
     c = conn.cursor()
@@ -3653,8 +3667,8 @@ def get_notes(days=7, limit=10):
 
 def count_outbox_today(marker):
     """（v0.1.8 新增）今天发过几封含 marker 的信（自主节律冷却计数用）。"""
-    # 9-18 后院深搜修（P2-8）：当天窗口按家风日界（凌晨 4 点前算昨天）——原 0 点口径
-    # 会把 0~4 点的信切给「明天」，日上限/去重跟着错位。
+    # 9-18 后院深搜修（P2-8）：当天窗口按 `DAY_START_HOUR` 日界（现=0＝自然日）算；
+    # 写死"凌晨 4 点前算昨天"会与常量脱钩（10-02 已订正）。
     today = f"{house_today_str()} {DAY_START_HOUR:02d}:00:00"
     conn = _conn()
     c = conn.cursor()
@@ -3670,8 +3684,8 @@ def count_outbox_today(marker):
 def get_outbox_today(marker):
     """（v0.1.22 新增，RHYTHM-V3 日记闭环）今天含 marker 的信，旧到新：
     [(created_at, text)]。给熄灯日记「今天你自己塞出去的纸条」段当素材。只读。"""
-    # 9-18 后院深搜修（P2-8）：当天窗口按家风日界（凌晨 4 点前算昨天）——原 0 点口径
-    # 会把 0~4 点的信切给「明天」，日上限/去重跟着错位。
+    # 9-18 后院深搜修（P2-8）：当天窗口按 `DAY_START_HOUR` 日界（现=0＝自然日）算；
+    # 写死"凌晨 4 点前算昨天"会与常量脱钩（10-02 已订正）。
     today = f"{house_today_str()} {DAY_START_HOUR:02d}:00:00"
     conn = _conn()
     c = conn.cursor()
@@ -3755,7 +3769,7 @@ def diary_week_ago():
     """（v0.1.13 新增，RHYTHM-V2·A）一周前的今天的日记标题，没有返回 None。
     喂给时机引擎的情境：七天前的今天你们在干嘛。"""
     # 9-18 后院深搜修（L4）：改本地家风口径——原 date('now') 是 UTC，夜里会错位一天；
-    # 「一周前」按咱家日界算（凌晨 4 点前仍算昨天）。
+    # 「一周前」按 `DAY_START_HOUR` 日界算（现=0＝自然日）。
     week_ago = (datetime.strptime(house_today_str(), "%Y-%m-%d")
                 - timedelta(days=7)).strftime("%Y-%m-%d")
     conn = _conn()
@@ -3912,10 +3926,13 @@ def consume_world_event(eid, note=""):
 
 
 def release_world_event(eid):
-    """（v0.1.23 新增）立即释放租约（解析失败用）：lease_until=now，下一轮可重领不等 10 分钟。"""
+    """（v0.1.23 新增）立即释放租约（解析失败/转交用）：下一轮可重领不等 10 分钟。
+    10-02 修：lease_until 写 now **减 1 秒**——原写 now，而 claim 条件是 `lease_until < now`
+    （严格小于），同秒内 release→re-claim 会失败（醒来合一「选园子」把事件还给旧链时正是同秒，
+    园子窗因此领不到那条、错领别的或空手）。回拨 1 秒即当即可领，语义不变、无副作用。"""
     conn = _conn()
     c = conn.cursor()
-    c.execute("UPDATE world_events SET lease_until = datetime('now','localtime') WHERE id = ?",
+    c.execute("UPDATE world_events SET lease_until = datetime('now','localtime','-1 second') WHERE id = ?",
               (eid,))
     conn.commit()
     conn.close()

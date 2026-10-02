@@ -234,6 +234,7 @@ def _garden_wake_once():
     """（GARDEN-01 §三）唤醒单轮。每轮顺序照施工卷：开关→静默窗→最短间隔（DB 源、
     重启不丢）→领事件→搁置→唤醒→三结局。返回 "slept"/"silent"/"trace"/"message"/
     "stalled"/"error"，给日志与测试看。"""
+    global _WAKE_ERR_UNTIL
     cfg = srv_state._srv().load_config()   # 运行期反查：沙盘会重绑 s.load_config
     if not cfg.get("garden_enabled", True):
         return "slept"
@@ -310,32 +311,41 @@ def _garden_wake_once():
             raw = srv_state._srv().call_deepseek(wake_cfg, msgs, scene="garden.wake").strip()   # 运行期反查：沙盘会重绑 s.call_deepseek
     except Exception as e:
         m.release_world_event(eid)
+        _WAKE_ERR_UNTIL = time.time() + _WAKE_ERR_BACKOFF_S   # 10-02：故障退避
         print(f"  [Garden] 这次没醒成（{e}）")
         return "error"
     if not raw or raw.startswith("（姐姐掉线了"):
         m.release_world_event(eid)   # 错误不许冒充静默：不消费，回头重领
+        _WAKE_ERR_UNTIL = time.time() + _WAKE_ERR_BACKOFF_S   # 10-02：故障退避
         print("  [Garden] 这次没醒成（掉线/空回复）")
         return "error"
     try:
         return _garden_settle(eid, raw, walk=_walk)
     except Exception as e:
+        _WAKE_ERR_UNTIL = time.time() + _WAKE_ERR_BACKOFF_S   # 10-02：故障退避
         print(f"  [Garden] 这次没醒成（落账：{e}）")
         return "error"   # 不 consume：租约回头重来（写失败不销账铁律）
 
 
 def _garden_loop():
     """自主唤醒循环（daemon 线程，ZANJIA_TEST 不起）：300 秒一轮；单轮炸了不拖死。
-    10-01 B4-2：`wake_merged=true` 时改走**醒来合一**那一个口（旧链一字不删，并存可回滚）。"""
+    10-01 B4-2：`wake_merged=true` 时改走**醒来合一**那一个口（旧链一字不删，并存可回滚）。
+    10-02：出错则退避 30 分钟（防模型故障期每 5 分钟空烧一次；退避只在循环里判，不动纯函数）。"""
+    global _WAKE_ERR_UNTIL
     while True:
         try:
             try:
                 _merged = bool(srv_state._srv().load_config().get("wake_merged", False))
             except Exception:
                 _merged = False
-            if _merged:
-                _wake_merged_once()
+            if _WAKE_ERR_UNTIL and time.time() < _WAKE_ERR_UNTIL:
+                pass                      # 故障退避中：本轮不醒
+            elif _merged:
+                if _wake_merged_once() == "error":
+                    _WAKE_ERR_UNTIL = time.time() + _WAKE_ERR_BACKOFF_S
             else:
-                _garden_wake_once()
+                if _garden_wake_once() == "error":
+                    _WAKE_ERR_UNTIL = time.time() + _WAKE_ERR_BACKOFF_S
                 _wake_merged_once()   # 影子期：wake_merged=false 且 shadow=true 时只记一行，不外发
         except Exception as e:
             print(f"  [Garden] 循环失手：{e}")
@@ -352,6 +362,10 @@ def _garden_loop():
 # 一个字不外发、不吃事件（那才是可比的原链读数）。
 WAKE_OPTIONS = ("say", "garden", "trace", "note", "silent")
 _WAKE_SHADOW_LOG = os.path.expanduser("~/wake_merged_shadow.log")
+# 10-02：模型故障退避。error 路径原先不写 trace → 顶上「最短间隔闸」不前进 → 故障期每 5 分钟
+# 空烧一次模型。改：连续错就退避 30 分钟（纯内存、不污染 her_traces）。
+_WAKE_ERR_UNTIL = 0.0
+_WAKE_ERR_BACKOFF_S = 1800
 
 
 def _wake_today_hand_line():
@@ -434,6 +448,7 @@ def _wake_merged_once(now=None):
 
     影子期（`wake_merged_shadow=true` 且 `wake_merged=false`）：只往 `~/wake_merged_shadow.log`
     记一行"若走后新口会给她什么"，**不外发、不写库、不吃事件**（旧链照旧跑，读数才可比）。"""
+    global _WAKE_ERR_UNTIL
     try:
         cfg = srv_state._srv().load_config()
     except Exception:
@@ -486,6 +501,7 @@ def _wake_merged_once(now=None):
     except Exception:
         event = None
     _eid, _summary, _ev = None, "", ""
+    _kind, _reason = "", ""          # 10-02：棋局事件要在 merged 里识别 reason（防棋局回合被吞）
     if event:
         _eid, _kind, _summary, _evidence, _att = event
         if _att > 3:
@@ -497,6 +513,7 @@ def _wake_merged_once(now=None):
             if isinstance(_obj, dict):
                 _ev = "；".join(f"{k}：{str(v)[:50]}" for k, v in _obj.items()
                                 if k != "reason" and str(v or "").strip())
+                _reason = str(_obj.get("reason") or "")
         except Exception:
             _ev = str(_evidence or "")
         _ev = _ev[:100]
@@ -524,18 +541,23 @@ def _wake_merged_once(now=None):
     except Exception as e:
         if _eid:
             m.release_world_event(_eid)
+        _WAKE_ERR_UNTIL = time.time() + _WAKE_ERR_BACKOFF_S   # 10-02：故障退避
         print(f"  [醒来] 没醒成（{e}）")
         _rec_spend()
         return "error"
     if not raw or raw.startswith("（姐姐掉线了"):
         if _eid:
             m.release_world_event(_eid)
+        _WAKE_ERR_UNTIL = time.time() + _WAKE_ERR_BACKOFF_S   # 10-02：故障退避
         print("  [醒来] 没醒成（掉线/空回复）")
         _rec_spend()
         return "error"
     try:
         obj = json.loads(raw.strip("`").removeprefix("json").strip())
-        doing = [str(x).strip().lower() for x in (obj.get("doing") or [])]
+        _raw_doing = obj.get("doing")
+        if isinstance(_raw_doing, str):
+            _raw_doing = [_raw_doing]     # 10-02 修：模型偶回字符串（非数组）→ 原会逐字符被滤空
+        doing = [str(x).strip().lower() for x in (_raw_doing or [])]
         doing = [x for x in doing if x in WAKE_OPTIONS]
         message = str(obj.get("message") or "").strip()
         content = str(obj.get("content") or "").strip()
@@ -543,6 +565,7 @@ def _wake_merged_once(now=None):
     except Exception as e:
         if _eid:
             m.release_world_event(_eid)   # 解析失败＝错误，不冒充静默（同上家园法）
+        _WAKE_ERR_UNTIL = time.time() + _WAKE_ERR_BACKOFF_S   # 10-02：故障退避
         print(f"  [醒来] 没醒成（解析：{e}）")
         _rec_spend()
         return "error"
@@ -557,7 +580,18 @@ def _wake_merged_once(now=None):
         except Exception as e:
             print(f"  [醒来] 信没落下（{e}）")
     # ── 去园子：交给既有园子窗（事件还给旧链，一步不重写）──
-    if "garden" in doing:
+    # ★ 10-02 修（两处）：①`game_turn_required`（棋局要她落子）**必须**转园子窗——即使她选
+    #   say/silent，也不能把这回合吞掉（原只见 garden 才转，棋局事件被 consume 却从不给她棋局九件）；
+    #   ②trace/note 同时选时也要落地（原走 garden 就 return，note/trace 被静默吞）。
+    _game_turn = (_kind == "galatea" and _reason == "game_turn_required"
+                  and bool(cfg.get("garden_games_enabled", True)))
+    if "garden" in doing or _game_turn:
+        if "trace" in doing or "note" in doing:
+            try:
+                m.add_her_trace(ts, ("trace" if "trace" in doing else "note"),
+                                note, (content if "trace" in doing else ""), None)
+            except Exception:
+                pass
         if _eid:
             m.release_world_event(_eid)
         _gw = getattr(srv_state._srv(), "_garden_wake_once", None)   # 运行期反查：沙盘会替身
@@ -577,7 +611,8 @@ def _wake_merged_once(now=None):
             except Exception:
                 pass
         _rec_spend()
-        print(f"  [醒来] 合一：garden{' + say' if said else ''}（园子窗={_ret}）")
+        print(f"  [醒来] 合一：garden{'/棋局' if _game_turn and 'garden' not in doing else ''}"
+              f"{' + say' if said else ''}（园子窗={_ret}）")
         return ("say" if said else _ret)
     # ── trace / note / silent：写产出 ──
     _ending = "message" if said else ("trace" if ("trace" in doing or "note" in doing) else "silent")
@@ -888,7 +923,7 @@ def _garden_engine_cfg(cfg):
     """（GALATEA-02 ⓪引擎换轨）园子开口的引擎档：k3=主引擎（默认——她的声音用她的脑子），
     deepseek=回退档（deepseek-flash 省钱管道）。返回 call_deepseek* 用的 cfg 副本：
     thinking_enabled 关（moonshot 分支落 disabled）、thinking_effort 走 garden_thinking_effort
-    （K3 无真关档、取最低档；9-2 实录）。"""
+    （旧引擎 K3 无真关档、取最低档；9-2 实录）。"""
     wake_cfg = dict(cfg)
     wake_cfg["thinking_enabled"] = False
     wake_cfg["thinking_effort"] = str(cfg.get("garden_thinking_effort") or "low")

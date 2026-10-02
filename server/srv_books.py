@@ -11,7 +11,6 @@ import io
 import os
 import re
 import threading
-import time
 import urllib.parse
 import zipfile
 from html.parser import HTMLParser
