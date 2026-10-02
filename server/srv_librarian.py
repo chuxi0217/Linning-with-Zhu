@@ -180,19 +180,24 @@ def _librarian_tick(now=None):
             _due_h = int(cfg.get("librarian_hour", 21))
         except (TypeError, ValueError):
             _due_h = 21
-        # P3-1（9-26 修·审计待判）：判据改「咱家日」——4 点日界前算昨天，与 today_str /
-        # lib_report_exists_on 同一把尺。原来走自然时 weekday()，周日 21:00–24:00 服务不在岗、
-        # 周一凌晨（家日仍是周日）重启就不会再补跑，整周漏一份周报。现在：家日是周日 且
-        # （已过 due_h 点 或 仍在日界前的深夜）都可补；幂等键 today_str() 在家日口径下与周日
-        # 同值，跨零点也认得出「本周已交」，天然防重。
-        _house = now - timedelta(days=1) if now.hour < m.DAY_START_HOUR else now
+        # P3-1（9-26 修·审计待判）：判据改「咱家日」——夜界前算昨天，与 lib_report_exists_on 同一把尺。
+        # 原来走自然时 weekday()，周日 21:00–24:00 服务不在岗、周一凌晨重启就不会再补跑，整周漏一份周报。
+        # 10-02 修（Explore 审查）：判据原绑 `m.DAY_START_HOUR`，日界改 0 点后 `hour<0` 恒假 →
+        #   补跑窗整段失效。改用**晚安窗末点**（夜界，config 驱动；缺席回退 04:00），与熄灯守望同尺；
+        #   幂等键也用这天的日期串（跨零点认得出「本周已交」）。
+        try:
+            _end_h = int(str((cfg.get("goodnight_window") or ["21:00", "04:00"])[1])[:2])
+        except Exception:
+            _end_h = 4
+        _house = now - timedelta(days=1) if now.hour < _end_h else now
+        _house_day = _house.strftime("%Y-%m-%d")
         if (e and _house.weekday() == int(cfg.get("librarian_weekday", 6))
-                and (now.hour >= _due_h or now.hour < m.DAY_START_HOUR)
-                and not m.lib_report_exists_on(srv_state._srv().today_str())):   # 运行期反查：沙盘会重绑 s.today_str
+                and (now.hour >= _due_h or now.hour < _end_h)
+                and not m.lib_report_exists_on(_house_day)):
             try:
                 content, _mats = srv_state._srv()._librarian_compose(e[0], e[1], e[2])   # 运行期反查：沙盘会替身
                 if content:
-                    rid = m.add_lib_report(srv_state._srv().today_str(), "周报", content, materials=_mats)   # 运行期反查：沙盘会重绑 s.today_str
+                    rid = m.add_lib_report(_house_day, "周报", content, materials=_mats)
                     print(f"  [图书管理员] 周报 #{rid} 已交稿（附素材），待姐姐终审")
             except Exception as e2:
                 print(f"  [图书管理员] 这次没写成（到点后还会再试）：{e2}")
@@ -203,5 +208,8 @@ def _librarian_tick(now=None):
 def _librarian_loop():
     """外聘图书管理员（daemon 线程）：每周到点交稿落「待审」，其余时间闭嘴。"""
     while True:
-        srv_state._srv()._librarian_tick()   # tick 内自带兜底，绝不把异常带进循环；运行期反查：沙盘替身 tick 验薄壳
+        try:
+            srv_state._srv()._librarian_tick()   # tick 内自带兜底；运行期反查：沙盘替身 tick 验薄壳
+        except Exception as e:   # 10-02：循环体也兜底——`_srv()` 抛（模块缺失）曾让线程静默死、周报停更
+            print(f"  [图书管理员] 循环兜底：{e}")
         time.sleep(1800)   # 半小时看一次表，到点才动笔

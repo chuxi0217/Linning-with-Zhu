@@ -31,6 +31,16 @@ def _conn():
     return sqlite3.connect(DB_PATH, timeout=10)
 
 
+def _day_start_str(now):
+    """当天起点时刻串（按日界 m.DAY_START_HOUR 点；10-02 修：原写死 04:00，日界改 0 后读数失真）。"""
+    try:
+        import memory_lib as _m
+        _h = int(getattr(_m, "DAY_START_HOUR", 0))
+    except Exception:
+        _h = 0
+    return now.strftime("%Y-%m-%d") + f" {_h:02d}:00:00"
+
+
 def _log(line):
     try:
         with open(LOG, "a", encoding="utf-8") as f:
@@ -395,7 +405,7 @@ def shadow_pick(now=None, note=""):
             "SELECT COUNT(*) FROM outbox_msgs WHERE created_at >= ? AND "
             "(text LIKE '💌%' OR text LIKE '🌱%' OR text LIKE '%还没打卡%' "
             "OR text LIKE '%还没跟姐姐说晚安%')",
-            (now.strftime("%F 04:00"),)).fetchone()[0]
+            (_day_start_str(now),)).fetchone()[0]
         con.close()
         if not rows:
             return None

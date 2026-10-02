@@ -351,7 +351,8 @@ def init_db():
 
     # 向量层底座（v0.1.15 新增，9-10 工单 MEM-C）：vectors 存嵌入——SQLite 就是向量库，
     # 几千条规模纯 Python 算余弦绰绰有余，不引 FAISS/pgvector（8-31 否决依然有效）。
-    # 只收高价值层（day/hall/note/letter），chats 词面就够。vec = JSON float 串。
+    # 只收高价值层（day/hall/note/letter），chats 词面就够。
+    # 10-01 数据保养后：vec 列存 **float16 BLOB**（旧数据为 JSON 文本，读侧两种都认；见 _vec_load）。
     c.execute('''
         CREATE TABLE IF NOT EXISTS vectors (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -575,7 +576,7 @@ def init_db():
 
     # 语义分块（M2 数据层 v0.1.39，9-27）：M2 语义分块 v1——块表（chunks）+ fts_chunks 第八卷。
     # 块由 tools/chunk_corpus.py --commit 手工灌（幂等：同 source_type+source_id+seq 原地更新）；
-    # 重嵌 tools/chunk_embed.py；**检索接线（chunk_retrieval）另批**——本表先静躺。
+    # 重嵌 tools/chunk_embed.py；检索接线：`search_all`（本文件·检索层统一入口）已把 chunk 拉进七卷，
     c.execute('''
         CREATE TABLE IF NOT EXISTS chunks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -799,9 +800,21 @@ def _fts_put_chunk(c, chunk_id, text):
               (chunk_id, _seg(text)))
 
 
+def _fts_del_chunk(c, chunk_id):
+    """（2026-10-02）删块的 FTS 行（chunk_delete 用）。"""
+    c.execute("DELETE FROM fts_chunks WHERE rowid=?", (int(chunk_id),))
+
+
 def chunk_put(source_type, source_id, seq, text):
     """M2 语义块入库（tools/chunk_corpus.py --commit 用；幂等：同 (source_type, source_id, seq)
-    原地更新、id 稳定；md5 相同则不动）。FTS 挂同事务。返回 (id, changed)。"""
+    原地更新、id 稳定；md5 相同则不动）。FTS 挂同事务。返回 (id, changed)。
+
+    10-02 两修（审查_检索层bug ③⑤）：
+    - **文本变了要重嵌**：UPDATE 文本后 `_embed_enqueue_c("chunk")`，否则块向量永远停在旧文本
+      （`tools/chunk_embed.py` 只嵌 `chunks.id NOT IN vectors`，改了文本的自愈不了）。
+    - **seq 换稳定键**（chat 由全局窗号 `w{win}b{bi}` → `b{bi}`，见 chunk_corpus.py）：换键后
+      同源旧键的块由 `chunk_corpus --commit` 的**清陈旧块**（`chunk_delete`）收掉——
+      这里**不做**按 md5 认领的迁移兜底（曾误吞"同源同文本、不同 seq"的块，已撤）。"""
     text = str(text or "")
     md5 = hashlib.md5(text.encode("utf-8")).hexdigest()
     conn = _conn()
@@ -822,8 +835,29 @@ def chunk_put(source_type, source_id, seq, text):
             cid, changed = c.lastrowid, True
         if FTS_ENABLED:
             _fts_safe(_fts_put_chunk, c, cid, text)
+        if changed:
+            _embed_enqueue_c(c, "chunk", cid)   # 文本变/新块：重嵌（旧向量由 UPSERT 覆盖）
         conn.commit()
         return cid, changed
+    finally:
+        conn.close()
+
+
+def chunk_delete(chunk_id):
+    """删一个语义块：`chunks` 行 ＋ `fts_chunks` 行 ＋ 它的向量（`kind='chunk'`）。返回是否删了。
+    只给 `tools/chunk_corpus.py --commit` 的「清陈旧块」用（重跑分块、seq 换键后，旧键的块要清，
+    否则越积越多、还占检索坑）。删后该块 id 不复用；上层若按旧 id 命中不到，`_vec_row` 回捞 None 静默跳。"""
+    conn = _conn()
+    c = conn.cursor()
+    try:
+        if not c.execute("SELECT 1 FROM chunks WHERE id=?", (int(chunk_id),)).fetchone():
+            return False
+        c.execute("DELETE FROM chunks WHERE id=?", (int(chunk_id),))
+        if FTS_ENABLED:
+            _fts_safe(_fts_del_chunk, c, int(chunk_id))
+        c.execute("DELETE FROM vectors WHERE kind='chunk' AND ref_id=?", (int(chunk_id),))
+        conn.commit()
+        return True
     finally:
         conn.close()
 
@@ -1182,9 +1216,10 @@ def fts_search(query, kinds=("day", "note", "letter", "favorite"), limit=20, exp
 
 
 def rebuild_fts():
-    """全量重建三张内容索引卷（可重入：清了重来，跑多少遍结果都一样）。
+    """全量重建**七**张内容索引卷（day/hall/note/letter/chat/oldhome/chunk；可重入：
+    清了重来，跑多少遍结果都一样）。
     收藏夹卷跟 favorites/ 目录走，由 server 侧 fts_sync_favorites 对账（ rebuild 脚本一并调）。
-    返回 {'day': 条数, 'note': 条数, 'letter': 条数}；FTS 未启用返回 {}。"""
+    返回 {卷: 条数}（键随实际重建的卷）；FTS 未启用返回 {}。"""
     if not FTS_ENABLED:
         return {}
     conn = _conn()
@@ -1366,6 +1401,7 @@ def embed_source_text(kind, ref_id):
 # **写侧**按 `VEC_FORMAT`（默认 f16）。回滚＝config.json 置 `vec_format:"text"`＋重启
 # （linning_server 起服时把这里覆盖过去），一行、不动数据。
 VEC_FORMAT = "f16"
+VEC_FLOOR = 0.35    # 余弦低于它不算"想起来"（唯一口径：hybrid_search／search_all／recall_gate 同源）
 
 
 def _vec_dump(vec):
@@ -1425,13 +1461,22 @@ def _vec_row(kind, ref_id):
         conn.close()
 
 
-def vector_search(qvec, model, kinds=("day", "hall", "note", "letter"), topk=5):
-    """余弦扫全库（纯 Python，几千条毫秒级）。返回 [(kind, ref_id, score)] 越大越近。"""
+def vector_search(qvec, model, kinds=("day", "hall", "note", "letter"), topk=5, per_kind=False):
+    """余弦扫全库（纯 Python，几千条毫秒级）。返回 [(kind, ref_id, score)] 越大越近。
+
+    `per_kind=False`（默认）＝**全局**取前 topk——返回形状/行为与旧版逐字节一致。
+    `per_kind=True`＝**每卷各取前 topk** 再合并（按分降序）：小卷（day 39/note 10/letter 3）
+    不再被大卷（chunk 1606/oldhome 1397）的全局截断饿死——批次二「块霸榜」之机制根因
+    （审查_检索层bug_2026-10-02 ②）。上层（search_all）仍按卷配额二次收口，不担心变多。
+    维数不符/空向量**静默跳过**（历史行为）；跳过数>0 时打一行日志（不再当哑巴）。"""
     import math
     def _norm(v):
         return math.sqrt(sum(x * x for x in v)) or 1.0
+    if not kinds:
+        return []      # 空 kinds 会让 `IN ()` 语法报错（直调时兜底）
     qn = _norm(qvec)
     out = []
+    dim_miss = 0
     conn = _conn()
     c = conn.cursor()
     try:
@@ -1442,24 +1487,103 @@ def vector_search(qvec, model, kinds=("day", "hall", "note", "letter"), topk=5):
             try:
                 v = _vec_load(vec_json)   # 10-01：BLOB(float16)/str(JSON) 两种存法都认
             except (ValueError, TypeError, struct.error):
+                dim_miss += 1
                 continue
             if len(v) != len(qvec) or not v:
+                dim_miss += 1
                 continue
             dot = sum(a * b for a, b in zip(qvec, v))
             out.append((kind, ref_id, dot / (qn * _norm(v))))
     finally:
         conn.close()
+    if dim_miss:
+        print(f"  [向量] {dim_miss} 条维数不符/解不开，已跳过（查嵌入模型是否换过）")
+    if per_kind:
+        _take = max(1, int(topk))
+        by_kind = {}
+        for r in out:
+            by_kind.setdefault(r[0], []).append(r)
+        out = []
+        for _k, lst in by_kind.items():
+            lst.sort(key=lambda r: r[2], reverse=True)
+            out.extend(lst[:_take])
+        out.sort(key=lambda r: r[2], reverse=True)
+        return out
     out.sort(key=lambda r: r[2], reverse=True)
     return out[:max(1, int(topk))]
 
 
+def _rrf_fuse(rank_lists, k=60):
+    """RRF（Reciprocal Rank Fusion）· 纯函数。
+    rank_lists = 每路一张**有序键榜**（如 [[(k,id)...], [(k,id)...]]）。
+    score(d) = Σ_r 1/(k + rank_r(d))，rank 从 1 起；同键跨路分相加（RRF 本意）。
+    只用**名次**，天然免疫 BM25 与余弦的量纲差。返回 [(key, score)] 按分降序。"""
+    score = {}
+    for lst in rank_lists:
+        for i, key in enumerate(lst or ()):
+            score[key] = score.get(key, 0.0) + 1.0 / (k + i + 1)
+    return sorted(score.items(), key=lambda kv: (-kv[1], str(kv[0])))
+
+
+def _hybrid_rrf(res, hits, vec_kinds, limit, score_out):
+    """2-B：词面榜（fts_search 顺序）＋语义榜（vector_search 顺序）按 RRF 融合，**按卷**切回。
+    返回形状同 fts_search（不引新形状）。score_out 保留**原始分**（词面 bm25／语义余弦），
+    供 recall_gate 的门槛/权重沿用（RRF 只管候选与行序，不改分尺度）。"""
+    fts_rank, vrank, vscore, row_of = {}, {}, {}, {}
+    for k, rows in (res or {}).items():
+        if k == "favorite" or not isinstance(rows, list):
+            continue
+        fts_rank[k] = [r[0] for r in rows]
+        for r in rows:
+            try:
+                row_of[(k, r[0])] = r
+            except Exception:
+                pass
+    for kind, ref_id, score in hits:
+        if score < VEC_FLOOR or kind not in vec_kinds:
+            continue
+        vrank.setdefault(kind, []).append((kind, int(ref_id)))
+        vscore[(kind, int(ref_id))] = float(score)
+    allk = list(dict.fromkeys(list(fts_rank) + [k for k in vrank if k in vec_kinds]))
+    out = {}
+    for k in allk:
+        rl = []
+        if fts_rank.get(k):
+            rl.append([(k, rid) for rid in fts_rank[k]])
+        if vrank.get(k):
+            rl.append(vrank[k])
+        rows_out = []
+        for key, _sc in _rrf_fuse(rl):
+            kk, rid = key
+            row = row_of.get(key)
+            if row is None:
+                row = _vec_row(kk, rid)
+                if row is None:
+                    continue
+            if score_out is not None:
+                s = (score_out.get(kk) or {}).get(rid)
+                if s is None and (kk, rid) in vscore:
+                    score_out.setdefault(kk, {})[rid] = round(vscore[(kk, rid)], 4)
+            rows_out.append(row)
+            if len(rows_out) >= limit:
+                break
+        if rows_out:
+            out[k] = rows_out
+    # favorite 卷不走向量融合（它行首列是文件名不是 rowid，乱融合会把文件名当 id）→ 原样并入，别丢
+    if isinstance(res, dict) and isinstance(res.get("favorite"), list) and res["favorite"]:
+        out["favorite"] = res["favorite"]
+    return out
+
+
 def hybrid_search(query, kinds=("day", "chat", "note", "letter", "hall"), limit=5,
-                  qvec=None, model="", expr_override=None, score_out=None):
+                  qvec=None, model="", expr_override=None, score_out=None, rrf=False):
     """MEM-C 混合检索主入口：FTS 词面打头，向量语义补漏（同卷去重后缀在尾部）。
     qvec 缺席 = 纯 FTS（向量层诚实缺席，行为与 fts_search 完全一致）。
     expr_override 透传 fts_search（开场自动检索的 Top-长词 OR 串）。
     score_out（可选 dict）：传入即回填 {卷: {rowid: 相关分}}（词面 bm25→(0,1]、向量余弦原值）——
     加性旁路，不传=零行为变化。
+    rrf=True（2-B·开关 retrieval_rrf，默认 False）：两路按**名次**融合（RRF，k=60）替掉
+    "词面打头＋向量补尾"——免疫 BM25/余弦量纲差（默认 False＝逐字节现状）。
     返回形状同 fts_search 的 dict。向量门槛：score ≥0.35 才算「想起来」。"""
     res = fts_search(query, kinds, limit, expr_override=expr_override, score_out=score_out)
     if not qvec:
@@ -1472,11 +1596,16 @@ def hybrid_search(query, kinds=("day", "chat", "note", "letter", "hall"), limit=
     except Exception as e:
         print(f"  [向量] 语义检索失败（不影响词面结果）：{e}")
         return res
+    if rrf:
+        try:
+            return _hybrid_rrf(res, hits, vec_kinds, limit, score_out)
+        except Exception as e:
+            print(f"  [检索] RRF 融合失手（退回词面打头）：{e}")
     # 向量补漏追在词面之后；但词面可能已把 limit 占满（T4 实案）——
     # 截断时给向量命中留坑：FTS 最多占 limit-len(extras)，尾部必是「也想起来的人」。
     vec_extras = {}
     for kind, ref_id, score in hits:
-        if score < 0.35:
+        if score < VEC_FLOOR:
             continue
         bucket = res.get(kind) or []
         if ref_id in (r[0] for r in bucket):
@@ -1503,11 +1632,12 @@ def hybrid_search(query, kinds=("day", "chat", "note", "letter", "hall"), limit=
 
 # ── 检索层统一（§5 第 5 条 · 批次①）：一个入口、一种形状、一份分 ────────────────────
 # 现状病根：检索是"拼接式"——FTS 八卷一根线、chunks（1606 块，M2 语义分块）一根线、
-# oldhome（三个家 1397 块）一根线、按行向量一根线；各算各的分，**块层压根没接进任何检索路径**
-# （memory_lib 里那句"检索接线 chunk_retrieval 另批——本表先静躺"就是这件事）。
-# 本函数＝那条"另批"的入口：各源走**适配器**，统一出 (kind, id, row, sim, src)。
+# oldhome（三个家 1397 块）一根线、按行向量一根线；各算各的分。
+# 10-02：本函数（`search_all`）就是那条"另批"的接线口——各源走**适配器**，
+# 统一出 (kind, id, row, sim, src)，把 chunk/oldhome 拉进同一入口；批次二在此基础上
+# 做父子索引（2-A）／RRF（2-B）／意图路由（2-C）。调用方是 `linning_server._unified_shadow`（只记不改）。
 # **纯加性只读**：不动 `fts_search`/`hybrid_search`/任何现有交付——谁调用、谁才受影响。
-SEARCH_ALL_VEC_FLOOR = 0.35     # 向量低于它不算"想起来"（与 hybrid_search 同口径）
+SEARCH_ALL_VEC_FLOOR = VEC_FLOOR     # 向量低于它不算"想起来"（与 hybrid_search 同口径）
 
 
 def _row_text_of(kind, row):
@@ -1536,15 +1666,90 @@ def _near_dup(t1, t2):
     return a in t2 or b in t1
 
 
+# ── 批次二·第 1 件（2-A）父子索引：块＝检索入口，原文＝回答内容 ─────────────────────
+def get_chunk_parent(chunk_id):
+    """块的父指针 (source_type, source_id, seq)；没有返回 None。只读。"""
+    conn = _conn()
+    c = conn.cursor()
+    try:
+        return c.execute("SELECT source_type, source_id, seq FROM chunks WHERE id=?",
+                         (int(chunk_id),)).fetchone()
+    finally:
+        conn.close()
+
+
+def _chunk_parent_row(source_type, source_id):
+    """按父指针回捞**原文行**——形状照各卷 fts_search 口径（chat 也认：_vec_row 没有 chat）。
+    父类型不认识／行没了返回 None。只读。"""
+    conn = _conn()
+    c = conn.cursor()
+    try:
+        if source_type == "chat":
+            c.execute("SELECT id, date, role, content, created_at FROM chats WHERE id=?", (int(source_id),))
+        elif source_type == "day":
+            c.execute("SELECT id, date, day_no, title, content, mood FROM days WHERE id=?", (int(source_id),))
+        elif source_type == "note":
+            c.execute("SELECT id, text, created_at FROM notes WHERE id=?", (int(source_id),))
+        elif source_type == "letter":
+            c.execute("SELECT id, text, created_at FROM letters WHERE id=?", (int(source_id),))
+        else:
+            return None
+        return c.fetchone()
+    finally:
+        conn.close()
+
+
+def _merge_chunks_to_parents(items, kinds=None, score_out=None):
+    """把命中的块换成它的**原文**（同原文多个块 → 只留 sim 最高那条）。
+    无父/父行没了的块**原样留**（诚实：块本身还是段可读的话）。返回重排后的列表。
+    item 的 kind/id 变为父卷与父 id，src 记 `"chunk->parent"`，sim 取保留块的分。
+    `kinds`（可选）：caller 请求的卷集——**父卷不在其中就不回收**（守 scope 契约，10-02 修）。
+    `score_out`（可选）：回填父项的分数（父 kind/id 可能与块 id 不同，供下游门槛/权重用）。"""
+    kept, idx, passthrough = [], {}, []
+    for it in items:
+        try:
+            if it.get("kind") != "chunk":
+                passthrough.append(it)
+                continue
+            par = get_chunk_parent(it["id"])
+            prow = _chunk_parent_row(par[0], par[1]) if par else None
+            pkind, pid = (str(par[0]), int(par[1])) if par else ("", 0)
+            if not prow or (kinds is not None and pkind not in kinds):
+                passthrough.append(it)   # 父卷不在 caller kinds → 原样留块（别越界返回没请求的卷）
+                continue
+            key = (pkind, pid)
+            new = {"kind": pkind, "id": pid, "row": prow, "sim": it["sim"], "src": "chunk->parent"}
+            if key in idx:
+                if it["sim"] > kept[idx[key]]["sim"]:
+                    kept[idx[key]] = new
+            else:
+                idx[key] = len(kept)
+                kept.append(new)
+            if score_out is not None:
+                try:
+                    score_out.setdefault(pkind, {})[pid] = it["sim"]
+                except Exception:
+                    pass
+        except Exception:
+            passthrough.append(it)      # 坏项原样留，不中断整轮（fail-open）
+    kept.extend(passthrough)
+    kept.sort(key=lambda r: (-r["sim"], r["kind"], r["id"]))
+    return kept
+
+
 def search_all(query, kinds, limit=8, qvec=None, model="", expr_override=None,
-               score_out=None, vec_floor=SEARCH_ALL_VEC_FLOOR):
+               score_out=None, vec_floor=SEARCH_ALL_VEC_FLOOR, parent_merge=False):
     """检索层统一入口（批次①）。返回**扁平**列表，按 sim 从大到小：
         [{"kind": "day", "id": 23, "row": (...), "sim": 0.76, "src": "fts"|"vec"}, ...]
 
     - **fts 适配器**：`fts_search` 取词面命中（可带 expr_override），sim 取 bm25→(0,1]（取不到=0.0）；
-    - **vec 适配器**：`vector_search` 按余弦补漏（同 (kind,id) 去重），
+    - **vec 适配器**：`vector_search` 按余弦补漏（同 (kind,id) 去重），**每卷各取 top（per_kind）**
+      ——小卷不被大卷全局截断饿死（批次二地基，审查 ②）；
       低于 `vec_floor` 的不算"想起来"（与 hybrid_search 同口径）；
-    - 每卷各自最多 `limit` 条（与 fts_search 同尺），**不跨卷硬截断**——排序留给调用方；
+    - 每卷词面最多 `limit` 条、向量补漏再最多 `limit` 条（故单卷最多约 2×limit），**不跨卷硬截断**——
+      排序留给调用方（10-02 修文档：原写"每卷最多 limit"，与实现不符）；
+    - `parent_merge=True`（2-A 父子索引，开关 retrieval_parent）：命中 `chunk` 时回捞原文、
+      同父去重、kind 归到父卷（防止同一段话以"块＋原件"两份白占两个坑）——默认 False＝逐字节现状；
     - `score_out` 传入即回填 {卷: {rowid: 分}}（同 hybrid_search 家风）。
     只读、fail-open：任一路炸了就当那一路空手，另一路照出。
     """
@@ -1574,7 +1779,9 @@ def search_all(query, kinds, limit=8, qvec=None, model="", expr_override=None,
         try:
             vkinds = tuple(k for k in kinds if k in ("day", "hall", "note", "letter",
                                                      "oldhome", "chunk"))
-            hits = vector_search(qvec, model, vkinds, topk=max(limit * 2, 8)) if vkinds else []
+            # per_kind=True（批次二地基·审查 ②）：每卷各取 top，小卷不被 chunk/oldhome 全局截断饿死
+            hits = (vector_search(qvec, model, vkinds, topk=max(limit * 2, 8), per_kind=True)
+                    if vkinds else [])
         except Exception:
             hits = []
         n_added = {}
@@ -1606,6 +1813,13 @@ def search_all(query, kinds, limit=8, qvec=None, model="", expr_override=None,
             except Exception:
                 pass
     out.sort(key=lambda r: (-r["sim"], r["kind"], r["id"]))
+    # ── 2-A 父子索引（开关 retrieval_parent，默认关）：块命中 → 回捞原文、同父去重 ──
+    # 块是入口，答案该是原文；同一条原话命中多个块只留 sim 最高的那次。关=逐字节现状。
+    if parent_merge and any(it["kind"] == "chunk" for it in out):
+        try:
+            out = _merge_chunks_to_parents(out, kinds=kinds, score_out=score_out)
+        except Exception as e:
+            print(f"  [检索] 父子归并失手（退回块形态）：{e}")
     # ── 跨源近重复合并（9-29 实测抓到的）：同一段话会以"原话（chat/day/note/letter）"和
     # "它的分块（chunk）"两种形态同时进榜，白占两个坑。
     # 规则：**chunk 是派生物，先让位给原件**——两轮走：
@@ -1992,8 +2206,9 @@ def get_day_spans(days=7):
         conn.close()
         by_day = {}
         for day, first, last, n in his:
-            # created_at 是 "YYYY-MM-DD HH:MM:SS"，钟点取 [11:16]
-            by_day[day] = [day, first[11:16], last[11:16], n, 0]
+            # created_at 是 "YYYY-MM-DD HH:MM:SS"，钟点取 [11:16]；NULL 行防炸（10-02：原直接切 None 会整表回 []）
+            by_day[day] = [day, (str(first) if first else "")[11:16],
+                           (str(last) if last else "")[11:16], n, 0]
         for day, n in hers.items():
             if day in by_day:
                 by_day[day][4] = n
@@ -2697,14 +2912,21 @@ def mark_inbox_email_read(ids):
 
 
 # ── 心情曲线（v0.1.10 新增，9-9；v0.1.11 升级：情绪词表 type 列）──
-def add_mood(date, score, source="小乖", note="", mood_type=""):
+def add_mood(date, score, source="小乖", note="", mood_type="", created_at=None):
     """记一条心情点。score 即 intensity 1~5，越界自动夹住；mood_type 须是 server MOOD_TYPES
-    里的词（空串=旧版数字分，向后兼容）。返回 rowid。"""
+    里的词（空串=旧版数字分，向后兼容）。返回 rowid。
+    created_at（可选，10-02）：显式落库时刻——补写旧日心情时给"那天末尾"，免得被当"刚刚满足"，
+    污染 desire v2 的 _mood_last_gap_h（原只走表默认=写入当下）。"""
     score = max(1, min(5, int(score)))
     conn = _conn()
     c = conn.cursor()
-    c.execute('INSERT INTO moods (date, score, source, note, type) VALUES (?, ?, ?, ?, ?)',
-              (date, score, source, (note or "")[:50], (mood_type or "")[:6]))
+    if created_at:
+        c.execute('INSERT INTO moods (date, score, source, note, type, created_at) '
+                  'VALUES (?, ?, ?, ?, ?, ?)',
+                  (date, score, source, (note or "")[:50], (mood_type or "")[:6], str(created_at)))
+    else:
+        c.execute('INSERT INTO moods (date, score, source, note, type) VALUES (?, ?, ?, ?, ?)',
+                  (date, score, source, (note or "")[:50], (mood_type or "")[:6]))
     conn.commit()
     rowid = c.lastrowid
     conn.close()

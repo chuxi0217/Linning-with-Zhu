@@ -321,6 +321,34 @@ def _fmt_since(now, ts):
         return "—"
 
 
+# ── 火苗（10-02 家主令 B）：他撩她 → 点火信号。独立小文件，只 flirt 线程写、tick 只读（不抢 V2_STATE）──
+FLIRT_STATE = os.path.expanduser("~/.zanjia_flirt_state.json")
+
+
+def note_flirt(now=None):
+    """记一笔「他刚撩了她」——`_flirt_shadow` 判「撩」时调。fail-open（写不动就算了）。"""
+    try:
+        now = now or datetime.now()
+        tmp = FLIRT_STATE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"at": now.strftime("%Y-%m-%d %H:%M:%S")}, f, ensure_ascii=False)
+        os.replace(tmp, FLIRT_STATE)
+    except Exception:
+        pass
+
+
+def _flirt_last_gap_h(now):
+    """距上次「他撩她」几小时；没有/读不到 → None。只读。"""
+    try:
+        with open(FLIRT_STATE, encoding="utf-8") as f:
+            at = str(json.load(f).get("at") or "")
+        if not at:
+            return None
+        return max(0.0, (now - datetime.strptime(at, "%Y-%m-%d %H:%M:%S")).total_seconds() / 3600)
+    except Exception:
+        return None
+
+
 def tick_v2_shadow(now=None, present=None):
     """欲望 v2·并行影子：只算只记，绝不发、绝不用。fail-open 返回 dict|None。
 
@@ -381,13 +409,23 @@ def tick_v2_shadow(now=None, present=None):
             _gain = float(_cfg("desire_v2_ignite_gain", 0.5))
             _tau = max(0.5, float(_cfg("desire_v2_ignite_tau_h", 3)))
             fac_ignite = 1.0 + _gain * math.exp(-gap_want / _tau)
+        # 火苗（10-02 家主令 B·开关 desire_v2_flirt）：**他刚撩过** → 亲密余温 → 涨得更快。
+        # 这是真·外部信号（他的言行），不是她输出的镜像——补上点火一直缺的输入源。
+        gap_flirt = None
+        fac_flirt = 1.0
+        if bool(_cfg("desire_v2_flirt", False)):
+            gap_flirt = _flirt_last_gap_h(now)
+            if gap_flirt is not None:
+                _fgain = float(_cfg("desire_v2_flirt_gain", 0.4))
+                _ftau = max(0.5, float(_cfg("desire_v2_flirt_tau_h", 6)))
+                fac_flirt = 1.0 + _fgain * math.exp(-gap_flirt / _ftau)
         _win = max(0.0, float(_cfg("desire_v2_feed_window_h", 6)))
         fed = bool(ignite_on and mood_warm and (gap_want is None or gap_want > _win))
         if fed:
             growth_h *= 0.7                     # 被接住＝喂饱（点火优先，不双算）
         if mood_sad:
             growth_h *= float(_cfg("desire_v2_sad_damp", 0.8))
-        growth_h *= fac_ignite                  # 点火：亲密余温 → 涨得更快
+        growth_h *= fac_ignite * fac_flirt     # 点火：亲密余温；火苗：他刚撩过（真外部信号）
         d = min(1.0, d + growth_h * dh * (1 - d))       # 饱和生长：越近 1 越慢（久别才浓）
         if mood_want:
             d = max(d, 0.35)                    # 她的笔：抬起点
@@ -475,6 +513,8 @@ def tick_v2_shadow(now=None, present=None):
         _ex = []
         if fac_ignite > 1.001:
             _ex.append(f"点火×{fac_ignite:.2f}" + (f"({gap_want:.1f}h前)" if gap_want is not None else ""))
+        if fac_flirt > 1.001:
+            _ex.append(f"火苗×{fac_flirt:.2f}" + (f"({gap_flirt:.1f}h前被撩)" if gap_flirt is not None else ""))
         if fed:
             _ex.append("喂饱")
         try:

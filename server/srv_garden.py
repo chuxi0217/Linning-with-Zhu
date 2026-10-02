@@ -704,7 +704,8 @@ def _ensure_bridge():
     if time.time() < _BRIDGE_FAIL_UNTIL[0]:
         return False
     try:
-        token = open(srv_state._srv().GARDEN_TOKEN_PATH).read().strip()   # 运行期反查：沙盘会重绑 s.GARDEN_TOKEN_PATH
+        with open(srv_state._srv().GARDEN_TOKEN_PATH) as _tf:   # 10-02：with 关句柄（原裸 open 漏 fd）；运行期反查：沙盘会重绑 s.GARDEN_TOKEN_PATH
+            token = _tf.read().strip()
     except Exception:
         token = ""
     if not token:

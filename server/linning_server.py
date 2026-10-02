@@ -246,6 +246,9 @@ DEFAULT_CONFIG = {
     "inject_use_judge_v2": True,
     "recall_gate_shadow": True,
     "recall_gate_v2": False,
+    # 批次三-A（2026-10-02·机制对照 #3 首步）：近度权重口径——关（默认）=三档阶梯（现状）；
+    # 开=连续指数衰减 exp(-λ·天)、下不过地板（远事不消失）。参数在 recall_gate.recency。
+    "recall_decay_exp": False,
     # ── 检索层统一（§5 第 5 条 · 批次①·2026-09-29）：把"块层"拉进同一检索入口 ──
     # 病根：chunks（1606 块＝聊天原话分块/日记）与 oldhome（1397 块＝三个家）在库里有向量，
     # 却**没接进任何检索路径**（memory_lib 原话："检索接线 chunk_retrieval 另批——本表先静躺"）。
@@ -253,6 +256,31 @@ DEFAULT_CONFIG = {
     # 读 2 天、不一致率 ≤30% 才切 `retrieval_unified`（批次②）。
     "retrieval_unified_shadow": True,
     # （`retrieval_unified` 真切开关 10-01 扫除删——代码零引用；"批次②"真要做时再加。）
+    # ── 检索层统一·批次二（2026-10-02·设计稿已定稿）：三件各一开关，**默认全关＝逐字节现状** ──
+    # 2-A 父子索引：块命中回捞原文、同父去重（search_all；开关开=块降级为入口、答案给原文）。
+    "retrieval_parent": False,
+    # 2-B RRF 融合：FTS/向量两榜按名次融合（Σ1/(60+rank)）替掉"词面打头＋向量补尾"，免疫量纲差。
+    "retrieval_rrf": False,
+    # 2-C 意图路由：本地 4B 判这轮查询偏 fact/narrative/summary，再调各轨配额（fail-open→narrative）。
+    "retrieval_router": False,
+    # ── 检索增强三件（2026-10-02·融合业界名算法，默认全关＝逐字节现状）──
+    # 重排：本地模型对候选做相关度重排（交叉编码器式），分数回填 score_out 让 gate 按它排。
+    "retrieval_rerank": False,
+    # 多查询改写：本地模型把问题改写成 2-3 句，并集检索（Multi-Query / HyDE 思路）。
+    "retrieval_multiquery": False,
+    # 块层进投递：把 chunks(1606) 的语义召回经**父指针回原文**并入投递（Small-to-Big / Parent 的用法）。
+    "retrieval_chunks": False,
+    # 重排/撩判定用哪只模型：local（本地 4B，默认）｜flash（终审引擎=flash API）。4B 重排不行、假火多。
+    "rerank_engine": "local",
+    "flirt_engine": "local",
+    # 意图路由配额表：抬谁/压谁的系数（route→{卷: 权重乘数}；缺=不打折）。
+    # ⚠️ 投递路径（hybrid_search）的卷是 day/chat/note/letter/hall——配额必须覆盖这五卷才**真生效**
+    #   （oldhome/chunk 只在 search_all 影子路里，一并留着备用）。
+    #   fact=抬词面/原件（流水话也抬一点，问"哪天/谁说"最靠原话）；narrative=抬日记/语义；
+    #   summary=压流水话、抬日记（要概括）。
+    "retrieval_route_quota": {"fact": {"day": 1.1, "chat": 1.1, "oldhome": 0.5, "chunk": 0.5},
+                              "narrative": {"day": 1.1, "chat": 1.05, "note": 1.05, "chunk": 1.1},
+                              "summary": {"day": 1.15, "chat": 0.8, "chunk": 0.6}},
     # ── 见闻分享三小件（§5 第 9 条 4.2 · 9-29 家主拍板 A3）──
     # ① 唤醒提示加一句"分享不叫打扰"（在 srv_garden 的唤醒提示里，无键）；
     # ② 🌍 记号：出门（自主散步）的分享进信箱记 🌍，园子内的照旧 🌱（无键）；
@@ -483,6 +511,7 @@ def save_config(cfg):
 # 开关 soft_fail_log（默认开；关=回静默吞）。首批只替 20 处高价值裸吞，不铺全。
 _SOFT_FAIL_SEEN = {}            # where -> 上次落账时刻
 _SOFT_FAIL_COOLDOWN_S = 300     # 同一处失败的冷却窗（循环体长期失败不再刷账刷日志）
+_SOFT_FAIL_SEEN_LOCK = threading.Lock()   # 10-02：多线程（心跳/嵌入/守望/聊天/收信）读改写冷却表，非原子会失效
 
 
 def _soft_fail(where, e):
@@ -496,8 +525,9 @@ def _soft_fail(where, e):
         except Exception:
             pass
         _now = time.time()
-        _quiet = (_now - _SOFT_FAIL_SEEN.get(where, 0.0)) < _SOFT_FAIL_COOLDOWN_S
-        _SOFT_FAIL_SEEN[where] = _now
+        with _SOFT_FAIL_SEEN_LOCK:
+            _quiet = (_now - _SOFT_FAIL_SEEN.get(where, 0.0)) < _SOFT_FAIL_COOLDOWN_S
+            _SOFT_FAIL_SEEN[where] = _now
         if _quiet:
             return
         msg = str(e)[:80]
@@ -4113,14 +4143,15 @@ def _rhythm_facts(days=7):
 def _mem_counts():
     """MEM-C 向量层账目（/api/status 可观测）：已嵌入条数 + 队列欠账。缺席返回 None。"""
     try:
-        import sqlite3 as _sq
         conn = m._conn()
-        c = conn.cursor()
-        c.execute("SELECT COUNT(*) FROM vectors")
-        vec = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM embed_queue WHERE done=0 AND attempts<3")
-        owed = c.fetchone()[0]
-        conn.close()
+        try:
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*) FROM vectors")
+            vec = c.fetchone()[0]
+            c.execute("SELECT COUNT(*) FROM embed_queue WHERE done=0 AND attempts<3")
+            owed = c.fetchone()[0]
+        finally:
+            conn.close()      # 10-02：异常路径也关连接（原先只在正常路径 close）
         return {"vectors": vec, "pending": owed}
     except Exception:
         return None
@@ -4211,26 +4242,28 @@ def _ledger_snapshot(days=7):
         con = m._conn()
         since = f"-{int(days)} days"
         his = hers = 0
-        for (pl,) in con.execute(
-                "SELECT payload FROM events WHERE kind='chat.turn' "
-                "AND ts >= datetime('now','localtime',?)", (since,)).fetchall():
-            try:
-                role = (json.loads(pl or "{}").get("role") or "")
-            except Exception:
-                continue
-            if role == "小乖":
-                his += 1
-            elif role == "姐姐":
-                hers += 1
-        proactive = con.execute(
-            "SELECT COUNT(*) FROM outbox_msgs WHERE created_at >= datetime('now','localtime',?) "
-            "AND (text LIKE '💌%' OR text LIKE '💬%' OR text LIKE '🌱%' OR text LIKE '%还没打卡%')",
-            (since,)).fetchone()[0]
-        calls, tin, tout = con.execute(
-            "SELECT COUNT(*), COALESCE(SUM(in_tokens),0), COALESCE(SUM(out_tokens),0) "
-            "FROM token_ledger WHERE ts >= datetime('now','localtime',?)", (since,)).fetchone()
-        first = con.execute("SELECT MIN(ts) FROM events WHERE kind='chat.turn'").fetchone()[0]
-        con.close()
+        try:
+            for (pl,) in con.execute(
+                    "SELECT payload FROM events WHERE kind='chat.turn' "
+                    "AND ts >= datetime('now','localtime',?)", (since,)).fetchall():
+                try:
+                    role = (json.loads(pl or "{}").get("role") or "")
+                except Exception:
+                    continue
+                if role == "小乖":
+                    his += 1
+                elif role == "姐姐":
+                    hers += 1
+            proactive = con.execute(
+                "SELECT COUNT(*) FROM outbox_msgs WHERE created_at >= datetime('now','localtime',?) "
+                "AND (text LIKE '💌%' OR text LIKE '💬%' OR text LIKE '🌱%' OR text LIKE '%还没打卡%')",
+                (since,)).fetchone()[0]
+            calls, tin, tout = con.execute(
+                "SELECT COUNT(*), COALESCE(SUM(in_tokens),0), COALESCE(SUM(out_tokens),0) "
+                "FROM token_ledger WHERE ts >= datetime('now','localtime',?)", (since,)).fetchone()
+            first = con.execute("SELECT MIN(ts) FROM events WHERE kind='chat.turn'").fetchone()[0]
+        finally:
+            con.close()      # 10-02：异常路径也关连接
         return {"days": int(days), "his": his, "hers": hers, "proactive": proactive,
                 "calls": calls, "in_tokens": tin, "out_tokens": tout,
                 "since": (str(first) or "")[:10] or None}
@@ -4288,10 +4321,12 @@ def _soft_fail_summary(days=7):
     """近 N 天软失败：总数 + top3 where（按次数）。查不动 → None（缺席不说假话）。"""
     try:
         con = m._conn()
-        rows = con.execute("SELECT payload FROM events WHERE kind='soft.fail' "
-                           "AND ts >= datetime('now','localtime',?)",
-                           (f"-{int(days)} days",)).fetchall()
-        con.close()
+        try:
+            rows = con.execute("SELECT payload FROM events WHERE kind='soft.fail' "
+                               "AND ts >= datetime('now','localtime',?)",
+                               (f"-{int(days)} days",)).fetchall()
+        finally:
+            con.close()      # 10-02：异常路径也关连接
         cnt = {}
         for (pl,) in rows:
             try:
@@ -5410,7 +5445,9 @@ _RECALL_GATE_DEFAULTS = {
     "per_kind_per_day": 1,
     "kind_weight": {"day": 1.0, "chat": 1.0, "note": 1.0, "letter": 1.0,
                     "hall": 1.0, "oldhome": 0.6},
-    "recency": {"near_days": 7, "near": 1.0, "mid_days": 30, "mid": 0.9, "far": 0.75},
+    "recency": {"near_days": 7, "near": 1.0, "mid_days": 30, "mid": 0.9, "far": 0.75,
+                # 批次三-A：mode=step（默认三档）｜exp（连续衰减，开关 recall_decay_exp 打开时生效）
+                "mode": "step", "exp_lambda": 0.01, "exp_floor": 0.5},
     # ── 记忆权重扩表（9-29）──────────────────────────────────────────────
     # ① 不可损层：她的笔/正典不吃时间衰减（旧宅那种"远事"才该被压）。
     "no_decay": ["day", "letter", "hall"],
@@ -5457,11 +5494,20 @@ def _row_date_of(kind, row):
 
 
 def _recency_weight(date_str, rec):
-    """近度权重：近 X 天=近值；再远=中值；更远=远值；取不到日=1.0（fail-open）。"""
+    """近度权重。两种口径：
+    - `rec.mode` 缺/"step"（**默认，逐字节现状**）：三档阶梯——近 X 天=近值；再远=中值；更远=远值。
+    - `rec.mode=="exp"`（批次三-A·开关 recall_decay_exp）：**连续指数衰减** `exp(-λ·天)`，
+      下不过地板 `exp_floor`（远事不消失）——业界 Generative Agents 用 recency 0.995^h 的连续形。
+    取不到日=1.0（fail-open）。"""
     try:
         if not date_str:
             return 1.0
-        days = (datetime.now() - datetime.strptime(date_str, "%Y-%m-%d")).days
+        days = max(0, (datetime.now() - datetime.strptime(date_str, "%Y-%m-%d")).days)
+        if str(rec.get("mode", "step")) == "exp":
+            import math
+            lam = float(rec.get("exp_lambda", 0.01))
+            floor = float(rec.get("exp_floor", 0.5))
+            return max(floor, math.exp(-lam * days))
         if days <= int(rec.get("near_days", 7)):
             return float(rec.get("near", 1.0))
         if days <= int(rec.get("mid_days", 30)):
@@ -5505,23 +5551,61 @@ def _gate_shadow_log(res, scores, path, plan, summary, rank=None):
         _soft_fail("recall.shadow", e)
 
 
-def _recall_gate_res(res, scores, path="mixed", soft=False):
+_INTENT_LABELS = ("fact", "narrative", "summary")
+
+
+def _intent_route(query):
+    """2-C 意图路由：判这轮查询偏哪类——fact（哪天/多少钱/谁说的）／narrative（当时怎么想的）／
+    summary（概括一段）。**本地 4B 判**（`_local_judge`，已就绪、~126ms）；缺模型/挂 → 词面兜底；
+    再不行 → `narrative`（各卷不打折＝安全默认）。开关 `retrieval_router` 由调用方把关。"""
+    q = str(query or "").strip()
+    if not q:
+        return "narrative"
+    prompt = ("判断下面这句话最像哪一类查询，只回一个词（不要解释）："
+              "fact=问具体事实（哪天/多少钱/谁说的/编号/第几）；"
+              "narrative=回忆当时的感受或事情经过；summary=要概括总结一段时期。\n句子：" + q[:200])
+    try:
+        txt, _err = _local_judge(prompt, timeout=8, max_tokens=8)
+    except Exception:
+        txt = None
+    if txt:
+        t = txt.strip().lower()
+        for lab in _INTENT_LABELS:
+            if lab in t:
+                return lab
+    # fail-open 词面兜底（宁可 narrative，不乱压卷）
+    if any(k in q for k in ("哪天", "多少钱", "几点", "谁", "编号", "第几", "哪一",
+                            "日期", "价格", "多少", "什么时候")):
+        return "fact"
+    if any(k in q for k in ("总结", "概括", "整体", "一直以来", "这些天", "回顾")):
+        return "summary"
+    return "narrative"
+
+
+def _recall_gate_res(res, scores, path="mixed", soft=False, route=None):
     """记忆权重·检索侧：按权重表对检索结果排序/配额/门槛。返回（可能改过的）res。
     recall_gate_v2 关（默认）→ 只记影子（recall_gate_shadow 开时）、原样返回。fail-open。
     soft=True（工具侧 search_memory）：**不做门槛、不做同卷同日去重**——她主动查，宁多勿漏；
-    仅当 `recall_gate.gate_tool` 为真时才真的按权重排序＋每卷配额。"""
+    仅当 `recall_gate.gate_tool` 为真时才真的按权重排序＋每卷配额。
+    route（2-C·开关 retrieval_router）：本轮的意图（fact/narrative/summary）——按
+    `retrieval_route_quota[route]` 给各卷乘系数（抬/压），只影响排序取谁、不碰门槛。"""
     try:
         if not isinstance(res, dict) or not res:
             if _flag_on("recall_gate_shadow"):
                 _gate_shadow_log(res, scores, path, {}, {"kept": 0, "dropped": 0})
             return res
         gcfg = _gate_cfg()
-        rec = gcfg.get("recency") or {}
+        rec = dict(gcfg.get("recency") or {})
+        if _flag_on("recall_decay_exp"):     # 批次三-A：连续指数衰减（默认关=三档阶梯的现状）
+            rec["mode"] = "exp"
         min_score = float(gcfg.get("min_score", 0.35))
         quota = int(gcfg.get("per_kind_per_day", 1) or 0)
         no_decay = tuple(gcfg.get("no_decay") or ())
         wr = gcfg.get("writer_weight") or {}
         caps = gcfg.get("quota") or {}
+        route_w = {}
+        if route and _flag_on("retrieval_router"):
+            route_w = (load_config().get("retrieval_route_quota") or {}).get(str(route)) or {}
         _apply = _flag_on("recall_gate_v2") and (not soft or bool(gcfg.get("gate_tool")))
         kept, dropped, _rank = {}, {}, []
         for kind, rows in res.items():
@@ -5531,12 +5615,13 @@ def _recall_gate_res(res, scores, path="mixed", soft=False):
             sc = (scores or {}).get(kind) or {}
             kw = float((gcfg.get("kind_weight") or {}).get(kind, 1.0))
             ww = float(wr.get("stream" if kind in _STREAM_KINDS else "hand", 1.0))
+            rw = float(route_w.get(kind, 1.0))
             scored = []
             for r in rows:
                 base = sc.get(r[0])
                 d = _row_date_of(kind, r)
                 tw = 1.0 if kind in no_decay else _recency_weight(d, rec)
-                comp = (base if base is not None else 0.5) * kw * tw * ww
+                comp = (base if base is not None else 0.5) * kw * tw * ww * rw
                 scored.append((comp, base, r, d))
                 _rank.append((round(comp, 4), kind, r[0]))
             scored.sort(key=lambda x: -x[0])
@@ -5590,7 +5675,8 @@ def _unified_shadow(qmsg, or_query, qvec, emodel, cur_res, path="mixed"):
         if not _flag_on("retrieval_unified_shadow"):
             return
         new = m.search_all(qmsg, _UNIFIED_SCOPE, limit=_UNIFIED_LIMIT,
-                           qvec=qvec, model=emodel, expr_override=or_query)
+                           qvec=qvec, model=emodel, expr_override=or_query,
+                           parent_merge=_flag_on("retrieval_parent"))
         cur = []
         for k, rows in (cur_res or {}).items():
             if not isinstance(rows, list) or k == "favorite":
@@ -5626,6 +5712,85 @@ def _unified_shadow(qmsg, or_query, qvec, emodel, cur_res, path="mixed"):
         _soft_fail("unified.shadow", e)
 
 
+def _multiquery(query):
+    """多查询改写（本地模型，Multi-Query/HyDE 思路）：把问题改写成 2 句更可能在记录里出现的说法，
+    供并集检索。失败回 []（不拦）。开关 retrieval_multiquery。"""
+    q = str(query or "").strip()
+    if not q:
+        return []
+    prompt = ("把下面这句话改写成 2 句更具体、更可能在日常聊天里出现的说法，每行一句，不要解释：\n"
+              + q[:160])
+    try:
+        txt, _err = _local_judge(prompt, timeout=8, max_tokens=80)
+    except Exception:
+        return []
+    out = []
+    for ln in (txt or "").splitlines():
+        ln = ln.strip().lstrip("0123456789.、-—) ").strip()
+        if 4 <= len(ln) <= 120 and ln != q:
+            out.append(ln)
+    return out[:2]
+
+
+def _rerank_engine():
+    """重排用哪只模型：`local`（本地 4B，默认）｜`flash`（终审引擎=flash API）。config rerank_engine。"""
+    try:
+        return str(load_config().get("rerank_engine") or "local").strip().lower()
+    except Exception:
+        return "local"
+
+
+def _rerank_res(res, query, score_out=None):
+    """重排（**逐条打分制**）：对每条候选问"和问题相关度 0-10"，一次调用收全部分，
+    按分重排、分数回填 score_out。引擎由 `_rerank_engine()` 定（local 4B｜flash API）。
+    fail-open：任何失败原样返回。开关 retrieval_rerank。"""
+    if not isinstance(res, dict) or not res:
+        return res
+    cand = []
+    for kind, rows in res.items():
+        if kind == "favorite" or not isinstance(rows, list):
+            continue
+        for r in rows:
+            try:
+                cand.append((kind, r, m._row_text_of(kind, r)))
+            except Exception:
+                continue
+    if len(cand) < 2:
+        return res
+    lines = [f"{i}. {str(t or '')[:60]}" for i, (_k, _r, t) in enumerate(cand[:20])]
+    prompt = ("给下面每条和下面这个问题**逐一打分**（0=无关，10=直接相关）。"
+              "只回「编号 分数」，一行一条，不要解释，不要多写。\n问题：" + str(query or "")[:100]
+              + "\n" + "\n".join(lines))
+    try:
+        if _rerank_engine() == "flash":
+            txt, _err = _flash_judge(prompt, timeout=10, max_tokens=200)   # 超时收紧：重排在回复关键路径上
+        else:
+            txt, _err = _local_judge(prompt, timeout=8, max_tokens=160)
+    except Exception:
+        return res
+    sc = {}
+    for a, b in re.findall(r"(\d{1,2})\D{1,4}(\d{1,2})", txt or ""):
+        i, s = int(a), int(b)
+        if 0 <= i < len(cand) and 0 <= s <= 10:
+            sc[i] = s
+    if not sc:
+        return res
+    ranked = sorted(range(len(cand)), key=lambda i: -sc.get(i, 0))
+    new, n = {}, max(1, len(ranked))
+    for pos, i in enumerate(ranked):
+        kind, row, _t = cand[i]
+        new.setdefault(kind, []).append(row)
+        if score_out is not None:
+            try:                        # 0.5~1.0 递减：保 gate 门槛不误杀、按打分排
+                score_out.setdefault(kind, {})[row[0]] = round(1.0 - 0.5 * (pos / n), 4)
+            except Exception:
+                pass
+    for kind, rows in res.items():   # 没进候选的卷（favorite 等）原样留
+        if kind not in new:
+            new[kind] = rows
+    return new
+
+
 def _retrieve_mixed(message, limit, path="mixed"):
     """开场记忆检索公共段（auto_mem 与凭据夹共用）：Top-4 长词 OR 串 + 可选查询嵌入。
     返回 hybrid_search 的 dict；<6 字或词元空手返回 None。嵌入失手=退纯词面，绝不上抛。
@@ -5659,11 +5824,75 @@ def _retrieve_mixed(message, limit, path="mixed"):
         except Exception as ex:
             print(f"  [MEM-C] 查询嵌入失手（退纯词面）：{ex}")
     _scores = {}
-    res = m.hybrid_search(qmsg, ("day", "chat", "note", "letter", "hall"), limit,
-                          qvec=qvec, model=emodel, expr_override=or_query,
-                          score_out=_scores)
+    _kinds5 = ("day", "chat", "note", "letter", "hall")
+    # 多查询改写（开关 retrieval_multiquery）：并集检索
+    _extra_qs = []
+    if _flag_on("retrieval_multiquery"):
+        try:
+            _extra_qs = _multiquery(qmsg)
+        except Exception as _e:
+            _soft_fail("检索.多查询", _e)
+    res = {}
+    for _q in [qmsg] + _extra_qs:
+        _qv, _mo, _expr = qvec, emodel, or_query
+        if _q != qmsg:                       # 改写句：自带 expr、单独嵌入
+            _expr, _qv, _mo = None, None, ""
+            if e:
+                try:
+                    _vs = _embed_texts([_embed_query_text(e[2], _q)], e[0], e[1], e[2], timeout=10)
+                    if _vs and _vs[0]:
+                        _qv, _mo = _vs[0], e[2]
+                except Exception:
+                    pass
+        try:
+            _r = m.hybrid_search(_q, _kinds5, limit, qvec=_qv, model=_mo,
+                                 expr_override=_expr, score_out=_scores,
+                                 rrf=_flag_on("retrieval_rrf"))
+        except Exception as _ex:
+            _soft_fail("检索.多查询轮", _ex)
+            continue
+        for _k, _rows in (_r or {}).items():
+            _bucket = res.setdefault(_k, [])
+            _seen = {row[0] for row in _bucket}
+            for row in _rows:
+                if row[0] not in _seen:
+                    _bucket.append(row)
+                    _seen.add(row[0])
+    # 块层进投递（开关 retrieval_chunks）：chunks 语义召回 → 经父指针回原文并入（Small-to-Big）
+    if _flag_on("retrieval_chunks") and qvec:
+        try:
+            for _k, _rid, _sc in m.vector_search(qvec, emodel, ("chunk",), topk=12):
+                if float(_sc) < m.VEC_FLOOR:
+                    continue
+                _par = m.get_chunk_parent(_rid)
+                if not _par:
+                    continue
+                _pk, _pid = str(_par[0]), int(_par[1])
+                _prow = m._chunk_parent_row(_pk, _pid)
+                if not _prow:
+                    continue
+                _bucket = res.setdefault(_pk, [])
+                if _pid not in {row[0] for row in _bucket}:
+                    _bucket.append(_prow)
+                _scores.setdefault(_pk, {})[_pid] = max(
+                    float(_scores.get(_pk, {}).get(_pid, 0) or 0), round(float(_sc), 4))
+        except Exception as _e:
+            _soft_fail("检索.块层", _e)
+    # 重排（开关 retrieval_rerank）：本地模型按相关度重排，分数进 _scores（gate 随后按它排）
+    if _flag_on("retrieval_rerank"):
+        try:
+            res = _rerank_res(res, qmsg, _scores)
+        except Exception as _e:
+            _soft_fail("检索.重排", _e)
+    # 2-C 意图路由（开关 retrieval_router）：本地 4B 判这轮偏 fact/narrative/summary → 各卷配额
+    _route = None
+    if _flag_on("retrieval_router"):
+        try:
+            _route = _intent_route(qmsg)
+        except Exception as _e:
+            print(f"  [检索] 意图路由失手（按 narrative 走）：{_e}")
     # 旧事两修·B：检索三件（门槛/去重/偏近）——影子先行，默认不改交付（recall_gate_v2 才真滤）
-    res = _recall_gate_res(res, _scores, path=path)
+    res = _recall_gate_res(res, _scores, path=path, route=_route)
     # 第 5 条（批次①·2026-09-29）：检索层统一·影子——把块层（chunk 1606 块／oldhome 1397 块）
     # 拉进**同一入口同一份分**，与现状（上面这份、已过门槛）并排落 events。只记不改。
     _unified_shadow(qmsg, or_query, qvec, emodel, res, path=path)
@@ -5780,28 +6009,56 @@ def _opening_memory_ctx(message):
     return _auto_memory_ctx(message)
 
 
+# 对账覆盖的卷（10-02：四卷 → 六卷，把块层/旧宅拉进运行期自愈）＋一轮补队列上限
+_RECONCILE_KINDS = (("day", "days", "id"), ("hall", "diary_hall", "id"),
+                    ("note", "notes", "id"), ("letter", "letters", "id"),
+                    ("chunk", "chunks", "id"), ("oldhome", "oldhome_chunks", "id"))
+_RECONCILE_CAP = 200      # 一轮最多补 200 条（worker 60 秒一批 8 条；一次灌几千会积压数小时）
+
+
 def _embedder_reconcile(model):
-    """开机对账：高价值四卷里没有向量影子的行，补进队列（同 FTS autoheal 家风）。"""
+    """开机/周期对账：没有向量影子的行补进队列；**顺手清孤儿**（向量→源没有回头路的补齐）。
+    10-02（审查_检索层bug ⑥⑦）：覆盖从四卷扩到**六卷**（+chunk/oldhome）——
+    原先块层/旧宅向量运行期无自愈，只能手工跑 tools/chunk_*.py；并删掉"源行已没、向量还在"
+    的孤儿（如 vectors(kind='day',ref_id=42) 而 days 无 42），否则 _vec_row 回捞 None 静默跳。
+    **限流**：一轮最多补 `_RECONCILE_CAP` 条（embed worker 60 秒一批 8 条，一次灌几千会积压）。
+    ⚠️ 10-02 修（Explore 审查抓到）：入队必须走**同一个连接/事务**（`_embed_enqueue_c(c,...)`）——
+    原先用 `m.embed_enqueue`（**另开连接**），而上面刚 DELETE 过、事务未提交 →
+    第二连接撞 `database is locked`（timeout 10s）→ 补队列全废、且挂 10s 期间卡住全库写。"""
     conn = m._conn()
     c = conn.cursor()
     total = 0
+    pruned = 0
     try:
         # 9-18 后院深搜修（P2-3）：僵尸复位——失败三次被弃治（attempts>=3）的行在这里复活，
         # 否则嵌入端点抽风一轮就永久缺席（embed_pending 只取 attempts<3；embed_enqueue
         # 又因 done=0 的行已在而不再补）。复活后照常排队重试，三次再失败再躺下。
         c.execute("UPDATE embed_queue SET attempts=0 WHERE done=0 AND attempts>=3")
         conn.commit()
-        for kind, src, col in (("day", "days", "id"), ("hall", "diary_hall", "id"),
-                               ("note", "notes", "id"), ("letter", "letters", "id")):
+        for kind, src, col in _RECONCILE_KINDS:
+            # ⑦ 孤儿：该卷有向量、源表却没这行 → 删（源行没了就该摘影子，别攒僵尸）
+            try:
+                cur = c.execute(f"DELETE FROM vectors WHERE kind=? AND model=? AND ref_id NOT IN "
+                                f"(SELECT {col} FROM {src})", (kind, model))
+                pruned += cur.rowcount or 0
+                conn.commit()      # ★ 立即提交，释放写锁（下面入队同连接，但别把锁跨语句攥着）
+            except Exception as e:
+                print(f"  [MEM-C] 孤儿清理 {kind} 失手（不影响营业）：{e}")
+            # 缺影子的行：补队列（受总限流）；**同连接入队**（避免另开连接撞写锁）
             c.execute(f"SELECT {col} FROM {src} WHERE {col} NOT IN "
                       f"(SELECT ref_id FROM vectors WHERE kind=? AND model=?)", (kind, model))
             for (rid,) in c.fetchall():
-                m.embed_enqueue(kind, rid)
+                if total >= _RECONCILE_CAP:
+                    break
+                m._embed_enqueue_c(c, kind, rid)   # 用调用方游标/事务（不另开连接）
                 total += 1
+            conn.commit()
     except Exception as e:
         print(f"  [MEM-C] 对账失手（不影响营业）：{e}")
     finally:
         conn.close()
+    if pruned:
+        print(f"  [MEM-C] 向量对账：清孤儿 {pruned} 条")
     if total:
         print(f"  [MEM-C] 嵌入对账：补 {total} 条进队列")
 
@@ -6317,6 +6574,26 @@ def _win_of(cfg, key, fallback):
     if isinstance(win, (list, tuple)) and len(win) >= 2:
         return (str(win[0])[:5], str(win[1])[:5])
     return tuple(fallback)
+
+
+def _window_start(now, win):
+    """这个（可能跨午夜的）窗**本轮是几点开的** → "YYYY-MM-DD HH:MM:SS"。
+    跨午夜窗（start > end）在凌晨段（hm < end）时，起点是**前一天**的 start。熄灭守护用它判
+    「末条消息是不是本轮睡前说的」——日界改 0 点后，昨晚 23:30 的晚安在凌晨 01:30 判定时
+    必须仍算「本轮」（原写死 `today_str()+" 04:00:00"`，日界 0 后把跨午夜晚安全否了）。"""
+    start = str(win[0])[:5]
+    h, mi = (int(x) for x in start.split(":"))
+    base = now.replace(hour=h, minute=mi, second=0, microsecond=0)
+    if now.strftime("%H:%M") < start:          # 已过午夜、还没到今晚起点 → 窗是昨晚开的
+        base = base - timedelta(days=1)
+    return base.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _night_day(now, cfg):
+    """夜窗归属的「那天」＝**本轮窗起点所在日**——一觉跨午夜（23:30 睡、01:30 判）该归同一篇日记，
+    不劈成两天（等价旧 4 点日界口径）。日界改 0 点后若不这样，凌晨熄灯会把夜聊写进新自然日、
+    04:00 补写又把同一段写进前一天 → 双重总结。用窗起点（而非窗末）免得 ["00:00","24:00"] 这类全天窗误判。"""
+    return _window_start(now, _win_of(cfg, "goodnight_window", ["21:00", "04:00"]))[:10]
 
 
 def _silent_window(cfg=None):
@@ -7048,7 +7325,13 @@ def _goodnight_reset_session(now=None):
     n = 0
     if inject_tail(SESSION, d_now):
         n += 1
-    if now.hour < m.DAY_START_HOUR:
+    # 10-02 修（Explore 审查）：原判据 `now.hour < m.DAY_START_HOUR`，日界改 0 点后 hour<0 恒假 →
+    #   跨午夜的熄灯再也灌不回前一日尾巴（前半夜原话整段丢）。改用**晚安窗末点**（夜界，config 驱动）。
+    try:
+        _end_h = int(str(_win_of(load_config(), "goodnight_window", ["21:00", "04:00"])[1]).split(":")[0])
+    except Exception:
+        _end_h = 4
+    if now.hour < _end_h:
         d_prev = (now - timedelta(days=1)).strftime("%Y-%m-%d")
         if d_prev != d_now and inject_tail(SESSION, d_prev):
             n += 1   # 后插的排最前=时间正序（昨晚傍晚在前、凌晨在后）
@@ -7173,19 +7456,30 @@ def _flirt_shadow(text, at=None):
             return
         if at:
             _FLIRT_SEEN["at"] = at
-        txt, err = _local_judge(_FLIRT_JUDGE_PROMPT.format(text=t[:120]), timeout=8, max_tokens=32)
+        _p = _FLIRT_JUDGE_PROMPT.format(text=t[:120])
+        _fe = str(load_config().get("flirt_engine") or "local").strip().lower()
+        if _fe == "flash":
+            txt, err = _flash_judge(_p, timeout=20, max_tokens=60)   # 10-02：可换 flash（4B 假火多）
+        else:
+            txt, err = _local_judge(_p, timeout=8, max_tokens=32)
         try:
             say = str(json.loads(re.search(r"\{.*\}", txt, re.S).group(0)).get("say", "?"))
         except Exception:
             say = "调用失败" if not txt else "解析失败"
         try:
             with open(_LOCAL_SHADOW_LOG, "a", encoding="utf-8") as f:
-                f.write("%s\tflirt\t(本地独判)\t%s\t同=-\n"
-                        % (datetime.now().strftime("%F %T"), say))
+                f.write("%s\tflirt\t(%s)\t%s\t同=-\t输入=%s\n"
+                        % (datetime.now().strftime("%F %T"), "flash" if _fe == "flash" else "本地独判",
+                           say, t[:40].replace("\n", " ")))
         except Exception:
             pass
         if say == "撩":
             m.obs_bump("flirt_hit")   # 观测补格：她话里出现"撩"的次数（只读账）
+            try:                      # 10-02 家主令 B·火苗接线：他撩她 → 写点火信号（给欲望 v2 当输入源）
+                import desire_lib
+                desire_lib.note_flirt(datetime.now())
+            except Exception as _fe:
+                _soft_fail("flirt.note", _fe)
     except Exception as e:
         _soft_fail("flirt.shadow", e)
 
@@ -7235,10 +7529,12 @@ def _goodnight_watch_once():
     content, at = m.last_chat_full("小乖")
     if not content or not at:
         return 0
-    # 9-18 后院深搜修（P2-4）：末条消息必须属于「咱家今天」——昨晚说的晚安不许触发今天的熄灯。
-    # 口径按家风日界窗口（本日 04:00 起；监理终验收紧）：凌晨 00:00-04:00 说的晚安仍算今天，别误伤；
-    # 严格早于本日 04:00 的（含上一自然日晚间）才拦。
-    if (at or "") < today_str() + " 04:00:00":
+    # 9-18 后院深搜修（P2-4）：末条消息必须属于「本轮睡前」——昨晚的晚安不许触发入睡判定。
+    # 10-02 修（Explore 审查）：原写死 `today_str()+" 04:00:00"`，日界改 0 点后（today_str 变自然日）
+    #   把跨午夜的晚安全否了（23:30 说晚安、01:30 才够静默 → 永不触发）。改用**夜窗归属日 + 本轮窗起点**。
+    _nd = _night_day(now, cfg)   # 夜窗归属的「那天」：凌晨段算前一自然日（一觉不劈成两天）
+    _thr = min(_nd + f" {int(m.DAY_START_HOUR):02d}:00:00", _window_start(now, win))
+    if (at or "") < _thr:
         return 0
     try:
         silent_min = (now - datetime.strptime(at, "%Y-%m-%d %H:%M:%S")).total_seconds() / 60
@@ -7277,15 +7573,15 @@ def _goodnight_watch_once():
         # 在重启后被 reload_context_on_boot 灌回当天老对话，判据失真会把旧话再总结一遍；
         # 现改「日记之后有没有新对话」（库口径、重启不丢）。有更新的对话照常 summarize，
         # 同日 append 天然防双写，与手动 handle_goodnight 对齐。
-        if m.find_days(date=today_str()) and not _chats_newer_than_diary(today_str()):
+        if m.find_days(date=_nd) and not _chats_newer_than_diary(_nd):
             ASLEEP = True   # 日记在且日记后无新对话=已熄灯，补睡不补日记（9-5 孪生案守门）
             m.obs_flag_set(m.house_today_str(), "goodnight_on", 1)   # BE3-02：烫「今夜熄过」落盘标记（开机恢复 ASLEEP 用）
             return 0
-        result = summarize_session_to_diary(SESSION, today_str())
-        if result is None and not m.find_days(date=today_str()):
+        result = summarize_session_to_diary(SESSION, _nd)   # 归「夜窗那天」：跨午夜的一觉不写进新自然日（防与 04:00 补写双重总结）
+        if result is None and not m.find_days(date=_nd):
             # fallback 只在无日记时走（保旧）：有日记时 summarize 走 append，不会到 None
             result = "（他睡着了，今天没说几句话——姐姐看着，晚安。）"
-            m.add_day(today_str(), None, "睡着了", result, "晚安")
+            m.add_day(_nd, None, "睡着了", result, "晚安")
         SESSION.reset()
         _goodnight_reset_session(now)   # 9-14：自动熄灯也要灌昨夜尾巴（原话断层修复）
         ASLEEP = True
@@ -7521,7 +7817,11 @@ def summarize_session_to_diary(session, day_str, from_backfill=False):
             if _mtype not in _MOOD_NAMES:
                 _mtype = ""   # 词表外的词不落——情绪河只认正典
             if 1 <= _score <= 5:
-                m.add_mood(day_str, _score, "今日主色", "", _mtype)
+                # 10-02 修（Explore 审查 ①）：补写旧日时 date=旧日、created_at 却是"现在" →
+                #   desire v2 的 _mood_last_gap_h 会把它当"刚刚满足"（D 被砸到 0.3、刷 last_satisfy）。
+                #   补写路显式给一个当天末尾的时刻，让"距今几小时"算对。
+                m.add_mood(day_str, _score, "今日主色", "", _mtype,
+                           created_at=(f"{day_str} 23:59:00" if from_backfill else None))
         except (TypeError, ValueError):
             pass
         content = diary.get("content", "")[:400]
@@ -7544,6 +7844,9 @@ def summarize_session_to_diary(session, day_str, from_backfill=False):
             _wm = bool(load_config().get("wake_merged", False))
         except Exception:
             _wm = False
+        # 10-02 注（Explore 审查）：补写旧日时此处仍会入箱——**当前 wake_merged=true 故不走**；
+        #   若关掉醒来合一、且日界结算在补写旧日，会把旧日早安信当"此刻"发（错时消息＋污染会话）。
+        #   属设计判断（原 C4c 测试就要求补写也入箱），**不改**，记进工单待家主定。
         if letter and not _wm:   # 10-01：拒斥闸已撤
             _her_outgoing(letter, need_lock=False)   # P-0：发时即落（此处必在 SESSION_LOCK 内，勿再取锁）
     except Exception:
@@ -7577,13 +7880,15 @@ def _diary_backfill_once(now=None):
         if not cfg.get("diary_backfill_enabled", True):
             return 0
         now = now or datetime.now()
-        if now.hour < 4:
+        # 10-02 修（套件腐烂扫描连带查出的**代码**漏改）：原写死 4 点日界——日界改 0 点后
+        #   `hour<4` 会把 00:00–03:59 误判成"没过日界"（其实自然日已翻），补写窗口错位。
+        if now.hour < int(m.DAY_START_HOUR):
             return 0                       # 没过日界：昨夜的账还在记（夜聊不打断）
         try:
             n_min = max(1, int(cfg.get("diary_backfill_min_chats") or 3))
         except (TypeError, ValueError):
             n_min = 3
-        day = (now - timedelta(hours=4) - timedelta(days=1)).strftime("%Y-%m-%d")  # 刚结束的咱家日
+        day = (now - timedelta(hours=int(m.DAY_START_HOUR)) - timedelta(days=1)).strftime("%Y-%m-%d")  # 刚结束的咱家日
         if m.find_days(date=day):
             return 0                       # 那天有日记（正常熄灯写过了）
         rows = m.get_chats(day)
@@ -8686,9 +8991,10 @@ class Handler(BaseHTTPRequestHandler):
                 it_title = str(it.get("title") or "").strip()[:20]
                 if it_time and it_title:
                     clean.append({"time": it_time, "title": it_title})
-            LAST_SCHEDULE["date"] = sdate
-            LAST_SCHEDULE["items"] = clean
-            LAST_SCHEDULE["at"] = datetime.now().strftime("%H:%M")
+            # 10-02：三段赋值读线程可能看到「新 date + 旧 items」撕裂态 → 收成一次 update
+            #（dict.update 是单次 C 调用、不释放 GIL，读线程只见旧态或新态）。
+            LAST_SCHEDULE.update({"date": sdate, "items": clean,
+                                  "at": datetime.now().strftime("%H:%M")})
             if clean:
                 print(f"  [日程] 收到 {sdate} 日程 {len(clean)} 条（首条：{clean[0]['time']} {clean[0]['title']}）")
             else:

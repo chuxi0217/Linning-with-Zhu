@@ -59,6 +59,9 @@ def auto_snapshot(tag=""):
     当天拍过就跳过；任何异常只打日志，绝不拖垮主流程。"""
     try:
         if _snap_done_today():
+            # 10-02：今日已有备份（可能另一进程/重启拍的）→ 也把水位记到今天，
+            #   否则 heartbeat 每跳都来 listdir 空转（跨天语义看着像没生效）。
+            _SNAP_STATE["day"] = srv_state._srv().datetime.now().strftime("%Y%m%d")
             return
         srv = srv_state._srv()   # 运行期反查：沙盘换假钟 / 重绑 s.SNAPSHOT_DIR / s.SNAPSHOT_KEEP 才对这里生效
         os.makedirs(srv.SNAPSHOT_DIR, exist_ok=True)

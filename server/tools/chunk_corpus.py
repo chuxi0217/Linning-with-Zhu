@@ -4,7 +4,9 @@
 
 为什么：向量层现在整篇一个坐标（一天日记＝一个点），检索定位不到段落。
 本脚本先按语义把 days/chats/notes/letters 切成小块，给将来的块表＋reranker 用；
-本脚本绝不写库、不联网、不调嵌入端点——纯切块＋统计。
+**默认只读干跑**：不写库、不联网、不调嵌入端点——纯切块＋统计；
+`--commit` 才把块落进 `chunks/fts_chunks`（走 memory_lib.chunk_put，幂等；生产库要 `--yes`），
+**仍不联网、不调嵌入**（嵌入另跑 `tools/chunk_embed.py`）。
 
 分块规则（v0 保守值，理由随常量写）：
   days    按空行/段落切；目标 150~400 字，超长按句子边界再切，过短与邻块合并。
@@ -243,7 +245,7 @@ def chunk_chats(rows):
                 "n_msgs": len({m["id"] for m in block}),   # 去重：片段多当一条算
                 "n_frags": len(block),
             }
-            out.append(_mk("chat", m0["id"], f"w{win_no}b{bi}", text, meta))
+            out.append(_mk("chat", m0["id"], f"b{bi}", text, meta))
         win = []
 
     for r in rows:
@@ -518,6 +520,23 @@ def main():
         _st = _m.chunk_stats()
         print(f"[chunk] 已写库：新增/更新 {n_changed}，未变 {n_same}；"
               f"盘点 {_st['total']} 块 {_st['per_type']}")
+        # ── 清陈旧块（10-02·审查 ⑤）：chat 块 seq 由旧键 `w{win}b{bi}` 换成稳定键 `b{bi}`，
+        #    换键后旧块、以及"分块规则变了/消息插改后窗位平移"留的旧块，都得清（否则越积越多、
+        #    还占检索坑）。**全量重跑才清**——`--sample N` 只生成 N 条，清会把其余全删掉。
+        if not args.sample:
+            _conn2 = _m._conn()
+            try:
+                _rows = _conn2.execute("SELECT id, source_type, source_id, seq FROM chunks").fetchall()
+            finally:
+                _conn2.close()
+            _written = {(c["kind"], int(c["ref_id"]), str(c["seq"]))
+                        for kind in ("days", "chats", "notes", "letters")
+                        for c in vol_stats[kind][1]}
+            n_stale = 0
+            for _cid, _st, _sid, _sq in _rows:
+                if (_st, int(_sid), str(_sq)) not in _written and _m.chunk_delete(_cid):
+                    n_stale += 1
+            print(f"[chunk] 清陈旧块 {n_stale} 条（不在本轮生成集里的旧键块；其向量随删）")
 
 
 if __name__ == "__main__":

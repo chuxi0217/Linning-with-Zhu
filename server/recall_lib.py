@@ -88,18 +88,21 @@ def delivered_keys():
 def _mark_delivered(key):
     """take 真取走候选时记一笔「已递」：state 文件 delivered_keys（去重、只留最近 DELIVERED_KEEP 个）。
     与 recent/cand 同住 state 文件、保留其它键。9-26 修②；9-27 修：**返回是否写成功**——
-    写失败调用方宁可不递（不清候选），防日后经话头簿把同一条再投一次。"""
+    写失败调用方宁可不递（不清候选），防日后经话头簿把同一条再投一次。
+    10-02 修（Explore 审查）：读-改-写**进 `_STATE_LOCK`**——与 `_save_cand`/`_clear_cand`/`_remember`
+    同锁；否则心跳线程刚写的候选会被这里用旧快照覆盖（候选静默丢 / 已递键被覆盖→重复投）。"""
     try:
         key = str(key or "")
         if not key:
             return False
-        st = _load_state()
-        keys = [str(k) for k in (st.get("delivered_keys") or []) if k]
-        if key in keys:
-            keys.remove(key)
-        keys.append(key)
-        st["delivered_keys"] = keys[-DELIVERED_KEEP:]
-        return _save_state(st)
+        with _STATE_LOCK:
+            st = _load_state()
+            keys = [str(k) for k in (st.get("delivered_keys") or []) if k]
+            if key in keys:
+                keys.remove(key)
+            keys.append(key)
+            st["delivered_keys"] = keys[-DELIVERED_KEEP:]
+            return _save_state(st)
     except Exception:
         return False
 

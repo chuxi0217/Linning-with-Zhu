@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import threading
 from datetime import datetime
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -90,13 +91,15 @@ CREATE INDEX IF NOT EXISTS idx_ledger_scene_ts ON token_ledger(scene, ts);
 
 # 写失败留痕（9-27·审计缓办）：fail-open 还得看得见——计数 + 最近一次错误，/api/status 露一行。
 _FAILS = {"events": 0, "ledger": 0, "last": "", "last_ts": ""}
+_FAILS_LOCK = threading.Lock()   # 10-02：读-改-写串行（事件/账本写失败来自多线程，非原子会少计）
 
 
 def _fail_note(where, e):
     try:
-        _FAILS[where] = int(_FAILS.get(where) or 0) + 1
-        _FAILS["last"] = f"{where}: {str(e)[:120]}"
-        _FAILS["last_ts"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with _FAILS_LOCK:
+            _FAILS[where] = int(_FAILS.get(where) or 0) + 1
+            _FAILS["last"] = f"{where}: {str(e)[:120]}"
+            _FAILS["last_ts"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
         pass
 

@@ -8,7 +8,7 @@
     python3 tools/db_maint.py --samples 400    # 抽样条数（精度实测用）
     python3 tools/db_maint.py --apply [--log 分析报告/x.log]   # 真迁移（照 runbook：先停 server）
 
-`--apply` 按 `工单/运维_数据保养迁移_runbook_2026-10-01.md` §三-2 走：
+`--apply` 按 `工单/归档/运维_数据保养迁移_runbook_2026-10-01.md` §三-2 走：
 对账基线 → 建 vectors_v2 → 逐行转 f16（死模型行不进）→ 硬门槛对账 → **原子换名** → 清残渣。
 **任一门槛不过 → 就地停、不换名**（回滚见 runbook §六）。写库前必须已停 server（embed worker 在写）。
 
