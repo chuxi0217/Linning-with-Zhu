@@ -325,6 +325,11 @@ DEFAULT_CONFIG = {
     # ★ 模型侧必须已关思考（启动参数 --chat-template-kwargs '{"enable_thinking": false}'）。
     "local_judge_base": "http://127.0.0.1:11437/v1",
     "local_judge_model": "qwen3.5-4b",
+    # 10-02 退役：本地 4B 只剩"睡意终审影子"用它，而那本是诊断性的 → 默认关（省 4.6G 显存）。
+    # 开=照旧拉起并当影子；关=不拉、不跑（flash 全权，行为零变化）。
+    "local_judge_enabled": False,
+    # 10-02：亲密段判（欲望满足探测器 B）用哪个判——"flash"（默认）｜"local"（回旧 4B）。
+    "seg_engine": "flash",
     # 10-01 P-A 火苗影子：他这句是不是在撩（本地判、只记不拦）。关=不判。
     "flirt_shadow": True,
     # 10-01 B4-2 醒来合一：四条主动链（💌/💬/🌱/早安信）收成一个醒来口，她自选 say/garden/trace/note/silent。
@@ -1845,6 +1850,15 @@ def _local_cfg():
     return base, model
 
 
+def _local_judge_on():
+    """10-02（家主令「换 flash」）：本地 4B 判断端点还启不启用。默认 **False＝退役**
+    （撩判定/重排/亲密段判都已换 flash；睡意终审本就只把本地当影子）。开启＝照旧。fail-open 关。"""
+    try:
+        return bool(load_config().get("local_judge_enabled", False))
+    except Exception:
+        return False
+
+
 def _local_judge(prompt, timeout=8, max_tokens=40):
     """调本地 llama-server（OpenAI 兼容）。返回 **(原文, 末次异常)**。不鉴权（只监听 127.0.0.1）。"""
     base, model = _local_cfg()
@@ -1869,6 +1883,8 @@ def _dual_judge(prompt, tag, timeout=20, max_tokens=60):
     一行账落 `~/local_judge_shadow.log`：时刻 / tag / flash / local / 同否。
     本地挂了一字不影响 flash —— fail-open。返回 flash 的 `(文本, 末次异常)`。"""
     txt, err = _flash_judge(prompt, timeout=timeout, max_tokens=max_tokens)
+    if not _local_judge_on():
+        return txt, err          # 10-02：4B 已退役 → 不再跑本地影子（省显存、不刷日志）
     try:
         base, _m = _local_cfg()
         if base:
@@ -9911,6 +9927,8 @@ def _ensure_local_judge():
     base, _model = _local_cfg()
     if not base:
         return "未配（诚实缺席）"
+    if not _local_judge_on():
+        return "已退役（local_judge_enabled=false；撩判定/重排/段判都已换 flash）"
     if _local_probe(base):
         return "已在跑"
     try:

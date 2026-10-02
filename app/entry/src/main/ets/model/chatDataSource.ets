@@ -15,7 +15,9 @@ export class ChatDataSource implements IDataSource {
   }
 
   getData(index: number): ChatItem {
-    return this.items[index];
+    // 10-02：越界兜底——原直接 items[index] 断言成 ChatItem，越界时实际 undefined 交给 ListItem
+    const i = index < 0 ? 0 : (index >= this.items.length ? this.items.length - 1 : index);
+    return this.items[i];
   }
 
   getAll(): ChatItem[] {

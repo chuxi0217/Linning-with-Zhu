@@ -378,6 +378,8 @@ struct Index {
   private outboxFetchBusy: boolean = false;   // 10-02：fetchOutboxLetters 的闸（boot＋60s 轮询别重叠）
   private outboxRetry: number = 0;          // 退避重试计数：5s、15s 各一次（9-1-#3）
   private netConn?: connection.NetConnection;
+  private netConnCb: () => void = () => {
+  };   // 10-02：保存注册时的回调引用——`unregister(新匿名函数)` 在部分实现里退订不掉
   @State safeTopPad: number = 28;           // 打卡页避让状态栏（9-1-#3，全屏模态不吃系统默认安全区）
   @State safeLeftPad: number = 0;           // FE-02：横屏时挖孔在侧边，情绪河全屏要避让左右
   // ── 思考链查看（9-1-#4） ──
@@ -493,6 +495,7 @@ struct Index {
   // 三页共用只读骨架 InfoPage；取数与文案整形在这边（它手里有门牌与钥匙），组件只管画。
   @State healthOpen: boolean = false;      // 🩺 家的体检
   @State healthBusy: boolean = false;
+  private archCardsBusy: boolean = false;   // 10-02：fetchCards 的闸（openArchive 里与 fetchArchive 并发）
   @State healthMsg: string = '';
   @State healthGroups: InfoGroup[] = [];
   @State nightOpen: boolean = false;       // 🌙 夜里（睡眠整理）
@@ -518,6 +521,7 @@ struct Index {
   private panelTimer: number = -1;
   private thinkTimer: number = -1;
   private statusTimer: number = -1;   // 9-2 #12：常开 60s 节律（status + outbox 新信）
+  private statusBusy: boolean = false;   // 10-02：fetchStatus 的闸（60s 定时＋多处手动别重叠，防读数回跳）
   private notifSeq: number = 100;     // 本地通知 id 自增
 
   aboutToAppear(): void {
@@ -604,8 +608,7 @@ struct Index {
     }
     if (this.netConn) {
       try {
-        this.netConn.unregister(() => {
-        });
+        this.netConn.unregister(this.netConnCb);
       } catch (err) {
         // 退订失败无碍
       }
@@ -2329,6 +2332,10 @@ struct Index {
   }
 
   private async fetchCards(): Promise<void> {
+    if (this.archCardsBusy) {
+      return;   // 10-02：与 fetchArchive 并发时慢网回包乱序会互相覆盖
+    }
+    this.archCardsBusy = true;
     const req = http.createHttp();
     try {
       const res = await req.request(CARDS_URL, {
@@ -2345,6 +2352,7 @@ struct Index {
       // 卡片馆取不到就空着（该段自己隐）——别挡档案主体
     } finally {
       req.destroy();
+      this.archCardsBusy = false;
     }
   }
 
@@ -2863,12 +2871,14 @@ struct Index {
   // 换门牌：立即生效 + 持久化（默认门牌不占存储，存空）+ 顺手测一下
   private switchServerBase(base: string): void {
     const b = base.trim();
-    if (!b.startsWith('http')) {
-      this.serverTestMsg = '门牌得以 http 开头';
+    // 10-02 修：原来只判 startsWith('http')——`http`、`httpfoo` 这类半截值也过，后续请求全打飞
+    if (!/^https?:\/\/[^\s]+$/.test(b)) {
+      this.serverTestMsg = '门牌得以 http:// 或 https:// 开头';
       return;
     }
     applyServerBase(b);
     this.currentBase = b === BASE_URL ? '' : b;
+    this.imgErrKeys = [];   // 10-02：换门牌后清「图没取到」表——旧 URL 的失败记录不该跟到新门
     try {
       const prefs = preferences.getPreferencesSync(getContext(this), { name: 'zanjia' });
       if (this.currentBase) {
@@ -3579,6 +3589,10 @@ struct Index {
   }
 
   private async fetchStatus(): Promise<void> {
+    if (this.statusBusy) {
+      return;   // 10-02：慢网回包乱序时，重叠的两次取数会让面板读数回跳
+    }
+    this.statusBusy = true;
     const req = http.createHttp();
     try {
       const res = await req.request(STATUS_URL, {
@@ -3727,6 +3741,7 @@ struct Index {
       this.clearStatusLines();
     } finally {
       req.destroy();
+      this.statusBusy = false;
     }
   }
 
@@ -5442,8 +5457,7 @@ struct Index {
           networkCap: [connection.NetCap.NET_CAPABILITY_INTERNET]
         }
       });
-      conn.register(() => {
-      });
+      conn.register(this.netConnCb);
       conn.on('netAvailable', () => {
         // 修 3：网络恢复后延迟约 3 秒再补发，等 Tailscale 隧道站稳
         setTimeout(() => {
@@ -6451,6 +6465,25 @@ struct Index {
           settle(-1, new Error('流式总时限到（240s 未收尾）'));
         }, 240000);
         req.on('dataEnd', () => {
+          // 10-02 修：流尾若没带空行收尾（最后一条 `data:` 后没有 `\n\n`），那一帧会留在 sseRest
+          //   永不处理——而它恰恰可能是 done。这里把残留再解析一次（幂等：解析过就清空）。
+          try {
+            const tail = util.TextDecoder.create('utf-8').decodeToString(sseRest).trim();
+            if (tail.length > 0) {
+              for (const line of tail.split('\n')) {
+                if (line.startsWith('data: ')) {
+                  try {
+                    onEvent(JSON.parse(line.substring(6)) as StreamEvent);
+                  } catch (eTail) {
+                    console.error(`[ZJ-SSE] 尾帧解析异常（跳过）：${eTail}`);
+                  }
+                }
+              }
+            }
+            sseRest = new Uint8Array(0);
+          } catch (eTailF) {
+            console.error(`[ZJ-SSE] 尾帧处理异常：${eTailF}`);
+          }
           if (sawSse) {
             settle(200);   // 传输层收尾（promise 万一悬死时的第二结算线）
           }

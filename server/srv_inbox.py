@@ -78,14 +78,20 @@ def _inbox_fetch_once():
                 body = msg.get_payload(decode=True).decode(
                     (msg.get_content_charset() or "utf-8"), errors="replace")
             if body.strip():
-                rid = m.add_inbox_email(from_addr, subject, body, received)
-                n += 1
-                conn.store(num, "+FLAGS", "\\Seen")   # 9-18 后院深搜修：落库成功才标已读
-                print(f"  [收信] #{rid} 来自 {from_addr[:40]}「{subject[:40]}」")
-                try:
-                    srv_state._srv()._garden_enqueue_inbox(from_addr, subject, body)   # GARDEN-01：顺手入队唤醒事件（入口属主名，运行期反查）
-                except Exception:
-                    pass   # 收信是本账，入队是零嘴——入队炸了收信照走
+                # 10-02：带 Message-ID 去重——IMAP 的 \Seen 若没标上（断线/半开连接），下一轮会把
+                #   同一封重拉；原表无唯一键 → 重复入 inbox_emails ＋ 重复入队唤醒事件。
+                _mid = str(msg.get("Message-ID") or "").strip()
+                rid = m.add_inbox_email(from_addr, subject, body, received, msg_id=_mid)
+                if rid:
+                    n += 1
+                    conn.store(num, "+FLAGS", "\\Seen")   # 9-18 后院深搜修：落库成功才标已读
+                    print(f"  [收信] #{rid} 来自 {from_addr[:40]}「{subject[:40]}」")
+                    try:
+                        srv_state._srv()._garden_enqueue_inbox(from_addr, subject, body)   # GARDEN-01：顺手入队唤醒事件（入口属主名，运行期反查）
+                    except Exception:
+                        pass   # 收信是本账，入队是零嘴——入队炸了收信照走
+                else:
+                    conn.store(num, "+FLAGS", "\\Seen")   # 重复的一封：标掉，别每轮重拉
             else:
                 conn.store(num, "+FLAGS", "\\Seen")   # 空正文（HTML-only）无账可记，标掉防每轮重拉
     finally:

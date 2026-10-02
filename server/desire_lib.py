@@ -225,8 +225,16 @@ def _seg_judge_intimate(now, win_min=25, max_msgs=16):
             return None
         import memory_lib as _m
         import srv_state as _ss
+        # 10-02（家主令「换 flash」）：判"在做"从本地 4B 换 flash——`seg_engine: flash|local`（默认 flash）。
+        # 原因：4B 细粒度判断弱（撩判定/重排都因此换掉了），且这样本地端点可退役省显存。
+        _eng = str(_cfg("seg_engine", "flash") or "flash").strip().lower()
+        _fj = getattr(_ss._srv(), "_flash_judge", None)
         _lj = getattr(_ss._srv(), "_local_judge", None)
-        if not callable(_lj):
+        if _eng != "local" and callable(_fj):
+            _judge = _fj
+        elif callable(_lj):
+            _judge = _lj
+        else:
             return None
         _since = (now - timedelta(minutes=max(5, int(win_min)))).strftime("%Y-%m-%d %H:%M:%S")
         _seg = []
@@ -237,7 +245,7 @@ def _seg_judge_intimate(now, win_min=25, max_msgs=16):
                             + str(_ct or "").replace("\n", " ")[:180])
         if len(_seg) < 3:
             return None                     # 太短不判（宁可不判，也不瞎判）
-        _txt, _err = _lj(_SEG_PROMPT + "\n".join(_seg), timeout=20, max_tokens=30)
+        _txt, _err = _judge(_SEG_PROMPT + "\n".join(_seg), timeout=20, max_tokens=30)
         if not _txt:
             return None
         if "在做" in _txt and "不在" not in _txt:

@@ -478,6 +478,11 @@ def init_db():
             created_at TEXT DEFAULT (datetime('now','localtime'))
         )
     ''')
+    # 10-02 补列：Message-ID —— 收信去重（IMAP 那侧 `STORE \Seen` 若失败/断线，下一轮会把
+    # 同一封重拉一遍；原表无唯一键 → 重复入 inbox_emails + 重复入队唤醒事件）。
+    c.execute("PRAGMA table_info(inbox_emails)")
+    if not any(row[1] == "msg_id" for row in c.fetchall()):
+        c.execute("ALTER TABLE inbox_emails ADD COLUMN msg_id TEXT DEFAULT ''")
 
     # 今日挂念弧（v0.1.22 新增，9-12 工单 RHYTHM-V3）：每天一条 2~3 拍提纲（一行一拍，
     # 纯文本不带序号），💌 顺着弧一拍一拍走——骰子管钟点，弧管台词。旧表一字不动。
@@ -2874,17 +2879,24 @@ def get_book_marks(book_id, limit=100):
     return rows
 
 
-def add_inbox_email(from_addr, subject, body, received=""):
-    """落一封拉回来的信。body ≤8000 字（长文截断，原文在邮箱里永远在）。"""
+def add_inbox_email(from_addr, subject, body, received="", msg_id=""):
+    """落一封拉回来的信。body ≤8000 字（长文截断，原文在邮箱里永远在）。
+    10-02：带 `msg_id`（Message-ID）时**同一封只落一次**——重复返回 None（调用方据此跳过入队/按铃）。"""
     conn = _conn()
     c = conn.cursor()
-    c.execute("INSERT INTO inbox_emails(from_addr, subject, body, received) VALUES(?, ?, ?, ?)",
-              (str(from_addr or "").strip()[:120], str(subject or "").strip()[:200],
-               str(body or "").strip()[:8000], str(received or "")[:30]))
-    conn.commit()
-    rid = c.lastrowid
-    conn.close()
-    return rid
+    try:
+        _mid = str(msg_id or "").strip()[:200]
+        if _mid:
+            if c.execute("SELECT id FROM inbox_emails WHERE msg_id=? LIMIT 1", (_mid,)).fetchone():
+                return None
+        c.execute("INSERT INTO inbox_emails(from_addr, subject, body, received, msg_id) "
+                  "VALUES(?, ?, ?, ?, ?)",
+                  (str(from_addr or "").strip()[:120], str(subject or "").strip()[:200],
+                   str(body or "").strip()[:8000], str(received or "")[:30], _mid))
+        conn.commit()
+        return c.lastrowid
+    finally:
+        conn.close()
 
 
 def get_unread_inbox_emails(limit=10):
@@ -3653,7 +3665,8 @@ def add_note(text):
 def get_notes(days=7, limit=10):
     """（v0.1.8 新增）读小本本：最近 days 天的随手记，旧到新，最多 limit 条。
     返回 list of tuple: (id, text, created_at)。"""
-    since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    since = (datetime.strptime(house_today_str(), "%Y-%m-%d")
+             - timedelta(days=max(1, int(days)) - 1)).strftime("%Y-%m-%d")   # 10-02：口径统一（含今天共 N 日、吃日界）
     conn = _conn()
     c = conn.cursor()
     c.execute('''
@@ -3722,7 +3735,8 @@ def last_chat_at_day(date):
 def rhythm_reply_stats(days=7):
     """（v0.1.9 新增，9-4 时机引擎）近 days 天想念信（💌 前缀）开口数与回应数。
     回应=信发出后 2 小时内有小乖的消息。返回 (开口数, 回应数)。"""
-    since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    since = (datetime.strptime(house_today_str(), "%Y-%m-%d")
+             - timedelta(days=max(1, int(days)) - 1)).strftime("%Y-%m-%d")   # 10-02：口径统一（含今天共 N 日、吃日界）
     conn = _conn()
     c = conn.cursor()
     c.execute('''SELECT created_at FROM outbox_msgs
@@ -3743,7 +3757,8 @@ def rhythm_reply_latency(days=7):
     """（v0.1.13 新增，RHYTHM-V2·E）近 days 天想念信的平均回应时延（分钟）：
     每封 💌 找 2 小时内小乖第一条消息，算「信 → 他开口」的间隔。
     没有信或都没回应返回 None（引擎按无数据处理）。"""
-    since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    since = (datetime.strptime(house_today_str(), "%Y-%m-%d")
+             - timedelta(days=max(1, int(days)) - 1)).strftime("%Y-%m-%d")   # 10-02：口径统一（含今天共 N 日、吃日界）
     conn = _conn()
     c = conn.cursor()
     c.execute('''SELECT created_at FROM outbox_msgs
